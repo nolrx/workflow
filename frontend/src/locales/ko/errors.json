@@ -1,0 +1,58 @@
+{
+  "auth": {
+    "loginFailed": "로그인에 실패했습니다",
+    "registrationFailed": "회원가입에 실패했습니다",
+    "updateProfileFailed": "프로필 업데이트에 실패했습니다"
+  },
+  "ppt": {
+    "fetchProjectsFailed": "프로젝트 목록을 가져오는 데 실패했습니다",
+    "fetchProjectFailed": "프로젝트를 가져오는 데 실패했습니다",
+    "createProjectFailed": "프로젝트 생성에 실패했습니다",
+    "updateProjectFailed": "프로젝트 업데이트에 실패했습니다",
+    "deleteProjectFailed": "프로젝트 삭제에 실패했습니다",
+    "updatePageFailed": "페이지 업데이트에 실패했습니다",
+    "deletePageFailed": "페이지 삭제에 실패했습니다",
+    "fetchTaskStatusFailed": "작업 상태를 가져오는 데 실패했습니다",
+    "generateOutlineFailed": "개요 생성에 실패했습니다",
+    "generateDescriptionsFailed": "설명 생성에 실패했습니다",
+    "generateImagesFailed": "이미지 생성에 실패했습니다",
+    "exportFailed": "내보내기에 실패했습니다"
+  },
+  "redbook": {
+    "fetchTasksFailed": "작업 목록을 가져오는 데 실패했습니다",
+    "fetchTaskFailed": "작업 세부 정보를 가져오는 데 실패했습니다",
+    "createTaskFailed": "작업 생성에 실패했습니다",
+    "updateTaskFailed": "작업 업데이트에 실패했습니다",
+    "deleteTaskFailed": "작업 삭제에 실패했습니다",
+    "generateOutlineFailed": "개요 생성에 실패했습니다",
+    "generateImagesFailed": "이미지 생성에 실패했습니다",
+    "generateContentFailed": "콘텐츠 생성에 실패했습니다",
+    "retryFailed": "재시도에 실패했습니다",
+    "generateRequestFailed": "생성 요청에 실패했습니다",
+    "responseStreamFailed": "응답 스트림을 읽는 데 실패했습니다"
+  },
+  "code": {
+    "fetchStylesFailed": "스타일 목록을 가져오는 데 실패했습니다",
+    "createProjectFailed": "소프트웨어 프로젝트 생성에 실패했습니다",
+    "saveProjectFailed": "프로젝트 저장에 실패했습니다",
+    "generateFlowFailed": "개발 흐름 생성에 실패했습니다",
+    "splitDocumentsFailed": "개발 문서 분리에 실패했습니다",
+    "saveDocumentFailed": "문서 저장에 실패했습니다",
+    "generateStyleFailed": "스타일 문서 생성에 실패했습니다",
+    "generatePreviewFailed": "썸네일 생성에 실패했습니다",
+    "confirmPreviewFailed": "UI 기준 확정에 실패했습니다"
+  },
+  "team": {
+    "fetchTeamsFailed": "팀 목록을 가져오는 데 실패했습니다",
+    "fetchTeamFailed": "팀을 가져오는 데 실패했습니다",
+    "createTeamFailed": "팀 생성에 실패했습니다",
+    "fetchMembersFailed": "멤버 목록을 가져오는 데 실패했습니다",
+    "inviteMemberFailed": "초대 전송에 실패했습니다",
+    "acceptInvitationFailed": "초대 수락에 실패했습니다"
+  },
+  "credit": {
+    "fetchBalanceFailed": "잔액을 가져오는 데 실패했습니다",
+    "fetchTransactionsFailed": "거래 내역을 가져오는 데 실패했습니다",
+    "fetchUsageStatsFailed": "사용 통계를 가져오는 데 실패했습니다"
+  }
+}

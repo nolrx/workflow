@@ -1,0 +1,85 @@
+{
+  "title": "Software Studio",
+  "subtitle": "Move from requirement to development docs, style previews, and a confirmed UI baseline.",
+  "steps": {
+    "input": "Requirement",
+    "requirements": "PRD",
+    "flow": "Development Flow",
+    "documents": "Dev Docs",
+    "style": "App Style",
+    "preview": "Preview",
+    "baseline": "UI Baseline"
+  },
+  "status": {
+    "requirement_ready": "Requirements ready",
+    "flow_ready": "Flow ready",
+    "documents_ready": "Docs ready",
+    "style_ready": "Style ready",
+    "preview_ready": "Preview ready",
+    "ui_confirmed": "UI confirmed"
+  },
+  "input": {
+    "title": "Describe the software you want to create",
+    "placeholder": "Example: Build a SaaS finance dashboard for indie founders that imports Stripe and bank data, then analyzes revenue, costs, churn, and cash-flow risk.",
+    "generate": "Generate requirements"
+  },
+  "requirements": {
+    "title": "User Requirement and PRD",
+    "next": "Generate development flow"
+  },
+  "flow": {
+    "title": "Software Development Flow",
+    "placeholder": "The generated development flow can be edited here.",
+    "split": "Split development docs"
+  },
+  "documents": {
+    "title": "Editable Development Docs",
+    "count": "{{count}} docs",
+    "content": "Content",
+    "promptExpert": "Prompt Expert"
+  },
+  "style": {
+    "title": "App Style",
+    "generate": "Generate style doc",
+    "placeholder": "Select styles to generate a tailored style document."
+  },
+  "preview": {
+    "title": "App Thumbnails",
+    "generate": "Generate thumbnails",
+    "confirm": "Use as UI baseline",
+    "confirmed": "Confirmed",
+    "empty": "Generated thumbnails will appear here after you choose styles.",
+    "imageAlt": "App thumbnail"
+  },
+  "baseline": {
+    "title": "Confirmed UI Baseline"
+  },
+  "toast": {
+    "saved": "Project saved",
+    "documentSaved": "Document saved"
+  },
+  "workspace": {
+    "previewTitle": "Live preview",
+    "empty": "Run the agent and results stream in here — then edit them inline.",
+    "streamingHint": "AI is generating…",
+    "newProject": "New",
+    "splitThinking": {
+      "title": "AI is splitting the development docs",
+      "steps": [
+        "Analyzing the requirements and development flow",
+        "Planning the document structure and boundaries",
+        "Splitting product / frontend / backend / data model",
+        "Mapping the AI prompt pipeline",
+        "Tailoring prompt-expert guidance per document",
+        "Consolidating and proofreading the output"
+      ]
+    },
+    "tabs": {
+      "requirements": "Requirements",
+      "flow": "Dev flow",
+      "documents": "Dev docs",
+      "style": "UI style",
+      "app": "App preview"
+    }
+  }
+}

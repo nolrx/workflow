@@ -1,0 +1,79 @@
+{
+  "list": {
+    "title": "Your Teams",
+    "subtitle": "Collaborate with others on projects",
+    "createTeam": "Create Team",
+    "dialog": {
+      "title": "Create a new team",
+      "description": "Teams allow you to collaborate with others on projects",
+      "nameLabel": "Team name",
+      "namePlaceholder": "Enter team name",
+      "cancel": "Cancel",
+      "create": "Create"
+    },
+    "empty": {
+      "title": "No teams yet",
+      "description": "Create a team to start collaborating with others"
+    },
+    "toast": {
+      "createSuccess": "Team created successfully",
+      "createFailed": "Failed to create team"
+    },
+    "created": "Created {{date}}"
+  },
+  "dashboard": {
+    "subtitle": "Manage your team members and settings",
+    "buttons": {
+      "settings": "Settings",
+      "billing": "Billing"
+    },
+    "stats": {
+      "members": {
+        "title": "Members",
+        "description": "Active team members"
+      },
+      "credits": {
+        "title": "Credits",
+        "description": "Team credits remaining"
+      },
+      "projects": {
+        "title": "Projects",
+        "description": "Shared team projects"
+      }
+    },
+    "members": {
+      "title": "Team Members",
+      "description": "Manage who has access to this team",
+      "invite": "Invite",
+      "noMembers": "No members yet"
+    },
+    "inviteDialog": {
+      "title": "Invite team member",
+      "description": "Send an invitation to join this team",
+      "emailLabel": "Email address",
+      "emailPlaceholder": "colleague@example.com",
+      "roleLabel": "Role",
+      "roles": {
+        "admin": "Admin - Can manage members and projects",
+        "member": "Member - Can create and edit projects",
+        "viewer": "Viewer - Can only view projects"
+      },
+      "cancel": "Cancel",
+      "invite": "Send Invitation"
+    },
+    "roles": {
+      "owner": "Owner",
+      "admin": "Admin",
+      "member": "Member",
+      "viewer": "Viewer"
+    },
+    "notFound": {
+      "title": "Team not found",
+      "description": "The team you're looking for doesn't exist or you don't have access."
+    },
+    "toast": {
+      "inviteSuccess": "Invitation sent successfully",
+      "inviteFailed": "Failed to send invitation"
+    }
+  }
+}

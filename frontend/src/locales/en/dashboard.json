@@ -1,0 +1,24 @@
+{
+  "welcome": {
+    "title": "Welcome back!",
+    "subtitle": "Create stunning AI-powered content with PPT Studio and RedInk Studio."
+  },
+  "cards": {
+    "ppt": {
+      "title": "PPT Studio",
+      "subtitle": "Create AI-powered presentations",
+      "description": "Generate beautiful PowerPoint presentations from ideas, outlines, or descriptions.",
+      "button": "Create PPT"
+    },
+    "redbook": {
+      "title": "RedInk Studio",
+      "subtitle": "Create social media content",
+      "description": "Generate Xiaohongshu-style images and copywriting from your topics.",
+      "button": "Create Content"
+    }
+  },
+  "recentProjects": {
+    "title": "Recent Projects",
+    "empty": "No projects yet. Create your first project to get started!"
+  }
+}

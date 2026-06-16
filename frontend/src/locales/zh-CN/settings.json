@@ -1,0 +1,95 @@
+{
+  "profile": {
+    "title": "个人资料",
+    "subtitle": "管理您的个人信息",
+    "personalInfo": {
+      "title": "个人信息",
+      "description": "更新您的个人资料",
+      "avatarLabel": "头像 URL",
+      "avatarPlaceholder": "https://example.com/avatar.jpg",
+      "displayNameLabel": "显示名称",
+      "displayNamePlaceholder": "您的姓名",
+      "emailLabel": "邮箱",
+      "emailNote": "邮箱无法更改"
+    },
+    "account": {
+      "title": "账户",
+      "description": "管理您的账户设置",
+      "roleLabel": "账户角色",
+      "emailVerified": {
+        "label": "邮箱验证",
+        "verified": "已验证",
+        "notVerified": "未验证",
+        "verifyButton": "验证邮箱"
+      },
+      "changePassword": {
+        "label": "修改密码",
+        "description": "更新您的密码",
+        "button": "修改"
+      },
+      "deleteAccount": {
+        "label": "删除账户",
+        "description": "永久删除您的账户和所有数据",
+        "button": "删除"
+      }
+    },
+    "toast": {
+      "success": "个人资料更新成功",
+      "failed": "更新个人资料失败"
+    }
+  },
+  "billing": {
+    "title": "账单与套餐",
+    "subtitle": "管理您的订阅和积分",
+    "usage": {
+      "title": "当前使用情况",
+      "description": "本月积分使用情况",
+      "remaining": "剩余积分",
+      "used": "已用积分",
+      "usage": "使用率"
+    },
+    "plans": {
+      "title": "选择套餐",
+      "popular": "最受欢迎",
+      "monthly": "/月",
+      "currentPlan": "当前套餐",
+      "upgrade": "升级",
+      "free": {
+        "name": "免费版",
+        "features": [
+          "每月 30 积分",
+          "基础 PPT 生成",
+          "基础小红书内容",
+          "导出带水印"
+        ]
+      },
+      "pro": {
+        "name": "专业版",
+        "features": [
+          "每月 300 积分",
+          "高级 PPT 生成",
+          "高级小红书内容",
+          "无水印",
+          "优先支持",
+          "可编辑 PPTX 导出"
+        ]
+      },
+      "team": {
+        "name": "团队版",
+        "features": [
+          "每月 1000 积分",
+          "专业版全部功能",
+          "团队协作",
+          "共享积分池",
+          "API 访问",
+          "自定义模板"
+        ]
+      }
+    },
+    "paymentHistory": {
+      "title": "支付历史",
+      "description": "您最近的支付和发票",
+      "empty": "暂无支付记录"
+    }
+  }
+}

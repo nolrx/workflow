@@ -1,0 +1,87 @@
+{
+  "nav": {
+    "dashboard": "ダッシュボード",
+    "codeStudio": "ソフトウェアスタジオ",
+    "pptStudio": "PPT スタジオ",
+    "redbookStudio": "RedBook スタジオ",
+    "settings": "設定",
+    "team": "チーム",
+    "billing": "請求"
+  },
+  "sidebar": {
+    "personal": "個人",
+    "credits": "クレジット",
+    "creditFormat": "{{used}} / {{total}}",
+    "domains": {
+      "code": "コード",
+      "ppt": "PPT",
+      "redbook": "RedBook"
+    },
+    "newSession": "新規セッション",
+    "recentSessions": "履歴",
+    "viewAll": "すべて表示",
+    "noSessions": "セッションがありません",
+    "untitled": "無題"
+  },
+  "brand": {
+    "name": "AI",
+    "subtitle": "クリエイティブスタジオ"
+  },
+  "buttons": {
+    "save": "保存",
+    "saveChanges": "変更を保存",
+    "cancel": "キャンセル",
+    "delete": "削除",
+    "edit": "編集",
+    "create": "作成",
+    "submit": "送信",
+    "back": "戻る",
+    "next": "次へ",
+    "tryAgain": "再試行",
+    "loading": "読み込み中...",
+    "generating": "生成中...",
+    "download": "ダウンロード",
+    "copy": "コピー",
+    "refresh": "更新",
+    "close": "閉じる",
+    "confirm": "確認",
+    "loadMore": "もっと見る",
+    "viewHistory": "履歴を見る",
+    "backToHome": "ホームに戻る"
+  },
+  "status": {
+    "loading": "読み込み中...",
+    "error": "エラーが発生しました",
+    "errorOccurred": "予期しないエラーが発生しました",
+    "empty": "データがありません",
+    "success": "成功",
+    "completed": "完了",
+    "processing": "処理中",
+    "failed": "失敗",
+    "draft": "下書き",
+    "partial": "一部完了"
+  },
+  "validation": {
+    "required": "この項目は必須です",
+    "invalidEmail": "無効なメールアドレスです",
+    "minLength": "{{count}}文字以上必要です",
+    "passwordMismatch": "パスワードが一致しません"
+  },
+  "time": {
+    "justNow": "たった今",
+    "minutesAgo": "{{count}}分前",
+    "hoursAgo": "{{count}}時間前",
+    "daysAgo": "{{count}}日前",
+    "created": "作成日: {{date}}"
+  },
+  "dialog": {
+    "confirmDelete": "本当に削除しますか？この操作は取り消せません。",
+    "deleteTitle": "削除の確認"
+  },
+  "toast": {
+    "copied": "クリップボードにコピーしました",
+    "saved": "保存しました",
+    "deleted": "削除しました",
+    "error": "エラーが発生しました"
+  }
+}

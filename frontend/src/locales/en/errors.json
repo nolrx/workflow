@@ -1,0 +1,63 @@
+{
+  "auth": {
+    "loginFailed": "Login failed",
+    "registrationFailed": "Registration failed",
+    "updateProfileFailed": "Failed to update profile"
+  },
+  "ppt": {
+    "fetchProjectsFailed": "Failed to fetch projects",
+    "fetchProjectFailed": "Failed to fetch project",
+    "createProjectFailed": "Failed to create project",
+    "updateProjectFailed": "Failed to update project",
+    "deleteProjectFailed": "Failed to delete project",
+    "updatePageFailed": "Failed to update page",
+    "deletePageFailed": "Failed to delete page",
+    "addPageFailed": "Failed to add page",
+    "reorderPagesFailed": "Failed to reorder pages",
+    "fetchTaskStatusFailed": "Failed to fetch task status",
+    "generateOutlineFailed": "Failed to generate outline",
+    "generateDescriptionsFailed": "Failed to generate descriptions",
+    "generateImagesFailed": "Failed to generate images",
+    "regenerateImageFailed": "Failed to regenerate image",
+    "regenerateDescriptionFailed": "Failed to regenerate description",
+    "editImageFailed": "Failed to edit image",
+    "exportFailed": "Export failed"
+  },
+  "redbook": {
+    "fetchTasksFailed": "Failed to fetch task list",
+    "fetchTaskFailed": "Failed to fetch task details",
+    "createTaskFailed": "Failed to create task",
+    "updateTaskFailed": "Failed to update task",
+    "deleteTaskFailed": "Failed to delete task",
+    "generateOutlineFailed": "Failed to generate outline",
+    "generateImagesFailed": "Image generation failed",
+    "generateContentFailed": "Failed to generate content",
+    "retryFailed": "Retry failed",
+    "generateRequestFailed": "Generation request failed",
+    "responseStreamFailed": "Unable to read response stream"
+  },
+  "code": {
+    "fetchStylesFailed": "Failed to fetch styles",
+    "createProjectFailed": "Failed to create software project",
+    "saveProjectFailed": "Failed to save project",
+    "generateFlowFailed": "Failed to generate development flow",
+    "splitDocumentsFailed": "Failed to split development docs",
+    "saveDocumentFailed": "Failed to save document",
+    "generateStyleFailed": "Failed to generate style doc",
+    "generatePreviewFailed": "Failed to generate thumbnails",
+    "confirmPreviewFailed": "Failed to confirm UI baseline"
+  },
+  "team": {
+    "fetchTeamsFailed": "Failed to fetch teams",
+    "fetchTeamFailed": "Failed to fetch team",
+    "createTeamFailed": "Failed to create team",
+    "fetchMembersFailed": "Failed to fetch members",
+    "inviteMemberFailed": "Failed to send invitation",
+    "acceptInvitationFailed": "Failed to accept invitation"
+  },
+  "credit": {
+    "fetchBalanceFailed": "Failed to fetch balance",
+    "fetchTransactionsFailed": "Failed to fetch transactions",
+    "fetchUsageStatsFailed": "Failed to fetch usage stats"
+  }
+}

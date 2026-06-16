@@ -1,0 +1,76 @@
+{
+  "swarm": {
+    "button": "ワンクリック Agent 生成",
+    "title": "Agent Swarm 生成",
+    "description": "マルチエージェントのワークフローで、要件 → 開発フロー → ドキュメント分割 → スタイル → プレビューまでを自動実行し、各ステップをリアルタイムで観察できます。",
+    "requirementRequired": "先に要件を入力してください",
+    "rerun": "再生成",
+    "idleHint": "要件を入力して開始すると、各エージェントの実行過程がここにリアルタイムで表示されます。"
+  },
+  "panel": {
+    "title": "Agent ワークスペース",
+    "viewDetail": "実行詳細",
+    "steps": "ステップ",
+    "timeline": "ライブログ",
+    "detail": "詳細",
+    "debug": "デバッグ記録",
+    "on": "オン",
+    "off": "オフ",
+    "cancel": "実行を中止",
+    "waiting": "待機中…",
+    "selectStep": "左のステップを選択すると詳細が表示されます",
+    "debugHint": "「デバッグ記録」をオンにすると、完全なプロンプトとモデル応答を表示できます。"
+  },
+  "status": {
+    "queued": "待機列",
+    "running": "実行中",
+    "completed": "完了",
+    "partial": "一部完了",
+    "failed": "失敗",
+    "cancelled": "中止",
+    "pending": "未実行",
+    "skipped": "スキップ"
+  },
+  "tabs": {
+    "summary": "概要",
+    "artifacts": "成果物",
+    "prompt": "プロンプト",
+    "response": "モデル応答",
+    "error": "エラー"
+  },
+  "field": {
+    "model": "モデル",
+    "output": "出力",
+    "reasoning": "推論の要約",
+    "decision": "重要な判断",
+    "selfCheck": "セルフチェック",
+    "nextAction": "次のアクション",
+    "input": "入力"
+  },
+  "artifact": {
+    "download": "ダウンロード",
+    "empty": "コンテンツなし",
+    "downloadFailed": "ダウンロードに失敗しました"
+  },
+  "event": {
+    "run_started": "実行開始",
+    "step_started": "ステップ開始",
+    "model_request": "モデルリクエスト",
+    "model_response": "モデル応答",
+    "tool_call": "ツール呼び出し",
+    "tool_result": "ツール結果",
+    "artifact_created": "成果物を生成",
+    "file_created": "ファイルを生成",
+    "progress": "進捗",
+    "warning": "警告",
+    "error": "エラー",
+    "step_completed": "ステップ完了",
+    "run_completed": "実行終了"
+  },
+  "toast": {
+    "started": "Agent 実行を開始しました",
+    "startFailed": "開始に失敗しました",
+    "cancelRequested": "中止をリクエストしました",
+    "cancelFailed": "中止に失敗しました"
+  }
+}

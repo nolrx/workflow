@@ -1,0 +1,95 @@
+{
+  "profile": {
+    "title": "프로필",
+    "subtitle": "개인 정보 관리",
+    "personalInfo": {
+      "title": "개인 정보",
+      "description": "프로필 세부 정보 업데이트",
+      "avatarLabel": "아바타 URL",
+      "avatarPlaceholder": "https://example.com/avatar.jpg",
+      "displayNameLabel": "표시 이름",
+      "displayNamePlaceholder": "이름",
+      "emailLabel": "이메일",
+      "emailNote": "이메일은 변경할 수 없습니다"
+    },
+    "account": {
+      "title": "계정",
+      "description": "계정 설정 관리",
+      "roleLabel": "계정 역할",
+      "emailVerified": {
+        "label": "이메일 인증",
+        "verified": "인증됨",
+        "notVerified": "미인증",
+        "verifyButton": "이메일 인증"
+      },
+      "changePassword": {
+        "label": "비밀번호 변경",
+        "description": "비밀번호 업데이트",
+        "button": "변경"
+      },
+      "deleteAccount": {
+        "label": "계정 삭제",
+        "description": "계정과 모든 데이터를 영구적으로 삭제",
+        "button": "삭제"
+      }
+    },
+    "toast": {
+      "success": "프로필이 업데이트되었습니다",
+      "failed": "프로필 업데이트에 실패했습니다"
+    }
+  },
+  "billing": {
+    "title": "결제 및 플랜",
+    "subtitle": "구독 및 크레딧 관리",
+    "usage": {
+      "title": "현재 사용량",
+      "description": "이번 달 크레딧 사용량",
+      "remaining": "남은 크레딧",
+      "used": "사용한 크레딧",
+      "usage": "사용률"
+    },
+    "plans": {
+      "title": "플랜 선택",
+      "popular": "인기",
+      "monthly": "/월",
+      "currentPlan": "현재 플랜",
+      "upgrade": "업그레이드",
+      "free": {
+        "name": "무료",
+        "features": [
+          "월 30 크레딧",
+          "기본 PPT 생성",
+          "기본 RedInk 콘텐츠",
+          "내보내기에 워터마크"
+        ]
+      },
+      "pro": {
+        "name": "프로",
+        "features": [
+          "월 300 크레딧",
+          "고급 PPT 생성",
+          "고급 RedInk 콘텐츠",
+          "워터마크 없음",
+          "우선 지원",
+          "편집 가능한 PPTX 내보내기"
+        ]
+      },
+      "team": {
+        "name": "팀",
+        "features": [
+          "월 1000 크레딧",
+          "프로의 모든 기능",
+          "팀 협업",
+          "공유 크레딧 풀",
+          "API 액세스",
+          "맞춤 템플릿"
+        ]
+      }
+    },
+    "paymentHistory": {
+      "title": "결제 기록",
+      "description": "최근 결제 및 청구서",
+      "empty": "결제 기록이 없습니다"
+    }
+  }
+}

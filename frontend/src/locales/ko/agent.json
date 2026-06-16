@@ -1,0 +1,76 @@
+{
+  "swarm": {
+    "button": "원클릭 Agent 생성",
+    "title": "Agent Swarm 생성",
+    "description": "멀티 에이전트 워크플로로 요구사항 → 개발 흐름 → 문서 분할 → 스타일 → 미리보기까지 자동으로 실행하며, 각 단계를 실시간으로 확인할 수 있습니다.",
+    "requirementRequired": "먼저 요구사항을 입력하세요",
+    "rerun": "다시 생성",
+    "idleHint": "요구사항을 입력하고 시작하면 각 에이전트의 실행 과정이 여기에 실시간으로 표시됩니다."
+  },
+  "panel": {
+    "title": "Agent 작업 공간",
+    "viewDetail": "전체 상세",
+    "steps": "단계",
+    "timeline": "실시간 로그",
+    "detail": "상세",
+    "debug": "디버그 기록",
+    "on": "켜기",
+    "off": "끄기",
+    "cancel": "작업 취소",
+    "waiting": "대기 중…",
+    "selectStep": "왼쪽 단계를 선택하면 상세 정보가 표시됩니다",
+    "debugHint": "「디버그 기록」을 켜면 전체 프롬프트와 모델 응답을 볼 수 있습니다."
+  },
+  "status": {
+    "queued": "대기열",
+    "running": "진행 중",
+    "completed": "완료",
+    "partial": "부분 완료",
+    "failed": "실패",
+    "cancelled": "취소됨",
+    "pending": "대기",
+    "skipped": "건너뜀"
+  },
+  "tabs": {
+    "summary": "요약",
+    "artifacts": "산출물",
+    "prompt": "프롬프트",
+    "response": "모델 응답",
+    "error": "오류"
+  },
+  "field": {
+    "model": "모델",
+    "output": "출력",
+    "reasoning": "추론 요약",
+    "decision": "핵심 결정",
+    "selfCheck": "자체 점검",
+    "nextAction": "다음 작업",
+    "input": "입력"
+  },
+  "artifact": {
+    "download": "다운로드",
+    "empty": "콘텐츠 없음",
+    "downloadFailed": "다운로드 실패"
+  },
+  "event": {
+    "run_started": "작업 시작",
+    "step_started": "단계 시작",
+    "model_request": "모델 요청",
+    "model_response": "모델 응답",
+    "tool_call": "도구 호출",
+    "tool_result": "도구 결과",
+    "artifact_created": "산출물 생성",
+    "file_created": "파일 생성",
+    "progress": "진행률",
+    "warning": "경고",
+    "error": "오류",
+    "step_completed": "단계 완료",
+    "run_completed": "작업 종료"
+  },
+  "toast": {
+    "started": "Agent 작업을 시작했습니다",
+    "startFailed": "시작 실패",
+    "cancelRequested": "취소를 요청했습니다",
+    "cancelFailed": "취소 실패"
+  }
+}

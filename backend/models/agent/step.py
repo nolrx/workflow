@@ -1,0 +1,88 @@
+"""
+Agent step model.
+
+One AgentStep is one agent's turn inside a run (e.g. the Requirements Agent).
+It stores both the user-facing explainable summary and the full debug trace
+(prompt snapshot + model response) so the workspace can show what happened.
+"""
+import uuid
+from datetime import datetime
+
+from backend.extensions import db
+
+
+class AgentStepStatus:
+    """Lifecycle status constants for an agent step."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class AgentStep(db.Model):
+    """A single agent turn within an agent run."""
+
+    __tablename__ = "agent_steps"
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    run_id = db.Column(
+        db.String(36), db.ForeignKey("agent_runs.id"), nullable=False, index=True
+    )
+    parent_step_id = db.Column(db.String(36), nullable=True)
+
+    agent_key = db.Column(db.String(60), nullable=False)  # stable id, e.g. "requirements"
+    agent_name = db.Column(db.String(120), nullable=False)  # display name
+    role = db.Column(db.String(40), nullable=True)  # planner | generator | critic | publisher
+    order_index = db.Column(db.Integer, nullable=False, default=0)
+    attempt = db.Column(db.Integer, nullable=False, default=1)
+
+    status = db.Column(db.String(20), nullable=False, default=AgentStepStatus.PENDING)
+
+    # Explainable, user-facing fields
+    input_summary = db.Column(db.Text, nullable=True)
+    output_summary = db.Column(db.Text, nullable=True)
+    reasoning_summary = db.Column(db.Text, nullable=True)
+    decision_notes = db.Column(db.Text, nullable=True)
+    self_check = db.Column(db.Text, nullable=True)
+    next_action = db.Column(db.Text, nullable=True)
+
+    # Full debug trace
+    model_provider = db.Column(db.String(40), nullable=True)
+    model_name = db.Column(db.String(80), nullable=True)
+    prompt_snapshot = db.Column(db.Text, nullable=True)
+    model_response = db.Column(db.Text, nullable=True)
+
+    error_message = db.Column(db.Text, nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    started_at = db.Column(db.DateTime, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "run_id": self.run_id,
+            "parent_step_id": self.parent_step_id,
+            "agent_key": self.agent_key,
+            "agent_name": self.agent_name,
+            "role": self.role,
+            "order_index": self.order_index,
+            "attempt": self.attempt,
+            "status": self.status,
+            "input_summary": self.input_summary,
+            "output_summary": self.output_summary,
+            "reasoning_summary": self.reasoning_summary,
+            "decision_notes": self.decision_notes,
+            "self_check": self.self_check,
+            "next_action": self.next_action,
+            "model_provider": self.model_provider,
+            "model_name": self.model_name,
+            "prompt_snapshot": self.prompt_snapshot,
+            "model_response": self.model_response,
+            "error_message": self.error_message,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "started_at": self.started_at.isoformat() + "Z" if self.started_at else None,
+            "completed_at": self.completed_at.isoformat() + "Z" if self.completed_at else None,
+        }

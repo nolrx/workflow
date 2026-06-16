@@ -1,0 +1,79 @@
+{
+  "list": {
+    "title": "팀",
+    "subtitle": "다른 사람들과 프로젝트 협업",
+    "createTeam": "팀 만들기",
+    "dialog": {
+      "title": "새 팀 만들기",
+      "description": "팀을 사용하여 다른 사람들과 프로젝트에서 협업할 수 있습니다",
+      "nameLabel": "팀 이름",
+      "namePlaceholder": "팀 이름을 입력하세요",
+      "cancel": "취소",
+      "create": "만들기"
+    },
+    "empty": {
+      "title": "팀이 없습니다",
+      "description": "팀을 만들어 협업을 시작하세요"
+    },
+    "toast": {
+      "createSuccess": "팀이 생성되었습니다",
+      "createFailed": "팀 생성에 실패했습니다"
+    },
+    "created": "생성일: {{date}}"
+  },
+  "dashboard": {
+    "subtitle": "팀 멤버와 설정 관리",
+    "buttons": {
+      "settings": "설정",
+      "billing": "결제"
+    },
+    "stats": {
+      "members": {
+        "title": "멤버",
+        "description": "활성 팀 멤버"
+      },
+      "credits": {
+        "title": "크레딧",
+        "description": "팀 남은 크레딧"
+      },
+      "projects": {
+        "title": "프로젝트",
+        "description": "공유 팀 프로젝트"
+      }
+    },
+    "members": {
+      "title": "팀 멤버",
+      "description": "이 팀에 대한 액세스 권한 관리",
+      "invite": "초대",
+      "noMembers": "멤버가 없습니다"
+    },
+    "inviteDialog": {
+      "title": "팀 멤버 초대",
+      "description": "이 팀에 참여하도록 초대 보내기",
+      "emailLabel": "이메일 주소",
+      "emailPlaceholder": "colleague@example.com",
+      "roleLabel": "역할",
+      "roles": {
+        "admin": "관리자 - 멤버 및 프로젝트 관리 가능",
+        "member": "멤버 - 프로젝트 생성 및 편집 가능",
+        "viewer": "뷰어 - 프로젝트 보기만 가능"
+      },
+      "cancel": "취소",
+      "invite": "초대 보내기"
+    },
+    "roles": {
+      "owner": "소유자",
+      "admin": "관리자",
+      "member": "멤버",
+      "viewer": "뷰어"
+    },
+    "notFound": {
+      "title": "팀을 찾을 수 없습니다",
+      "description": "찾고 있는 팀이 존재하지 않거나 액세스 권한이 없습니다."
+    },
+    "toast": {
+      "inviteSuccess": "초대가 전송되었습니다",
+      "inviteFailed": "초대 전송에 실패했습니다"
+    }
+  }
+}

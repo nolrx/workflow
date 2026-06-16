@@ -1,0 +1,58 @@
+{
+  "auth": {
+    "loginFailed": "ログインに失敗しました",
+    "registrationFailed": "登録に失敗しました",
+    "updateProfileFailed": "プロフィールの更新に失敗しました"
+  },
+  "ppt": {
+    "fetchProjectsFailed": "プロジェクト一覧の取得に失敗しました",
+    "fetchProjectFailed": "プロジェクトの取得に失敗しました",
+    "createProjectFailed": "プロジェクトの作成に失敗しました",
+    "updateProjectFailed": "プロジェクトの更新に失敗しました",
+    "deleteProjectFailed": "プロジェクトの削除に失敗しました",
+    "updatePageFailed": "ページの更新に失敗しました",
+    "deletePageFailed": "ページの削除に失敗しました",
+    "fetchTaskStatusFailed": "タスクステータスの取得に失敗しました",
+    "generateOutlineFailed": "アウトラインの生成に失敗しました",
+    "generateDescriptionsFailed": "説明の生成に失敗しました",
+    "generateImagesFailed": "画像の生成に失敗しました",
+    "exportFailed": "エクスポートに失敗しました"
+  },
+  "redbook": {
+    "fetchTasksFailed": "タスク一覧の取得に失敗しました",
+    "fetchTaskFailed": "タスク詳細の取得に失敗しました",
+    "createTaskFailed": "タスクの作成に失敗しました",
+    "updateTaskFailed": "タスクの更新に失敗しました",
+    "deleteTaskFailed": "タスクの削除に失敗しました",
+    "generateOutlineFailed": "アウトラインの生成に失敗しました",
+    "generateImagesFailed": "画像の生成に失敗しました",
+    "generateContentFailed": "コンテンツの生成に失敗しました",
+    "retryFailed": "再試行に失敗しました",
+    "generateRequestFailed": "生成リクエストに失敗しました",
+    "responseStreamFailed": "レスポンスストリームの読み取りに失敗しました"
+  },
+  "code": {
+    "fetchStylesFailed": "スタイル一覧の取得に失敗しました",
+    "createProjectFailed": "ソフトウェアプロジェクトの作成に失敗しました",
+    "saveProjectFailed": "プロジェクトの保存に失敗しました",
+    "generateFlowFailed": "開発フローの生成に失敗しました",
+    "splitDocumentsFailed": "開発文書の分割に失敗しました",
+    "saveDocumentFailed": "文書の保存に失敗しました",
+    "generateStyleFailed": "スタイル文書の生成に失敗しました",
+    "generatePreviewFailed": "サムネイルの生成に失敗しました",
+    "confirmPreviewFailed": "UI 基準の確定に失敗しました"
+  },
+  "team": {
+    "fetchTeamsFailed": "チーム一覧の取得に失敗しました",
+    "fetchTeamFailed": "チームの取得に失敗しました",
+    "createTeamFailed": "チームの作成に失敗しました",
+    "fetchMembersFailed": "メンバー一覧の取得に失敗しました",
+    "inviteMemberFailed": "招待の送信に失敗しました",
+    "acceptInvitationFailed": "招待の承諾に失敗しました"
+  },
+  "credit": {
+    "fetchBalanceFailed": "残高の取得に失敗しました",
+    "fetchTransactionsFailed": "取引履歴の取得に失敗しました",
+    "fetchUsageStatsFailed": "使用状況の取得に失敗しました"
+  }
+}

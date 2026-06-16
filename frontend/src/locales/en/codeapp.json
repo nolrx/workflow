@@ -1,0 +1,16 @@
+{
+  "title": "App preview",
+  "generate": "Generate frontend project",
+  "regenerate": "Regenerate frontend",
+  "generating": "Generating the full frontend project…",
+  "empty": "Confirm the UI baseline, then click \"Generate frontend project\" — the interactive app preview shows up here.",
+  "needConfirmHint": "UI baseline not confirmed yet; you can still generate, but confirming first is recommended.",
+  "reviewPassed": "Passed interactivity review",
+  "reviewRepaired": "Issues found and auto-repaired",
+  "filesCount": "{{count}} files",
+  "loadingHistory": "Loading the generated frontend…",
+  "toast": {
+    "started": "Frontend generation started",
+    "startFailed": "Failed to start"
+  }
+}

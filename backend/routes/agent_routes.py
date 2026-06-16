@@ -1,0 +1,330 @@
+"""
+Agent Swarm API — shared across product domains.
+
+Endpoints (registered at /api/agent):
+    POST   /runs                       start a workflow run (reserves credits)
+    GET    /runs/<run_id>              full snapshot (run + steps + events + artifacts)
+    GET    /runs/<run_id>/stream       live SSE event stream (replay + push)
+    POST   /runs/<run_id>/cancel       request cooperative cancellation
+    GET    /artifacts/<id>/file        download / view a produced artifact
+"""
+import json
+import logging
+import os
+import queue
+
+from flask import Blueprint, Response, current_app, request, send_file, stream_with_context
+from flask_jwt_extended import get_jwt_identity, jwt_required
+
+from backend.extensions import db
+from backend.models.agent import (
+    AgentArtifact,
+    AgentEvent,
+    AgentEventType,
+    AgentRun,
+    AgentRunStatus,
+)
+from backend.services import pricing
+from backend.services.agent.bus import event_bus
+from backend.services.agent.files import artifact_abs_path
+from backend.services.agent.runtime import agent_runtime, get_workflow
+from backend.services.credit_service import InsufficientCreditsError, deduct_credits
+from backend.utils.response import error_response, success_response
+
+logger = logging.getLogger(__name__)
+
+agent_bp = Blueprint("agent", __name__)
+
+# Estimated credit cost per workflow (reserved up-front; auto-refunded on early
+# failure — see agent runtime). Values come from the central pricing table.
+WORKFLOW_COSTS = {
+    "code_full_generation": pricing.CODE_FULL_GENERATION_TOTAL,
+    "code_frontend_generation": pricing.CODE_FRONTEND_GENERATION,
+}
+VALID_DOMAINS = {"code", "ppt", "redbook"}
+MAX_CONCURRENT_RUNS = 2
+
+
+def _get_owned_run(run_id: str) -> AgentRun | None:
+    user_id = get_jwt_identity()
+    return AgentRun.query.filter_by(id=run_id, user_id=user_id).first()
+
+
+@agent_bp.route("/runs", methods=["POST"])
+@jwt_required()
+def create_run():
+    """Create and start a workflow run after reserving credits."""
+    user_id = get_jwt_identity()
+    data = request.get_json() or {}
+    domain = (data.get("domain") or "").strip()
+    workflow = (data.get("workflow") or "").strip()
+    resource_type = data.get("resource_type")
+    resource_id = data.get("resource_id")
+    config = data.get("config") or {}
+    team_id = data.get("team_id")
+
+    if domain not in VALID_DOMAINS:
+        return error_response("VALIDATION_ERROR", "缺少有效的 domain", 400)
+    if workflow not in WORKFLOW_COSTS or get_workflow(workflow) is None:
+        return error_response("VALIDATION_ERROR", f"不支持的 workflow: {workflow}", 400)
+    if not isinstance(config, dict):
+        return error_response("VALIDATION_ERROR", "config 必须是对象", 400)
+
+    # Workflow-specific minimal input validation.
+    if workflow == "code_frontend_generation" and not resource_id:
+        return error_response(
+            "VALIDATION_ERROR", "前端生成需要一个已确认的 Code 项目（resource_id）", 400
+        )
+    if workflow == "code_full_generation":
+        has_requirement = bool((config.get("requirement") or "").strip())
+        if not has_requirement and not resource_id:
+            return error_response(
+                "VALIDATION_ERROR", "请提供 requirement 或已有的 resource_id", 400
+            )
+
+    # Per-user concurrency cap on active runs.
+    active = AgentRun.query.filter(
+        AgentRun.user_id == user_id,
+        AgentRun.status.in_(list(AgentRunStatus.ACTIVE)),
+    ).count()
+    if active >= MAX_CONCURRENT_RUNS:
+        return error_response(
+            "CONCURRENCY_LIMIT", f"已有 {active} 个进行中的任务，请稍后再试", 429
+        )
+
+    cost = WORKFLOW_COSTS[workflow]
+    title = (config.get("title") or "").strip() or None
+
+    run = AgentRun(
+        user_id=user_id,
+        team_id=team_id,
+        domain=domain,
+        workflow=workflow,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        title=title,
+        status=AgentRunStatus.QUEUED,
+        credit_reserved=cost,
+    )
+    run.set_config(config)
+    run.set_input_snapshot(
+        {
+            "domain": domain,
+            "workflow": workflow,
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "config": config,
+        }
+    )
+    db.session.add(run)
+    db.session.commit()
+
+    # Reserve credits up-front (this is the first real caller of deduct_credits).
+    try:
+        deduct_credits(
+            user_id=user_id,
+            amount=cost,
+            operation="agent_run",
+            resource_type="agent_run",
+            resource_id=run.id,
+            description=f"Agent run: {workflow}",
+            team_id=team_id,
+        )
+    except InsufficientCreditsError:
+        db.session.delete(run)
+        db.session.commit()
+        return error_response("INSUFFICIENT_CREDITS", "积分不足，无法启动任务", 402)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Credit reservation failed for run: %s", exc, exc_info=True)
+        db.session.delete(run)
+        db.session.commit()
+        return error_response("SERVER_ERROR", "扣费失败，任务未启动", 500)
+
+    agent_runtime.start(current_app._get_current_object(), run.id)
+
+    return success_response(
+        {
+            "run_id": run.id,
+            "status": run.status,
+            "stream_url": f"/api/agent/runs/{run.id}/stream",
+        },
+        "任务已启动",
+        201,
+    )
+
+
+@agent_bp.route("/runs/<run_id>", methods=["GET"])
+@jwt_required()
+def get_run(run_id: str):
+    """Return the full run snapshot — used for initial load and reconnect."""
+    run = _get_owned_run(run_id)
+    if not run:
+        return error_response("NOT_FOUND", "任务不存在", 404)
+    return success_response({"run": run.to_dict(include_children=True)})
+
+
+@agent_bp.route("/runs", methods=["GET"])
+@jwt_required()
+def list_runs():
+    """List the current user's recent runs (compact)."""
+    user_id = get_jwt_identity()
+    limit = min(int(request.args.get("limit", 20)), 100)
+    domain = request.args.get("domain")
+    resource_id = request.args.get("resource_id")
+    query = AgentRun.query.filter_by(user_id=user_id)
+    if domain:
+        query = query.filter_by(domain=domain)
+    if resource_id:
+        # Used to find (and replay) the run(s) tied to a given project/task.
+        query = query.filter_by(resource_id=resource_id)
+    runs = query.order_by(AgentRun.created_at.desc()).limit(limit).all()
+    return success_response({"runs": [run.to_dict() for run in runs]})
+
+
+@agent_bp.route("/runs/<run_id>/cancel", methods=["POST"])
+@jwt_required()
+def cancel_run(run_id: str):
+    """Request cooperative cancellation; remaining steps stop, in-flight model calls are not killed."""
+    run = _get_owned_run(run_id)
+    if not run:
+        return error_response("NOT_FOUND", "任务不存在", 404)
+    if run.status in AgentRunStatus.TERMINAL:
+        return error_response("INVALID_STATE", "任务已结束，无法取消", 400)
+    agent_runtime.request_cancel(run_id)
+    return success_response({"run_id": run_id, "status": "cancelling"}, "已请求取消")
+
+
+def _sse(event_dict: dict) -> str:
+    return (
+        f"id: {event_dict['sequence']}\n"
+        f"event: agent_event\n"
+        f"data: {json.dumps(event_dict, ensure_ascii=False)}\n\n"
+    )
+
+
+def _sse_delta(event_dict: dict) -> str:
+    return (
+        f"event: agent_delta\n"
+        f"data: {json.dumps(event_dict, ensure_ascii=False)}\n\n"
+    )
+
+
+def _event_stream(app, run_id: str, last_sequence: int):
+    """SSE generator: subscribe first, replay missed events, then push live."""
+    q = event_bus.subscribe(run_id)
+    cursor = last_sequence
+    terminal = False
+    try:
+        # Initial replay from the DB (source of truth) for anything already logged.
+        with app.app_context():
+            events = (
+                AgentEvent.query.filter(
+                    AgentEvent.run_id == run_id, AgentEvent.sequence > cursor
+                )
+                .order_by(AgentEvent.sequence)
+                .all()
+            )
+            payloads = [event.to_dict() for event in events]
+            run = db.session.get(AgentRun, run_id)
+            terminal = bool(run and run.status in AgentRunStatus.TERMINAL)
+        for payload in payloads:
+            cursor = max(cursor, payload["sequence"])
+            yield _sse(payload)
+
+        while True:
+            if terminal:
+                # Final sweep for events that landed between replay and now.
+                with app.app_context():
+                    late = (
+                        AgentEvent.query.filter(
+                            AgentEvent.run_id == run_id, AgentEvent.sequence > cursor
+                        )
+                        .order_by(AgentEvent.sequence)
+                        .all()
+                    )
+                    late_payloads = [event.to_dict() for event in late]
+                for payload in late_payloads:
+                    cursor = max(cursor, payload["sequence"])
+                    yield _sse(payload)
+                yield "event: done\ndata: {}\n\n"
+                break
+
+            try:
+                event = q.get(timeout=15)
+            except queue.Empty:
+                yield ": keepalive\n\n"
+                with app.app_context():
+                    run = db.session.get(AgentRun, run_id)
+                    terminal = bool(run and run.status in AgentRunStatus.TERMINAL)
+                continue
+
+            # Transient token deltas are live-only: forward immediately without
+            # touching the sequence cursor (they are never persisted or replayed).
+            if event.get("kind") == "delta":
+                yield _sse_delta(event)
+                continue
+
+            if event["sequence"] <= cursor:
+                continue
+            cursor = max(cursor, event["sequence"])
+            yield _sse(event)
+            if event["event_type"] == AgentEventType.RUN_COMPLETED:
+                terminal = True
+    finally:
+        event_bus.unsubscribe(run_id, q)
+
+
+@agent_bp.route("/runs/<run_id>/stream", methods=["GET"])
+@jwt_required()
+def stream_run(run_id: str):
+    """Stream run events as text/event-stream (consumed via fetch + ReadableStream)."""
+    run = _get_owned_run(run_id)
+    if not run:
+        return error_response("NOT_FOUND", "任务不存在", 404)
+    try:
+        last_sequence = int(request.args.get("last_sequence", 0))
+    except (TypeError, ValueError):
+        last_sequence = 0
+
+    app = current_app._get_current_object()
+    response = Response(
+        stream_with_context(_event_stream(app, run_id, last_sequence)),
+        mimetype="text/event-stream",
+    )
+    response.headers["Cache-Control"] = "no-cache"
+    response.headers["X-Accel-Buffering"] = "no"
+    return response
+
+
+@agent_bp.route("/artifacts/<artifact_id>/file", methods=["GET"])
+@jwt_required()
+def get_artifact_file(artifact_id: str):
+    """Serve a produced artifact (on-disk file or inline text), owner-only."""
+    user_id = get_jwt_identity()
+    artifact = db.session.get(AgentArtifact, artifact_id)
+    if not artifact:
+        return error_response("NOT_FOUND", "产物不存在", 404)
+    run = db.session.get(AgentRun, artifact.run_id)
+    if not run or run.user_id != user_id:
+        return error_response("NOT_FOUND", "产物不存在", 404)
+
+    as_attachment = bool(request.args.get("download"))
+
+    if artifact.storage_path:
+        abs_path = artifact_abs_path(artifact.storage_path)
+        if not os.path.exists(abs_path):
+            return error_response("NOT_FOUND", "文件已不存在", 404)
+        return send_file(
+            abs_path,
+            mimetype=artifact.mime_type or "application/octet-stream",
+            as_attachment=as_attachment,
+            download_name=artifact.filename or f"{artifact.id}.bin",
+        )
+
+    if artifact.content_text is not None:
+        return Response(
+            artifact.content_text,
+            mimetype=artifact.mime_type or "text/plain; charset=utf-8",
+        )
+
+    return error_response("NOT_FOUND", "该产物没有可下载的文件内容", 404)

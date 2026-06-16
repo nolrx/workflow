@@ -1,0 +1,24 @@
+{
+  "welcome": {
+    "title": "欢迎回来！",
+    "subtitle": "使用 PPT 工作室和小红书工作室创建精彩的 AI 内容。"
+  },
+  "cards": {
+    "ppt": {
+      "title": "PPT 工作室",
+      "subtitle": "AI 驱动的演示文稿创作",
+      "description": "从创意、大纲或描述生成精美的 PowerPoint 演示文稿。",
+      "button": "创建 PPT"
+    },
+    "redbook": {
+      "title": "小红书工作室",
+      "subtitle": "创建社交媒体内容",
+      "description": "根据您的主题生成小红书风格的图片和文案。",
+      "button": "创建内容"
+    }
+  },
+  "recentProjects": {
+    "title": "最近项目",
+    "empty": "暂无项目。创建您的第一个项目开始吧！"
+  }
+}

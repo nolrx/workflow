@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \"const p=require\\('./package.json'\\); const d={...p.dependencies,...p.devDependencies}; const keys=['react-markdown','remark-gfm','marked','markdown','@uiw','codemirror','monaco','framer-motion','motion','react-syntax']; console.log\\('--- matched deps ---'\\); Object.keys\\(d\\).filter\\(k=>keys.some\\(s=>k.includes\\(s\\)\\)\\).forEach\\(k=>console.log\\(k, d[k]\\)\\); console.log\\('--- all deps ---'\\); console.log\\(Object.keys\\(p.dependencies\\).join\\(', '\\)\\)\")",
+      "Skill(claude-api)",
+      "Bash(uv run *)",
+      "Bash(.venv/bin/python -m ruff check backend/services/pricing.py backend/services/credit_service.py backend/routes/agent_routes.py)",
+      "Bash(.venv/bin/python -c \"from backend.services import pricing, credit_service; print\\('CODE total =', pricing.CODE_FULL_GENERATION_TOTAL\\); print\\('OPERATION keys =', list\\(pricing.OPERATION\\)\\); print\\('charge ok =', callable\\(credit_service.charge\\)\\); print\\('refund ok =', callable\\(credit_service.refund_credits\\)\\)\")"
+    ]
+  }
+}

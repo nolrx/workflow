@@ -1,0 +1,85 @@
+{
+  "title": "ソフトウェアスタジオ",
+  "subtitle": "要件から開発文書、スタイルプレビュー、UI 基準の確定まで進めます。",
+  "steps": {
+    "input": "要件入力",
+    "requirements": "要件文書",
+    "flow": "開発フロー",
+    "documents": "開発文書",
+    "style": "アプリスタイル",
+    "preview": "プレビュー",
+    "baseline": "UI 基準"
+  },
+  "status": {
+    "requirement_ready": "要件生成済み",
+    "flow_ready": "フロー生成済み",
+    "documents_ready": "文書分割済み",
+    "style_ready": "スタイル生成済み",
+    "preview_ready": "プレビュー生成済み",
+    "ui_confirmed": "UI 確定済み"
+  },
+  "input": {
+    "title": "作りたいソフトウェアを入力",
+    "placeholder": "例: 個人開発者向けの SaaS 財務ダッシュボード。Stripe と銀行明細を取り込み、売上、コスト、解約、キャッシュフローリスクを分析する。",
+    "generate": "要件文書を生成"
+  },
+  "requirements": {
+    "title": "ユーザー要件と要件文書",
+    "next": "開発フローを生成"
+  },
+  "flow": {
+    "title": "ソフトウェア開発フロー",
+    "placeholder": "生成された開発フローをここで編集できます。",
+    "split": "開発文書に分割"
+  },
+  "documents": {
+    "title": "編集可能な開発文書",
+    "count": "{{count}} 件の文書",
+    "content": "文書内容",
+    "promptExpert": "プロンプト専門家"
+  },
+  "style": {
+    "title": "アプリスタイル",
+    "generate": "スタイル文書を生成",
+    "placeholder": "スタイルを選択すると専用のスタイル文書が生成されます。"
+  },
+  "preview": {
+    "title": "アプリサムネイル",
+    "generate": "サムネイルを生成",
+    "confirm": "UI 基準として確定",
+    "confirmed": "確定済み",
+    "empty": "スタイルを選択して生成すると、サムネイルがここに表示されます。",
+    "imageAlt": "アプリサムネイル"
+  },
+  "baseline": {
+    "title": "確定した UI 基準"
+  },
+  "toast": {
+    "saved": "プロジェクトを保存しました",
+    "documentSaved": "文書を保存しました"
+  },
+  "workspace": {
+    "previewTitle": "リアルタイムプレビュー",
+    "empty": "エージェントを実行すると結果がここにストリーミング表示され、その場で編集できます。",
+    "streamingHint": "AI が生成中…",
+    "newProject": "新規",
+    "splitThinking": {
+      "title": "AI が開発文書を分割しています",
+      "steps": [
+        "要件と開発フローを分析中",
+        "文書構成と境界を設計中",
+        "プロダクト / フロント / バック / データモデルを分割中",
+        "AI プロンプト連携を整理中",
+        "文書ごとにプロンプト専門家の助言を最適化中",
+        "出力を統合・校正中"
+      ]
+    },
+    "tabs": {
+      "requirements": "要件文書",
+      "flow": "開発フロー",
+      "documents": "開発文書",
+      "style": "UI スタイル",
+      "app": "アプリプレビュー"
+    }
+  }
+}

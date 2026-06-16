@@ -1,0 +1,87 @@
+{
+  "nav": {
+    "dashboard": "仪表盘",
+    "codeStudio": "软件创作",
+    "pptStudio": "PPT 工作室",
+    "redbookStudio": "小红书工作室",
+    "settings": "设置",
+    "team": "团队",
+    "billing": "账单"
+  },
+  "sidebar": {
+    "personal": "个人",
+    "credits": "积分",
+    "creditFormat": "{{used}} / {{total}}",
+    "domains": {
+      "code": "代码",
+      "ppt": "PPT",
+      "redbook": "小红书"
+    },
+    "newSession": "新建会话",
+    "recentSessions": "历史会话",
+    "viewAll": "查看全部",
+    "noSessions": "暂无会话",
+    "untitled": "未命名"
+  },
+  "brand": {
+    "name": "AI",
+    "subtitle": "创意工作室"
+  },
+  "buttons": {
+    "save": "保存",
+    "saveChanges": "保存更改",
+    "cancel": "取消",
+    "delete": "删除",
+    "edit": "编辑",
+    "create": "创建",
+    "submit": "提交",
+    "back": "返回",
+    "next": "下一步",
+    "tryAgain": "重试",
+    "loading": "加载中...",
+    "generating": "生成中...",
+    "download": "下载",
+    "copy": "复制",
+    "refresh": "刷新",
+    "close": "关闭",
+    "confirm": "确认",
+    "loadMore": "加载更多",
+    "viewHistory": "查看历史",
+    "backToHome": "返回首页"
+  },
+  "status": {
+    "loading": "加载中...",
+    "error": "出错了",
+    "errorOccurred": "发生了意外错误",
+    "empty": "暂无数据",
+    "success": "成功",
+    "completed": "已完成",
+    "processing": "处理中",
+    "failed": "失败",
+    "draft": "草稿",
+    "partial": "部分完成"
+  },
+  "validation": {
+    "required": "此字段为必填项",
+    "invalidEmail": "无效的邮箱地址",
+    "minLength": "至少需要 {{count}} 个字符",
+    "passwordMismatch": "两次输入的密码不一致"
+  },
+  "time": {
+    "justNow": "刚刚",
+    "minutesAgo": "{{count}} 分钟前",
+    "hoursAgo": "{{count}} 小时前",
+    "daysAgo": "{{count}} 天前",
+    "created": "创建于 {{date}}"
+  },
+  "dialog": {
+    "confirmDelete": "确定要删除吗？此操作无法撤销。",
+    "deleteTitle": "确认删除"
+  },
+  "toast": {
+    "copied": "已复制到剪贴板",
+    "saved": "保存成功",
+    "deleted": "删除成功",
+    "error": "发生错误"
+  }
+}

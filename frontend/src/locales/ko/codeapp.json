@@ -1,0 +1,16 @@
+{
+  "title": "앱 미리보기",
+  "generate": "프런트엔드 프로젝트 생성",
+  "regenerate": "프런트엔드 재생성",
+  "generating": "전체 프런트엔드 프로젝트를 생성하는 중…",
+  "empty": "UI 베이스라인을 확정한 뒤 「프런트엔드 프로젝트 생성」을 누르면 인터랙티브한 앱 미리보기가 여기에 표시됩니다.",
+  "needConfirmHint": "UI 베이스라인이 아직 확정되지 않았습니다. 생성은 가능하지만 먼저 확정하는 것을 권장합니다.",
+  "reviewPassed": "인터랙티브 검수 통과",
+  "reviewRepaired": "문제를 발견해 자동 수정했습니다",
+  "filesCount": "{{count}}개 파일",
+  "loadingHistory": "생성된 프런트엔드를 불러오는 중…",
+  "toast": {
+    "started": "프런트엔드 생성을 시작했습니다",
+    "startFailed": "시작 실패"
+  }
+}

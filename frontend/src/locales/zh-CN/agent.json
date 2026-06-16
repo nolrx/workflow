@@ -1,0 +1,76 @@
+{
+  "swarm": {
+    "button": "一键 Agent 生成",
+    "title": "Agent Swarm 生成",
+    "description": "用多智能体工作流自动完成：需求 → 开发流程 → 文档拆分 → 风格 → 预览图，并可实时观察每一步。",
+    "requirementRequired": "请先填写需求",
+    "rerun": "重新生成",
+    "idleHint": "输入需求并开始生成，这里会实时显示每个 Agent 的执行过程。"
+  },
+  "panel": {
+    "title": "Agent 工作台",
+    "viewDetail": "完整执行详情",
+    "steps": "步骤",
+    "timeline": "实时日志",
+    "detail": "详情",
+    "debug": "调试轨迹",
+    "on": "开",
+    "off": "关",
+    "cancel": "取消任务",
+    "waiting": "等待中…",
+    "selectStep": "选择左侧步骤查看详情",
+    "debugHint": "开启「调试轨迹」可查看完整 Prompt 与模型返回。"
+  },
+  "status": {
+    "queued": "排队中",
+    "running": "进行中",
+    "completed": "已完成",
+    "partial": "部分完成",
+    "failed": "失败",
+    "cancelled": "已取消",
+    "pending": "待执行",
+    "skipped": "已跳过"
+  },
+  "tabs": {
+    "summary": "摘要",
+    "artifacts": "产物",
+    "prompt": "Prompt",
+    "response": "模型返回",
+    "error": "错误"
+  },
+  "field": {
+    "model": "模型",
+    "output": "输出",
+    "reasoning": "推理摘要",
+    "decision": "关键取舍",
+    "selfCheck": "自检",
+    "nextAction": "下一步",
+    "input": "输入"
+  },
+  "artifact": {
+    "download": "下载",
+    "empty": "暂无内容",
+    "downloadFailed": "下载失败"
+  },
+  "event": {
+    "run_started": "任务启动",
+    "step_started": "步骤开始",
+    "model_request": "模型请求",
+    "model_response": "模型返回",
+    "tool_call": "工具调用",
+    "tool_result": "工具结果",
+    "artifact_created": "产出生成",
+    "file_created": "文件生成",
+    "progress": "进度",
+    "warning": "警告",
+    "error": "错误",
+    "step_completed": "步骤完成",
+    "run_completed": "任务结束"
+  },
+  "toast": {
+    "started": "Agent 任务已启动",
+    "startFailed": "启动失败",
+    "cancelRequested": "已请求取消",
+    "cancelFailed": "取消失败"
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "swarm": {
+    "button": "One-click Agent generate",
+    "title": "Agent Swarm generation",
+    "description": "Run a multi-agent workflow end to end: requirements → development flow → document split → style → previews, with every step observable in real time.",
+    "requirementRequired": "Please enter a requirement first",
+    "rerun": "Regenerate",
+    "idleHint": "Enter a requirement and start — each agent's execution shows up here live."
+  },
+  "panel": {
+    "title": "Agent workspace",
+    "viewDetail": "Full detail",
+    "steps": "Steps",
+    "timeline": "Live log",
+    "detail": "Detail",
+    "debug": "Debug trace",
+    "on": "On",
+    "off": "Off",
+    "cancel": "Cancel run",
+    "waiting": "Waiting…",
+    "selectStep": "Select a step on the left to see details",
+    "debugHint": "Turn on \"Debug trace\" to view the full prompt and model response."
+  },
+  "status": {
+    "queued": "Queued",
+    "running": "Running",
+    "completed": "Completed",
+    "partial": "Partial",
+    "failed": "Failed",
+    "cancelled": "Cancelled",
+    "pending": "Pending",
+    "skipped": "Skipped"
+  },
+  "tabs": {
+    "summary": "Summary",
+    "artifacts": "Artifacts",
+    "prompt": "Prompt",
+    "response": "Response",
+    "error": "Error"
+  },
+  "field": {
+    "model": "Model",
+    "output": "Output",
+    "reasoning": "Reasoning",
+    "decision": "Decisions",
+    "selfCheck": "Self-check",
+    "nextAction": "Next action",
+    "input": "Input"
+  },
+  "artifact": {
+    "download": "Download",
+    "empty": "No content",
+    "downloadFailed": "Download failed"
+  },
+  "event": {
+    "run_started": "Run started",
+    "step_started": "Step started",
+    "model_request": "Model request",
+    "model_response": "Model response",
+    "tool_call": "Tool call",
+    "tool_result": "Tool result",
+    "artifact_created": "Artifact created",
+    "file_created": "File created",
+    "progress": "Progress",
+    "warning": "Warning",
+    "error": "Error",
+    "step_completed": "Step completed",
+    "run_completed": "Run completed"
+  },
+  "toast": {
+    "started": "Agent run started",
+    "startFailed": "Failed to start",
+    "cancelRequested": "Cancellation requested",
+    "cancelFailed": "Cancellation failed"
+  }
+}

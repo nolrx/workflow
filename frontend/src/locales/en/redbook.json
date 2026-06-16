@@ -1,0 +1,122 @@
+{
+  "home": {
+    "title": "RedBook Studio",
+    "subtitle": "AI-powered Xiaohongshu content creation platform",
+    "createNew": "Create New Content",
+    "form": {
+      "topicLabel": "Topic / Description",
+      "topicPlaceholder": "Describe the Xiaohongshu content you want to create, e.g., Share a minimalist home decor setup, including before-and-after comparisons of living room, bedroom, and study...",
+      "topicHelper": "Detailed descriptions help AI generate more accurate content",
+      "imagesLabel": "Reference Images (optional)",
+      "imageAlt": "Reference {{index}}",
+      "addImage": "Add Image",
+      "imagesHelper": "Upload reference images to help AI understand the style you want"
+    },
+    "buttons": {
+      "history": "History",
+      "generateOutline": "Generate Outline",
+      "generating": "Generating..."
+    },
+    "preview": {
+      "title": "Preview Outline",
+      "pageLabel": "Page {{index}}",
+      "rawOutline": "View Raw Outline",
+      "backToEdit": "Back to Edit",
+      "startGenerate": "Start Generating Images",
+      "creating": "Creating..."
+    },
+    "toast": {
+      "maxImages": "Maximum 4 reference images allowed",
+      "topicRequired": "Please enter a topic",
+      "outlineSuccess": "Outline generated successfully, {{count}} pages",
+      "outlineFailed": "Failed to generate outline",
+      "outlineRequired": "Please generate outline first",
+      "taskSuccess": "Task created successfully",
+      "taskFailed": "Failed to create task"
+    }
+  },
+  "taskDetail": {
+    "back": "Back",
+    "notFound": "Task not found",
+    "backToHome": "Back to Home",
+    "status": {
+      "draft": "Draft",
+      "generating": "Generating",
+      "partial": "Partial",
+      "completed": "Completed",
+      "error": "Error"
+    },
+    "tabs": {
+      "images": "Images ({{count}})",
+      "content": "Content"
+    },
+    "images": {
+      "generating": "Generating images...",
+      "progress": "{{completed}} / {{total}}",
+      "startGenerate": "Start Generating Images",
+      "generating_btn": "Generating...",
+      "pageAlt": "Page {{index}}"
+    },
+    "content": {
+      "empty": "No content generated yet, click the button below to generate",
+      "generateContent": "Generate Content",
+      "generating": "Generating...",
+      "titles": "Titles",
+      "copywriting": "Copywriting",
+      "tags": "Tags",
+      "regenerate": "Regenerate Content",
+      "regenerating": "Regenerating..."
+    },
+    "toast": {
+      "imageRetrySuccess": "Page {{index}} image regenerated successfully",
+      "imageRetryFailed": "Retry failed",
+      "copied": "Copied to clipboard",
+      "imagesComplete": "Image generation complete",
+      "imagesFailed": "Image generation failed",
+      "missingData": "Missing topic or outline",
+      "contentSuccess": "Content generated successfully",
+      "contentFailed": "Content generation failed"
+    }
+  },
+  "history": {
+    "title": "History",
+    "stats": {
+      "summary": "{{total}} tasks total, {{completed}} completed",
+      "total": "Total Tasks",
+      "completed": "Completed",
+      "generating": "Generating",
+      "draft": "Draft"
+    },
+    "searchPlaceholder": "Search tasks...",
+    "status": {
+      "draft": "Draft",
+      "generating": "Generating",
+      "partial": "Partial",
+      "completed": "Completed",
+      "error": "Error"
+    },
+    "menu": {
+      "delete": "Delete"
+    },
+    "empty": {
+      "noTasks": {
+        "title": "No tasks yet",
+        "description": "Start creating your first Xiaohongshu content"
+      },
+      "noMatch": {
+        "title": "No tasks found",
+        "description": "No matching tasks found"
+      }
+    },
+    "newContent": "New Content",
+    "deleteDialog": {
+      "title": "Confirm Delete",
+      "description": "This action will permanently delete this task and all its images and content. This cannot be undone."
+    },
+    "toast": {
+      "deleteSuccess": "Task deleted",
+      "deleteFailed": "Delete failed"
+    },
+    "pagesCount": "{{count}} pages"
+  }
+}

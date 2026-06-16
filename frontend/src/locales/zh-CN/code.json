@@ -1,0 +1,85 @@
+{
+  "title": "软件创作",
+  "subtitle": "从需求到开发文档、风格预览和 UI 基调确认。",
+  "steps": {
+    "input": "需求输入",
+    "requirements": "需求文档",
+    "flow": "开发流程",
+    "documents": "开发文档",
+    "style": "应用风格",
+    "preview": "应用预览",
+    "baseline": "UI 基调"
+  },
+  "status": {
+    "requirement_ready": "需求已生成",
+    "flow_ready": "流程已生成",
+    "documents_ready": "文档已切分",
+    "style_ready": "风格已生成",
+    "preview_ready": "预览已生成",
+    "ui_confirmed": "UI 已确认"
+  },
+  "input": {
+    "title": "输入你想创建的软件",
+    "placeholder": "例如：我想做一个面向独立开发者的 SaaS 财务看板，可以导入 Stripe 和银行流水，自动分析收入、成本、订阅流失和现金流风险。",
+    "generate": "生成需求文档"
+  },
+  "requirements": {
+    "title": "用户需求与需求文档",
+    "next": "生成开发流程"
+  },
+  "flow": {
+    "title": "软件开发流程",
+    "placeholder": "生成后可在这里编辑开发流程。",
+    "split": "切分开发文档"
+  },
+  "documents": {
+    "title": "可编辑开发文档",
+    "count": "{{count}} 份文档",
+    "content": "文档内容",
+    "promptExpert": "提示词专家"
+  },
+  "style": {
+    "title": "应用风格",
+    "generate": "生成风格文档",
+    "placeholder": "选择风格后生成专属风格文档。"
+  },
+  "preview": {
+    "title": "应用缩略图",
+    "generate": "生成缩略图",
+    "confirm": "确认作为 UI 基调",
+    "confirmed": "已确认",
+    "empty": "选择风格并生成缩略图后会显示在这里。",
+    "imageAlt": "应用缩略图"
+  },
+  "baseline": {
+    "title": "已确认 UI 基调"
+  },
+  "toast": {
+    "saved": "项目已保存",
+    "documentSaved": "文档已保存"
+  },
+  "workspace": {
+    "previewTitle": "实时预览",
+    "empty": "运行 Agent 后，这里会实时显示生成结果，并可直接编辑。",
+    "streamingHint": "AI 正在生成…",
+    "newProject": "新建",
+    "splitThinking": {
+      "title": "AI 正在拆分开发文档",
+      "steps": [
+        "分析需求文档与开发流程",
+        "规划文档结构与边界",
+        "拆分产品 / 前端 / 后端 / 数据模型",
+        "梳理 AI 提示词链路",
+        "为每份文档定制提示词专家建议",
+        "整合并校对输出"
+      ]
+    },
+    "tabs": {
+      "requirements": "需求文档",
+      "flow": "开发流程",
+      "documents": "开发文档",
+      "style": "UI 风格",
+      "app": "应用预览"
+    }
+  }
+}

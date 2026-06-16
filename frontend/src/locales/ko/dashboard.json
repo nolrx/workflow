@@ -1,0 +1,24 @@
+{
+  "welcome": {
+    "title": "다시 오신 것을 환영합니다!",
+    "subtitle": "PPT 스튜디오와 RedInk 스튜디오로 멋진 AI 콘텐츠를 만들어 보세요."
+  },
+  "cards": {
+    "ppt": {
+      "title": "PPT 스튜디오",
+      "subtitle": "AI로 프레젠테이션 만들기",
+      "description": "아이디어, 개요 또는 설명에서 아름다운 PowerPoint 프레젠테이션을 생성합니다.",
+      "button": "PPT 만들기"
+    },
+    "redbook": {
+      "title": "RedInk 스튜디오",
+      "subtitle": "소셜 미디어 콘텐츠 만들기",
+      "description": "주제에서 샤오홍슈 스타일의 이미지와 카피라이팅을 생성합니다.",
+      "button": "콘텐츠 만들기"
+    }
+  },
+  "recentProjects": {
+    "title": "최근 프로젝트",
+    "empty": "아직 프로젝트가 없습니다. 첫 번째 프로젝트를 만들어 시작하세요!"
+  }
+}

@@ -1,0 +1,95 @@
+{
+  "profile": {
+    "title": "プロフィール",
+    "subtitle": "個人情報を管理",
+    "personalInfo": {
+      "title": "個人情報",
+      "description": "プロフィールの詳細を更新",
+      "avatarLabel": "アバター URL",
+      "avatarPlaceholder": "https://example.com/avatar.jpg",
+      "displayNameLabel": "表示名",
+      "displayNamePlaceholder": "お名前",
+      "emailLabel": "メールアドレス",
+      "emailNote": "メールアドレスは変更できません"
+    },
+    "account": {
+      "title": "アカウント",
+      "description": "アカウント設定を管理",
+      "roleLabel": "アカウントの役割",
+      "emailVerified": {
+        "label": "メール認証",
+        "verified": "認証済み",
+        "notVerified": "未認証",
+        "verifyButton": "メールを認証"
+      },
+      "changePassword": {
+        "label": "パスワード変更",
+        "description": "パスワードを更新",
+        "button": "変更"
+      },
+      "deleteAccount": {
+        "label": "アカウント削除",
+        "description": "アカウントとすべてのデータを完全に削除",
+        "button": "削除"
+      }
+    },
+    "toast": {
+      "success": "プロフィールが更新されました",
+      "failed": "プロフィールの更新に失敗しました"
+    }
+  },
+  "billing": {
+    "title": "請求とプラン",
+    "subtitle": "サブスクリプションとクレジットを管理",
+    "usage": {
+      "title": "現在の使用状況",
+      "description": "今月のクレジット使用状況",
+      "remaining": "残りクレジット",
+      "used": "使用済みクレジット",
+      "usage": "使用率"
+    },
+    "plans": {
+      "title": "プランを選択",
+      "popular": "人気",
+      "monthly": "/月",
+      "currentPlan": "現在のプラン",
+      "upgrade": "アップグレード",
+      "free": {
+        "name": "フリー",
+        "features": [
+          "月30クレジット",
+          "基本PPT生成",
+          "基本RedInkコンテンツ",
+          "エクスポートに透かし"
+        ]
+      },
+      "pro": {
+        "name": "プロ",
+        "features": [
+          "月300クレジット",
+          "高度なPPT生成",
+          "高度なRedInkコンテンツ",
+          "透かしなし",
+          "優先サポート",
+          "編集可能なPPTXエクスポート"
+        ]
+      },
+      "team": {
+        "name": "チーム",
+        "features": [
+          "月1000クレジット",
+          "プロのすべての機能",
+          "チームコラボレーション",
+          "共有クレジットプール",
+          "APIアクセス",
+          "カスタムテンプレート"
+        ]
+      }
+    },
+    "paymentHistory": {
+      "title": "支払い履歴",
+      "description": "最近の支払いと請求書",
+      "empty": "支払い履歴がありません"
+    }
+  }
+}

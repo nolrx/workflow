@@ -1,0 +1,24 @@
+{
+  "welcome": {
+    "title": "おかえりなさい！",
+    "subtitle": "PPT スタジオと RedInk スタジオで素晴らしい AI コンテンツを作成しましょう。"
+  },
+  "cards": {
+    "ppt": {
+      "title": "PPT スタジオ",
+      "subtitle": "AI でプレゼンテーションを作成",
+      "description": "アイデア、アウトライン、または説明から美しい PowerPoint プレゼンテーションを生成します。",
+      "button": "PPT を作成"
+    },
+    "redbook": {
+      "title": "RedInk スタジオ",
+      "subtitle": "SNS コンテンツを作成",
+      "description": "トピックから小紅書スタイルの画像とコピーライティングを生成します。",
+      "button": "コンテンツを作成"
+    }
+  },
+  "recentProjects": {
+    "title": "最近のプロジェクト",
+    "empty": "プロジェクトがまだありません。最初のプロジェクトを作成して始めましょう！"
+  }
+}

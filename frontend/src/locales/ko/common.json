@@ -1,0 +1,87 @@
+{
+  "nav": {
+    "dashboard": "대시보드",
+    "codeStudio": "소프트웨어 스튜디오",
+    "pptStudio": "PPT 스튜디오",
+    "redbookStudio": "RedBook 스튜디오",
+    "settings": "설정",
+    "team": "팀",
+    "billing": "결제"
+  },
+  "sidebar": {
+    "personal": "개인",
+    "credits": "크레딧",
+    "creditFormat": "{{used}} / {{total}}",
+    "domains": {
+      "code": "코드",
+      "ppt": "PPT",
+      "redbook": "RedBook"
+    },
+    "newSession": "새 세션",
+    "recentSessions": "최근",
+    "viewAll": "전체 보기",
+    "noSessions": "세션 없음",
+    "untitled": "제목 없음"
+  },
+  "brand": {
+    "name": "AI",
+    "subtitle": "크리에이티브 스튜디오"
+  },
+  "buttons": {
+    "save": "저장",
+    "saveChanges": "변경 사항 저장",
+    "cancel": "취소",
+    "delete": "삭제",
+    "edit": "편집",
+    "create": "만들기",
+    "submit": "제출",
+    "back": "뒤로",
+    "next": "다음",
+    "tryAgain": "다시 시도",
+    "loading": "로딩 중...",
+    "generating": "생성 중...",
+    "download": "다운로드",
+    "copy": "복사",
+    "refresh": "새로고침",
+    "close": "닫기",
+    "confirm": "확인",
+    "loadMore": "더 보기",
+    "viewHistory": "기록 보기",
+    "backToHome": "홈으로 돌아가기"
+  },
+  "status": {
+    "loading": "로딩 중...",
+    "error": "오류가 발생했습니다",
+    "errorOccurred": "예기치 않은 오류가 발생했습니다",
+    "empty": "데이터가 없습니다",
+    "success": "성공",
+    "completed": "완료",
+    "processing": "처리 중",
+    "failed": "실패",
+    "draft": "임시 저장",
+    "partial": "부분 완료"
+  },
+  "validation": {
+    "required": "필수 입력 항목입니다",
+    "invalidEmail": "유효하지 않은 이메일 주소입니다",
+    "minLength": "최소 {{count}}자 이상이어야 합니다",
+    "passwordMismatch": "비밀번호가 일치하지 않습니다"
+  },
+  "time": {
+    "justNow": "방금",
+    "minutesAgo": "{{count}}분 전",
+    "hoursAgo": "{{count}}시간 전",
+    "daysAgo": "{{count}}일 전",
+    "created": "생성일: {{date}}"
+  },
+  "dialog": {
+    "confirmDelete": "정말 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.",
+    "deleteTitle": "삭제 확인"
+  },
+  "toast": {
+    "copied": "클립보드에 복사되었습니다",
+    "saved": "저장되었습니다",
+    "deleted": "삭제되었습니다",
+    "error": "오류가 발생했습니다"
+  }
+}

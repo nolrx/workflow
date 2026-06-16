@@ -1,0 +1,79 @@
+{
+  "list": {
+    "title": "チーム",
+    "subtitle": "プロジェクトで他のメンバーとコラボレーション",
+    "createTeam": "チームを作成",
+    "dialog": {
+      "title": "新しいチームを作成",
+      "description": "チームを使って他のメンバーとプロジェクトでコラボレーションできます",
+      "nameLabel": "チーム名",
+      "namePlaceholder": "チーム名を入力",
+      "cancel": "キャンセル",
+      "create": "作成"
+    },
+    "empty": {
+      "title": "チームがありません",
+      "description": "チームを作成してコラボレーションを始めましょう"
+    },
+    "toast": {
+      "createSuccess": "チームが作成されました",
+      "createFailed": "チームの作成に失敗しました"
+    },
+    "created": "作成日: {{date}}"
+  },
+  "dashboard": {
+    "subtitle": "チームメンバーと設定を管理",
+    "buttons": {
+      "settings": "設定",
+      "billing": "請求"
+    },
+    "stats": {
+      "members": {
+        "title": "メンバー",
+        "description": "アクティブなチームメンバー"
+      },
+      "credits": {
+        "title": "クレジット",
+        "description": "チームの残りクレジット"
+      },
+      "projects": {
+        "title": "プロジェクト",
+        "description": "共有チームプロジェクト"
+      }
+    },
+    "members": {
+      "title": "チームメンバー",
+      "description": "このチームへのアクセス権を管理",
+      "invite": "招待",
+      "noMembers": "メンバーがいません"
+    },
+    "inviteDialog": {
+      "title": "チームメンバーを招待",
+      "description": "このチームへの招待を送信",
+      "emailLabel": "メールアドレス",
+      "emailPlaceholder": "colleague@example.com",
+      "roleLabel": "役割",
+      "roles": {
+        "admin": "管理者 - メンバーとプロジェクトを管理可能",
+        "member": "メンバー - プロジェクトの作成と編集が可能",
+        "viewer": "閲覧者 - プロジェクトの閲覧のみ可能"
+      },
+      "cancel": "キャンセル",
+      "invite": "招待を送信"
+    },
+    "roles": {
+      "owner": "オーナー",
+      "admin": "管理者",
+      "member": "メンバー",
+      "viewer": "閲覧者"
+    },
+    "notFound": {
+      "title": "チームが見つかりません",
+      "description": "お探しのチームは存在しないか、アクセス権がありません。"
+    },
+    "toast": {
+      "inviteSuccess": "招待を送信しました",
+      "inviteFailed": "招待の送信に失敗しました"
+    }
+  }
+}

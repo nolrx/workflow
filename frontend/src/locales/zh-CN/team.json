@@ -1,0 +1,79 @@
+{
+  "list": {
+    "title": "您的团队",
+    "subtitle": "与他人协作项目",
+    "createTeam": "创建团队",
+    "dialog": {
+      "title": "创建新团队",
+      "description": "团队允许您与他人协作项目",
+      "nameLabel": "团队名称",
+      "namePlaceholder": "输入团队名称",
+      "cancel": "取消",
+      "create": "创建"
+    },
+    "empty": {
+      "title": "暂无团队",
+      "description": "创建团队开始与他人协作"
+    },
+    "toast": {
+      "createSuccess": "团队创建成功",
+      "createFailed": "创建团队失败"
+    },
+    "created": "创建于 {{date}}"
+  },
+  "dashboard": {
+    "subtitle": "管理您的团队成员和设置",
+    "buttons": {
+      "settings": "设置",
+      "billing": "账单"
+    },
+    "stats": {
+      "members": {
+        "title": "成员",
+        "description": "活跃团队成员"
+      },
+      "credits": {
+        "title": "积分",
+        "description": "团队剩余积分"
+      },
+      "projects": {
+        "title": "项目",
+        "description": "共享团队项目"
+      }
+    },
+    "members": {
+      "title": "团队成员",
+      "description": "管理谁可以访问此团队",
+      "invite": "邀请",
+      "noMembers": "暂无成员"
+    },
+    "inviteDialog": {
+      "title": "邀请团队成员",
+      "description": "发送邀请加入此团队",
+      "emailLabel": "邮箱地址",
+      "emailPlaceholder": "colleague@example.com",
+      "roleLabel": "角色",
+      "roles": {
+        "admin": "管理员 - 可以管理成员和项目",
+        "member": "成员 - 可以创建和编辑项目",
+        "viewer": "查看者 - 只能查看项目"
+      },
+      "cancel": "取消",
+      "invite": "发送邀请"
+    },
+    "roles": {
+      "owner": "所有者",
+      "admin": "管理员",
+      "member": "成员",
+      "viewer": "查看者"
+    },
+    "notFound": {
+      "title": "团队未找到",
+      "description": "您要查找的团队不存在或您没有访问权限。"
+    },
+    "toast": {
+      "inviteSuccess": "邀请发送成功",
+      "inviteFailed": "发送邀请失败"
+    }
+  }
+}

@@ -1,0 +1,85 @@
+{
+  "title": "소프트웨어 스튜디오",
+  "subtitle": "요구사항에서 개발 문서, 스타일 미리보기, UI 기준 확정까지 진행합니다.",
+  "steps": {
+    "input": "요구 입력",
+    "requirements": "요구 문서",
+    "flow": "개발 흐름",
+    "documents": "개발 문서",
+    "style": "앱 스타일",
+    "preview": "미리보기",
+    "baseline": "UI 기준"
+  },
+  "status": {
+    "requirement_ready": "요구 문서 완료",
+    "flow_ready": "흐름 완료",
+    "documents_ready": "문서 분리 완료",
+    "style_ready": "스타일 완료",
+    "preview_ready": "미리보기 완료",
+    "ui_confirmed": "UI 확정"
+  },
+  "input": {
+    "title": "만들고 싶은 소프트웨어를 입력하세요",
+    "placeholder": "예: 인디 개발자를 위한 SaaS 재무 대시보드. Stripe와 은행 거래를 가져와 매출, 비용, 이탈, 현금 흐름 위험을 분석합니다.",
+    "generate": "요구 문서 생성"
+  },
+  "requirements": {
+    "title": "사용자 요구와 요구 문서",
+    "next": "개발 흐름 생성"
+  },
+  "flow": {
+    "title": "소프트웨어 개발 흐름",
+    "placeholder": "생성된 개발 흐름을 여기에서 수정할 수 있습니다.",
+    "split": "개발 문서 분리"
+  },
+  "documents": {
+    "title": "수정 가능한 개발 문서",
+    "count": "문서 {{count}}개",
+    "content": "문서 내용",
+    "promptExpert": "프롬프트 전문가"
+  },
+  "style": {
+    "title": "앱 스타일",
+    "generate": "스타일 문서 생성",
+    "placeholder": "스타일을 선택하면 맞춤 스타일 문서가 생성됩니다."
+  },
+  "preview": {
+    "title": "앱 썸네일",
+    "generate": "썸네일 생성",
+    "confirm": "UI 기준으로 사용",
+    "confirmed": "확정됨",
+    "empty": "스타일을 선택하고 생성하면 썸네일이 여기에 표시됩니다.",
+    "imageAlt": "앱 썸네일"
+  },
+  "baseline": {
+    "title": "확정된 UI 기준"
+  },
+  "toast": {
+    "saved": "프로젝트가 저장되었습니다",
+    "documentSaved": "문서가 저장되었습니다"
+  },
+  "workspace": {
+    "previewTitle": "실시간 미리보기",
+    "empty": "에이전트를 실행하면 결과가 여기에 실시간으로 표시되며 바로 편집할 수 있습니다.",
+    "streamingHint": "AI가 생성 중…",
+    "newProject": "새로 만들기",
+    "splitThinking": {
+      "title": "AI가 개발 문서를 분할하고 있습니다",
+      "steps": [
+        "요구사항과 개발 흐름 분석 중",
+        "문서 구조와 경계 설계 중",
+        "제품 / 프런트 / 백엔드 / 데이터 모델 분할 중",
+        "AI 프롬프트 파이프라인 정리 중",
+        "문서별 프롬프트 전문가 가이드 맞춤화 중",
+        "출력 통합 및 교정 중"
+      ]
+    },
+    "tabs": {
+      "requirements": "요구 문서",
+      "flow": "개발 흐름",
+      "documents": "개발 문서",
+      "style": "UI 스타일",
+      "app": "앱 미리보기"
+    }
+  }
+}

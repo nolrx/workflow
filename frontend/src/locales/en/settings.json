@@ -1,0 +1,96 @@
+{
+  "profile": {
+    "title": "Profile",
+    "subtitle": "Manage your personal information",
+    "personalInfo": {
+      "title": "Personal Information",
+      "description": "Update your profile details",
+      "avatarLabel": "Avatar URL",
+      "avatarPlaceholder": "https://example.com/avatar.jpg",
+      "displayNameLabel": "Display Name",
+      "displayNamePlaceholder": "Your name",
+      "emailLabel": "Email",
+      "emailNote": "Email cannot be changed",
+      "saveButton": "Save Changes"
+    },
+    "account": {
+      "title": "Account",
+      "description": "Manage your account settings",
+      "roleLabel": "Account Role",
+      "emailVerified": {
+        "label": "Email Verified",
+        "verified": "Verified",
+        "notVerified": "Not verified",
+        "verifyButton": "Verify Email"
+      },
+      "changePassword": {
+        "label": "Change Password",
+        "description": "Update your password",
+        "button": "Change"
+      },
+      "deleteAccount": {
+        "label": "Delete Account",
+        "description": "Permanently delete your account and all data",
+        "button": "Delete"
+      }
+    },
+    "toast": {
+      "success": "Profile updated successfully",
+      "failed": "Failed to update profile"
+    }
+  },
+  "billing": {
+    "title": "Billing & Plans",
+    "subtitle": "Manage your subscription and credits",
+    "usage": {
+      "title": "Current Usage",
+      "description": "Your credit usage this month",
+      "remaining": "Credits Remaining",
+      "used": "Credits Used",
+      "usage": "Usage"
+    },
+    "plans": {
+      "title": "Choose a Plan",
+      "popular": "Most Popular",
+      "monthly": "/month",
+      "currentPlan": "Current Plan",
+      "upgrade": "Upgrade",
+      "free": {
+        "name": "Free",
+        "features": [
+          "30 credits per month",
+          "Basic PPT generation",
+          "Basic RedInk content",
+          "Watermark on exports"
+        ]
+      },
+      "pro": {
+        "name": "Pro",
+        "features": [
+          "300 credits per month",
+          "Advanced PPT generation",
+          "Advanced RedInk content",
+          "No watermarks",
+          "Priority support",
+          "Editable PPTX export"
+        ]
+      },
+      "team": {
+        "name": "Team",
+        "features": [
+          "1000 credits per month",
+          "Everything in Pro",
+          "Team collaboration",
+          "Shared credit pool",
+          "API access",
+          "Custom templates"
+        ]
+      }
+    },
+    "paymentHistory": {
+      "title": "Payment History",
+      "description": "Your recent payments and invoices",
+      "empty": "No payment history yet"
+    }
+  }
+}

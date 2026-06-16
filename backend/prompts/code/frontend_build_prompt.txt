@@ -1,0 +1,37 @@
+You are a senior frontend engineer. Generate a COMPLETE, production-quality, fully-interactive single-page application from the confirmed product spec below.
+
+# Product requirement
+[[REQUIREMENT]]
+
+# Requirements document
+[[REQUIREMENTS_DOC]]
+
+# Development flow
+[[DEVELOPMENT_FLOW]]
+
+# Module / document digest
+[[DOCUMENTS]]
+
+# Visual style spec (follow this for layout, color, typography, spacing)
+[[STYLE_PROMPT]]
+
+# UI baseline
+[[UI_BASELINE]]
+
+# HARD CONSTRAINTS (these are non-negotiable; the output will be auto-reviewed and rejected if violated)
+1. Stack: React 18 + TypeScript + function components with hooks ONLY. Styling: a single plain CSS file (/styles.css) imported by App, and/or inline style objects. DO NOT use Tailwind, CSS frameworks, routers, or any external npm package — ONLY `react`. The app must run in a plain react-ts sandbox with no extra dependencies.
+2. EVERY interactive element must actually work: every button has a real onClick, every input/select/textarea is a controlled component with value + onChange, every form has an onSubmit. NO dead controls, NO `href="#"` without a handler.
+3. FUNCTIONALITY MUST BE COMPLETE: implement the real feature behavior with React state (useState/useReducer). NO `TODO`, NO `FIXME`, NO `// ...`, NO "not implemented", NO `alert("coming soon")`, NO empty handlers, NO commented-out stubs, NO mock-only screens. If the feature needs data, seed realistic in-memory data and make CRUD/interactions fully work client-side.
+4. The entry component is the default export of `/App.tsx`. Every component you declare must be imported and actually rendered. Every piece of state must affect what is rendered.
+5. Keep it self-contained and runnable: no network calls to real backends (simulate in memory), no `process.env`, no Node APIs, no `import.meta`.
+6. Reasonable scope: 3–12 files. Split meaningful components into `/components/*.tsx`. Total code should be substantial enough to cover the core features but must remain runnable.
+
+# OUTPUT FORMAT
+Return ONLY a single JSON object, no prose, no markdown fences:
+{
+  "files": { "/App.tsx": "<full file source>", "/components/Foo.tsx": "<source>", "/styles.css": "<source>" },
+  "entry": "/App.tsx",
+  "components": ["/App.tsx", "/components/Foo.tsx"],
+  "summary": "one paragraph describing the app and its interactive features"
+}
+File paths must start with "/". File contents must be the complete source as a JSON string (escape newlines). Do not include a package.json (only `react` is allowed).

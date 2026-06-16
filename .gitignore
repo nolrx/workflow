@@ -1,0 +1,119 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# uv
+.uv/
+
+# =========================
+# Node.js / Frontend
+# =========================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# Build output
+frontend/dist/
+frontend/dist-ssr/
+*.local
+
+# =========================
+# Environment & Secrets
+# =========================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# =========================
+# Database
+# =========================
+*.db
+*.sqlite
+*.sqlite3
+instance/
+backend/instance/
+
+# =========================
+# Uploads & Generated Files
+# =========================
+uploads/
+backend/uploads/
+output/
+exports/
+*.pptx
+*.pdf
+
+# =========================
+# Logs
+# =========================
+logs/
+*.log
+
+# =========================
+# IDE & Editor
+# =========================
+.idea/
+.vscode/
+*.swp
+*.swo
+*.swn
+*~
+.DS_Store
+Thumbs.db
+
+# =========================
+# Testing & Coverage
+# =========================
+.coverage
+.pytest_cache/
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# =========================
+# Docker (optional)
+# =========================
+# Uncomment if needed
+# docker-compose.override.yml
+
+# =========================
+# Misc
+# =========================
+*.bak
+*.tmp
+*.temp
+.cache/

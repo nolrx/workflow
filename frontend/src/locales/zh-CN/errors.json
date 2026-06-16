@@ -1,0 +1,63 @@
+{
+  "auth": {
+    "loginFailed": "登录失败",
+    "registrationFailed": "注册失败",
+    "updateProfileFailed": "更新个人资料失败"
+  },
+  "ppt": {
+    "fetchProjectsFailed": "获取项目列表失败",
+    "fetchProjectFailed": "获取项目详情失败",
+    "createProjectFailed": "创建项目失败",
+    "updateProjectFailed": "更新项目失败",
+    "deleteProjectFailed": "删除项目失败",
+    "updatePageFailed": "更新页面失败",
+    "deletePageFailed": "删除页面失败",
+    "addPageFailed": "添加页面失败",
+    "reorderPagesFailed": "页面排序失败",
+    "fetchTaskStatusFailed": "获取任务状态失败",
+    "generateOutlineFailed": "生成大纲失败",
+    "generateDescriptionsFailed": "生成描述失败",
+    "generateImagesFailed": "生成图片失败",
+    "regenerateImageFailed": "重新生成图片失败",
+    "regenerateDescriptionFailed": "重新生成描述失败",
+    "editImageFailed": "编辑图片失败",
+    "exportFailed": "导出失败"
+  },
+  "redbook": {
+    "fetchTasksFailed": "获取任务列表失败",
+    "fetchTaskFailed": "获取任务详情失败",
+    "createTaskFailed": "创建任务失败",
+    "updateTaskFailed": "更新任务失败",
+    "deleteTaskFailed": "删除任务失败",
+    "generateOutlineFailed": "生成大纲失败",
+    "generateImagesFailed": "图片生成失败",
+    "generateContentFailed": "生成文案失败",
+    "retryFailed": "重试失败",
+    "generateRequestFailed": "生成请求失败",
+    "responseStreamFailed": "无法读取响应流"
+  },
+  "code": {
+    "fetchStylesFailed": "获取风格列表失败",
+    "createProjectFailed": "创建软件项目失败",
+    "saveProjectFailed": "保存项目失败",
+    "generateFlowFailed": "生成开发流程失败",
+    "splitDocumentsFailed": "切分开发文档失败",
+    "saveDocumentFailed": "保存文档失败",
+    "generateStyleFailed": "生成风格文档失败",
+    "generatePreviewFailed": "生成缩略图失败",
+    "confirmPreviewFailed": "确认 UI 基调失败"
+  },
+  "team": {
+    "fetchTeamsFailed": "获取团队列表失败",
+    "fetchTeamFailed": "获取团队详情失败",
+    "createTeamFailed": "创建团队失败",
+    "fetchMembersFailed": "获取成员列表失败",
+    "inviteMemberFailed": "发送邀请失败",
+    "acceptInvitationFailed": "接受邀请失败"
+  },
+  "credit": {
+    "fetchBalanceFailed": "获取余额失败",
+    "fetchTransactionsFailed": "获取交易记录失败",
+    "fetchUsageStatsFailed": "获取使用统计失败"
+  }
+}

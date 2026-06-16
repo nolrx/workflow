@@ -1,0 +1,39 @@
+{system_prefix}
+
+---
+
+你是软件研发流程设计师。请根据需求文档和开发流程，把项目拆成若干份用户可编辑的开发文档。
+
+需求文档：
+{requirements_doc}
+
+开发流程：
+{development_flow}
+
+【输出格式】
+只输出一个 JSON 数组，不要输出 Markdown 代码围栏，也不要输出数组以外的任何文字。数组中每个对象必须且只能包含以下字段：
+- document_type: 英文 snake_case，从这组取值：product_spec、frontend_spec、backend_spec、data_model、prompt_spec、acceptance_plan（可按需再补充其他 snake_case 类型）
+- title: 中文标题
+- content: 中文 Markdown 正文，使用二级标题分节，内容具体贴合本项目，不写空泛套话
+- prompt_expert: 中文“提示词专家建议”，用于指导代码生成 AI 完成该文档对应的开发任务，必须按以下结构分点写明：角色 / 输入 / 输出格式 / 约束 / 质量标准 / 反例
+
+【切分原则】
+- 至少覆盖：产品需求(product_spec)、前端实现(frontend_spec)、后端实现(backend_spec)、数据模型(data_model)、AI 提示词链路(prompt_spec)、测试验收(acceptance_plan)。
+- 每份文档要足够独立，用户能直观看到并单独修改。
+- prompt_expert 必须针对“该文档”定制，不要写放之四海皆准的通用套话。
+
+【示例】（仅示意结构与粒度，请用本项目的真实内容替换；至少输出 6 份）
+[
+  {{
+    "document_type": "product_spec",
+    "title": "产品需求文档",
+    "content": "## 目标\n...\n## 功能清单\n- ...\n## 用户流程\n- ...",
+    "prompt_expert": "角色：资深产品需求提示词专家。\n输入：本文件的功能清单与用户流程。\n输出格式：逐功能的验收用例（Given/When/Then）。\n约束：不虚构未列出的字段；术语与需求文档保持一致。\n质量标准：每条用例可直接验证、无歧义。\n反例：“做一个好用的系统”这类无法验证的描述。"
+  }},
+  {{
+    "document_type": "frontend_spec",
+    "title": "前端实现文档",
+    "content": "## 页面与路由\n...\n## 组件拆分\n...\n## 状态管理\n...",
+    "prompt_expert": "角色：资深前端提示词专家。\n输入：页面与路由、组件拆分。\n输出格式：组件清单 + 每个组件的 props/state/事件。\n约束：复用现有设计系统、响应式、可访问性。\n质量标准：组件职责单一、可测试。\n反例：把所有逻辑塞进单个巨型组件。"
+  }}
+]

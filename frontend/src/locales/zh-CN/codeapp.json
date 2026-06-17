@@ -1,18 +1,18 @@
 {
-  "title": "HTML 应用预览",
-  "generate": "生成 HTML",
-  "regenerate": "重新生成 HTML",
-  "download": "下载 HTML",
-  "generating": "正在生成完整 HTML 应用…",
-  "empty": "确认 UI 基调后点击「生成 HTML」，这里会显示可交互的应用预览。",
+  "title": "应用预览",
+  "generate": "生成项目",
+  "regenerate": "重新生成项目",
+  "download": "下载源码",
+  "generating": "编码 Agent 正在沙箱容器中构建项目…",
+  "empty": "确认 UI 基调后点击「生成项目」，编码 Agent 会在沙箱容器中构建完整的多文件 React 应用，这里会显示实时预览。",
   "needConfirmHint": "项目尚未确认 UI 基调，仍可生成，但建议先确认。",
-  "reviewPassed": "已通过可交互审查",
-  "reviewRepaired": "审查发现问题并已自动修复",
-  "htmlReady": "index.html · {{count}} 字符",
-  "iframeTitle": "生成的 HTML 应用预览",
-  "loadingHistory": "加载已生成的 HTML…",
+  "filesReady": "{{source}} 个源码文件 · {{dist}} 个构建产物",
+  "cost": "≈ ${{cost}}",
+  "iframeTitle": "生成的应用预览",
+  "loadingHistory": "加载已生成的项目…",
   "toast": {
-    "started": "HTML 生成任务已启动",
-    "startFailed": "启动失败"
+    "started": "项目生成任务已启动",
+    "startFailed": "启动失败",
+    "downloadFailed": "下载失败"
   }
 }

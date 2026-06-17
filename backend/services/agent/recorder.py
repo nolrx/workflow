@@ -160,6 +160,7 @@ class StepHandle:
         write_file: bool = False,
         domain_ref_type=None,
         domain_ref_id=None,
+        content_bytes=None,
     ) -> AgentArtifact:
         artifact = AgentArtifact(
             run_id=self._recorder.run_id,
@@ -175,13 +176,16 @@ class StepHandle:
         )
         artifact.set_content_json(content_json)
 
-        if write_file and content_text is not None:
-            default_name = filename or f"{artifact_type}.txt"
+        # Persist an on-disk copy when asked. Supports raw bytes (e.g. a zip of a
+        # generated multi-file project) as well as inline text.
+        if write_file and (content_bytes is not None or content_text is not None):
+            default_name = filename or f"{artifact_type}.bin"
+            data = content_bytes if content_bytes is not None else content_text.encode("utf-8")
             relative = save_artifact_file(
                 self._recorder.run_id,
                 self.step.id,
                 default_name,
-                content_text.encode("utf-8"),
+                data,
             )
             artifact.storage_path = relative
             if not artifact.filename:

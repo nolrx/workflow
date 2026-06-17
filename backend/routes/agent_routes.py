@@ -13,8 +13,16 @@ import logging
 import os
 import queue
 
-from flask import Blueprint, Response, current_app, request, send_file, stream_with_context
-from flask_jwt_extended import get_jwt_identity, jwt_required
+from flask import (
+    Blueprint,
+    Response,
+    current_app,
+    request,
+    send_file,
+    send_from_directory,
+    stream_with_context,
+)
+from flask_jwt_extended import decode_token, get_jwt_identity, jwt_required
 
 from backend.extensions import db
 from backend.models.agent import (
@@ -40,6 +48,7 @@ agent_bp = Blueprint("agent", __name__)
 WORKFLOW_COSTS = {
     "code_full_generation": pricing.CODE_FULL_GENERATION_TOTAL,
     "code_frontend_generation": pricing.CODE_FRONTEND_GENERATION,
+    "code_frontend_project_generation": pricing.CODE_FRONTEND_PROJECT_GENERATION,
 }
 VALID_DOMAINS = {"code", "ppt", "redbook"}
 MAX_CONCURRENT_RUNS = 2
@@ -71,7 +80,10 @@ def create_run():
         return error_response("VALIDATION_ERROR", "config 必须是对象", 400)
 
     # Workflow-specific minimal input validation.
-    if workflow == "code_frontend_generation" and not resource_id:
+    if (
+        workflow in ("code_frontend_generation", "code_frontend_project_generation")
+        and not resource_id
+    ):
         return error_response(
             "VALIDATION_ERROR", "前端生成需要一个已确认的 Code 项目（resource_id）", 400
         )
@@ -328,3 +340,51 @@ def get_artifact_file(artifact_id: str):
         )
 
     return error_response("NOT_FOUND", "该产物没有可下载的文件内容", 404)
+
+
+# Cookie that re-authenticates the dist's relative asset requests (which carry no
+# query string) after the entry ``index.html?token=...`` request.
+_PREVIEW_COOKIE = "fe_preview_token"
+# Defense-in-depth for the same-origin sandboxed preview: block fetch/XHR/WebSocket
+# egress (the agent-generated app needs no network) while still allowing the
+# same-origin assets + inline modulepreload a normal Vite build emits.
+_PREVIEW_CSP = "default-src 'self' 'unsafe-inline' data: blob:; connect-src 'none'"
+
+
+@agent_bp.route("/runs/<run_id>/site/<path:filename>", methods=["GET"])
+def serve_run_site(run_id: str, filename: str):
+    """Serve a file from a run's built dist for iframe preview.
+
+    iframes cannot send an Authorization header, so ownership is verified via a
+    ``?token=`` query JWT on the entry request; that token is mirrored into a
+    short-lived, path-scoped cookie so the dist's relative asset requests stay
+    authenticated. The dist is built with ``base: './'`` so its assets resolve
+    relative to this route's path.
+    """
+    token = request.args.get("token", "") or request.cookies.get(_PREVIEW_COOKIE, "")
+    try:
+        identity = decode_token(token).get("sub")
+    except Exception:  # noqa: BLE001 - any decode failure is simply a rejected preview
+        return error_response("FORBIDDEN", "无效的预览令牌", 403)
+    run = AgentRun.query.filter_by(id=run_id, user_id=identity).first()
+    if not run:
+        return error_response("NOT_FOUND", "任务不存在", 404)
+    site_dir = artifact_abs_path(f"agent_runs/{run_id}/site")
+    if not os.path.isdir(site_dir):
+        return error_response("NOT_FOUND", "预览不存在或尚未生成", 404)
+
+    response = send_from_directory(site_dir, filename)
+    response.headers["Content-Security-Policy"] = _PREVIEW_CSP
+    # On the entry request (token in the query), pin the token to this run's site
+    # path so the subsequent relative asset fetches authenticate via the cookie.
+    if request.args.get("token"):
+        site_root = request.path[: request.path.find("/site/") + len("/site/")]
+        response.set_cookie(
+            _PREVIEW_COOKIE,
+            request.args["token"],
+            max_age=1800,
+            httponly=True,
+            samesite="Lax",
+            path=site_root,
+        )
+    return response

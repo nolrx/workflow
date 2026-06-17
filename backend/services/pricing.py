@@ -45,6 +45,12 @@ CODE_FULL_GENERATION_TOTAL = CODE_FULL_GENERATION
 # Frontend project generation + adversarial review (+ one repair pass) — heavier.
 CODE_FRONTEND_GENERATION = _credits("PRICE_CODE_FRONTEND", 10)
 
+# Agentic frontend PROJECT generation: an autonomous coding CLI in a sandboxed
+# container produces a real multi-file React/Vite/TS project it builds itself
+# (~$1 / run in PoC measurements). Much heavier than the single-file HTML path
+# above, so priced higher; metered against the CLI's reported token usage.
+CODE_FRONTEND_PROJECT_GENERATION = _credits("PRICE_CODE_FRONTEND_PROJECT", 30)
+
 
 # Operation label -> (resource_type, unit_cost). Used when writing CreditTransaction
 # records so the audit log carries a stable operation/resource vocabulary.
@@ -57,4 +63,5 @@ OPERATION = {
     "redbook_image": ("redbook_task", REDBOOK_IMAGE_PAGE),
     "agent_run": ("agent_run", CODE_FULL_GENERATION_TOTAL),
     "code_context_verify": ("agent_run", CODE_CONTEXT_VERIFY),
+    "code_frontend_project": ("agent_run", CODE_FRONTEND_PROJECT_GENERATION),
 }

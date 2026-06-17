@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+claude code only use chinese respone question.
+
 ## 当前版本范围(重要 — 优先级最高)
 
 **当前版本只对 Code 域生效。** 本仓库虽包含三个产品域,但本版本的开发、改动与验证**仅针对 Code 域**(`/api/code` + 共享的 `/api/agent` Agent Swarm + 其前端 `frontend .../code`),以及 Code 域依赖的共享底座(认证、团队、积分、AI provider 抽象层)。

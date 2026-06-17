@@ -1,61 +1,71 @@
 /**
- * Standalone live preview of the generated frontend project.
+ * Standalone live preview of the generated frontend PROJECT.
  *
- * Self-contained on purpose (drop it anywhere): it resolves the generated
- * HTML artifact from either the current agent run in the store (live, right
- * after generation) or — on reload — the latest `code_frontend_generation` run
- * for the project, then renders it in an iframe for a fully-interactive,
- * in-browser preview. It also exposes the "generate HTML" trigger that starts
- * the `code_frontend_generation` workflow.
+ * The file-generation stage runs the containerized coding agent
+ * (`code_frontend_project_generation`): a headless Claude Code CLI builds a
+ * complete multi-file React + Vite + TypeScript project inside a throwaway
+ * Docker container, builds it, and publishes the source (zip) plus the built
+ * `dist`. This pane resolves that deliverable from either the current agent run
+ * in the store (live, right after generation) or — on reload — the latest
+ * project run for the Code project, then previews the built `dist` in an iframe
+ * (served from `/api/agent/runs/<id>/site/`) and offers the source zip for
+ * download. It also exposes the "generate" trigger.
  *
  * Wiring (left to the page owner, e.g. as a 5th preview tab):
  *   <CodeAppPreview />
  */
 import { useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { Bot, Download, Loader2, RefreshCw, ShieldCheck, ShieldAlert } from "lucide-react"
+import { Bot, Download, FileCode2, Loader2, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 
-import { agentApi, type AgentRun } from "@/api/agent"
+import { AGENT_API_BASE, agentApi, type AgentRun } from "@/api/agent"
+import { tokenManager } from "@/api/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useAgentStore } from "@/stores/agentStore"
 import { useCodeStore } from "@/stores/codeStore"
 
-interface FrontendHtml {
-  artifactId: string
-  html: string
-  fileUrl: string | null
-  reviewPassed?: boolean
-  htmlChars?: number
+interface FrontendProject {
+  runId: string
+  zipArtifactId: string | null
+  sourceCount: number
+  distCount: number
+  costUsd?: number
 }
 
-const FRONTEND_WORKFLOW = "code_frontend_generation"
+const FRONTEND_WORKFLOW = "code_frontend_project_generation"
 
-/** Pull the published frontend HTML artifact out of a run snapshot, if any. */
-function htmlFromRun(run: AgentRun | null): FrontendHtml | null {
+/** Pull the published frontend project (meta + source zip) out of a run snapshot. */
+function projectFromRun(run: AgentRun | null): FrontendProject | null {
   if (!run?.artifacts) return null
-  const htmlArtifact = run.artifacts.find(
+  const meta = run.artifacts.find(
     (item) =>
-      item.artifact_type === "text" &&
-      (item.domain_ref_type === "code_frontend_html" ||
-        item.domain_ref_type === "code_frontend") &&
-      !!item.content_text
+      item.artifact_type === "json" && item.domain_ref_type === "code_frontend_project_meta"
   )
-  if (!htmlArtifact?.content_text) return null
-  const metaArtifact = run.artifacts.find(
-    (item) => item.domain_ref_type === "code_frontend_meta" && item.artifact_type === "json"
-  )
-  const meta = metaArtifact?.content_json as
-    | { review_passed?: boolean; html_chars?: number }
+  const metaJson = meta?.content_json as
+    | { preview_url?: string; source_files?: string[]; dist_files?: string[]; cost_usd?: number }
     | undefined
+  if (!metaJson?.preview_url) return null
+  const zip = run.artifacts.find((item) => item.domain_ref_type === "code_frontend_project_zip")
   return {
-    artifactId: htmlArtifact.id,
-    html: htmlArtifact.content_text,
-    fileUrl: htmlArtifact.file_url,
-    reviewPassed: meta?.review_passed,
-    htmlChars: meta?.html_chars ?? htmlArtifact.content_text.length,
+    runId: run.id,
+    zipArtifactId: zip?.id ?? null,
+    sourceCount: metaJson.source_files?.length ?? 0,
+    distCount: metaJson.dist_files?.length ?? 0,
+    costUsd: metaJson.cost_usd,
   }
+}
+
+/**
+ * Built-dist entry URL for the iframe. The token rides in the query; the backend
+ * mirrors it into a path-scoped cookie so the dist's relative asset requests stay
+ * authenticated. The served site carries a `connect-src 'none'` CSP, so the
+ * sandboxed (same-origin, for localStorage) preview cannot exfiltrate over fetch.
+ */
+function previewSrc(runId: string): string {
+  const token = tokenManager.getAccessToken() ?? ""
+  return `${AGENT_API_BASE}/agent/runs/${runId}/site/index.html?token=${encodeURIComponent(token)}`
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -77,37 +87,39 @@ export function CodeAppPreview() {
   const isStreaming = useAgentStore((state) => state.isStreaming)
   const startRun = useAgentStore((state) => state.startRun)
 
-  const [historyHtml, setHistoryHtml] = useState<FrontendHtml | null>(null)
+  const [historyProject, setHistoryProject] = useState<FrontendProject | null>(null)
   const [loadingHistory, setLoadingHistory] = useState(false)
   const [downloading, setDownloading] = useState(false)
 
-  // Live HTML from the run currently in the store (right after generation).
-  const liveHtml = useMemo(() => htmlFromRun(run), [run])
-  const htmlApp = liveHtml ?? historyHtml
+  // Live project from the run currently in the store (right after generation).
+  const liveProject = useMemo(() => projectFromRun(run), [run])
+  const builtProject = liveProject ?? historyProject
 
-  const frontendRunActive =
-    isStreaming && run?.workflow === FRONTEND_WORKFLOW
+  const frontendRunActive = isStreaming && run?.workflow === FRONTEND_WORKFLOW
 
-  // On reload (no live HTML yet), look up the latest frontend run for this project.
+  // On reload (no live project yet), look up the latest project run for this Code project.
   useEffect(() => {
     let cancelled = false
-    if (liveHtml || !project?.id) return
-    setLoadingHistory(true)
+    if (liveProject || !project?.id) return
+    const projectId = project.id
     void (async () => {
+      setLoadingHistory(true)
       try {
-        const runs = await agentApi.listRuns({ domain: "code", resourceId: project.id, limit: 20 })
+        const runs = await agentApi.listRuns({ domain: "code", resourceId: projectId, limit: 20 })
         const latest = runs
           .filter(
             (item) =>
               item.workflow === FRONTEND_WORKFLOW &&
-              item.resource_id === project.id &&
+              item.resource_id === projectId &&
               (item.status === "completed" || item.status === "partial")
           )
-          .sort((a, b) => (a.created_at && b.created_at ? b.created_at.localeCompare(a.created_at) : 0))[0]
+          .sort((a, b) =>
+            a.created_at && b.created_at ? b.created_at.localeCompare(a.created_at) : 0
+          )[0]
         if (!latest || cancelled) return
         const full = await agentApi.fetchRun(latest.id)
         if (cancelled) return
-        setHistoryHtml(htmlFromRun(full))
+        setHistoryProject(projectFromRun(full))
       } catch {
         // Non-critical: the live flow still works; history is best-effort.
       } finally {
@@ -117,7 +129,7 @@ export function CodeAppPreview() {
     return () => {
       cancelled = true
     }
-  }, [liveHtml, project?.id])
+  }, [liveProject, project?.id])
 
   const handleGenerate = async () => {
     if (!project?.id) return
@@ -128,7 +140,7 @@ export function CodeAppPreview() {
         resource_type: "code_project",
         resource_id: project.id,
       })
-      setHistoryHtml(null) // the live run becomes the source of truth
+      setHistoryProject(null) // the live run becomes the source of truth
       toast.success(t("toast.started"))
     } catch (err) {
       const message =
@@ -139,13 +151,13 @@ export function CodeAppPreview() {
   }
 
   const handleDownload = async () => {
-    if (!htmlApp) return
+    if (!builtProject?.zipArtifactId) return
     setDownloading(true)
     try {
-      const blob = await agentApi.downloadArtifact(htmlApp.artifactId)
-      downloadBlob(blob, "index.html")
+      const blob = await agentApi.downloadArtifact(builtProject.zipArtifactId)
+      downloadBlob(blob, "frontend_project.zip")
     } catch {
-      downloadBlob(new Blob([htmlApp.html], { type: "text/html;charset=utf-8" }), "index.html")
+      toast.error(t("toast.downloadFailed"))
     } finally {
       setDownloading(false)
     }
@@ -159,26 +171,21 @@ export function CodeAppPreview() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <h3 className="text-sm font-semibold">{t("title")}</h3>
-          {htmlApp?.reviewPassed === true && (
+          {builtProject && (
             <Badge variant="secondary" className="gap-1">
-              <ShieldCheck className="h-3.5 w-3.5" />
-              {t("reviewPassed")}
+              <FileCode2 className="h-3.5 w-3.5" />
+              {t("filesReady", {
+                source: builtProject.sourceCount,
+                dist: builtProject.distCount,
+              })}
             </Badge>
           )}
-          {htmlApp?.reviewPassed === false && (
-            <Badge variant="outline" className="gap-1">
-              <ShieldAlert className="h-3.5 w-3.5" />
-              {t("reviewRepaired")}
-            </Badge>
-          )}
-          {htmlApp && (
-            <Badge variant="outline">
-              {t("htmlReady", { count: htmlApp.htmlChars ?? htmlApp.html.length })}
-            </Badge>
+          {builtProject?.costUsd != null && builtProject.costUsd > 0 && (
+            <Badge variant="outline">{t("cost", { cost: builtProject.costUsd.toFixed(2) })}</Badge>
           )}
         </div>
         <div className="flex items-center gap-2">
-          {htmlApp && (
+          {builtProject?.zipArtifactId && (
             <Button size="sm" variant="outline" onClick={handleDownload} disabled={downloading}>
               {downloading ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -191,17 +198,17 @@ export function CodeAppPreview() {
           <Button size="sm" onClick={handleGenerate} disabled={!canGenerate}>
             {frontendRunActive ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : htmlApp ? (
+            ) : builtProject ? (
               <RefreshCw className="mr-2 h-4 w-4" />
             ) : (
               <Bot className="mr-2 h-4 w-4" />
             )}
-            {htmlApp ? t("regenerate") : t("generate")}
+            {builtProject ? t("regenerate") : t("generate")}
           </Button>
         </div>
       </div>
 
-      {notConfirmed && !htmlApp && (
+      {notConfirmed && !builtProject && (
         <p className="text-xs text-amber-600">{t("needConfirmHint")}</p>
       )}
 
@@ -211,11 +218,13 @@ export function CodeAppPreview() {
             <Loader2 className="h-6 w-6 animate-spin" />
             <span>{t("generating")}</span>
           </div>
-        ) : htmlApp ? (
+        ) : builtProject ? (
           <iframe
             title={t("iframeTitle")}
-            srcDoc={htmlApp.html}
-            sandbox="allow-forms allow-modals allow-scripts"
+            src={previewSrc(builtProject.runId)}
+            // allow-same-origin is required for the built app's localStorage; the
+            // served dist's connect-src 'none' CSP blocks network exfiltration.
+            sandbox="allow-forms allow-modals allow-scripts allow-same-origin"
             className="h-full min-h-[540px] w-full bg-white"
           />
         ) : loadingHistory ? (

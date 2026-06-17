@@ -6,7 +6,7 @@ import { toast } from "sonner"
 import { AgentRunPanel } from "@/components/agent/AgentRunPanel"
 import { CodeAgentTimeline } from "@/components/code/CodeAgentTimeline"
 import { CodePreviewPane } from "@/components/code/CodePreviewPane"
-import { PROGRESS_TAB, type PreviewTab } from "@/components/code/previewTabs"
+import { PROGRESS_TAB, isFrontendWorkflow, type PreviewTab } from "@/components/code/previewTabs"
 import { AppLayout } from "@/components/layout/AppLayout"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -57,7 +57,7 @@ export function CodeStudio() {
   // While the run streams, the preview follows the active step; once it settles
   // the user can switch tabs freely. Derived state — no effect/setState needed.
   const currentStep = agentRun?.progress?.current_step
-  const isFrontendRun = agentRun?.workflow === "code_frontend_generation"
+  const isFrontendRun = isFrontendWorkflow(agentRun?.workflow)
   const followTab: PreviewTab = isFrontendRun
     ? "app"
     : currentStep && PROGRESS_TAB[currentStep]

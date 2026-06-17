@@ -1,18 +1,18 @@
 {
-  "title": "HTML アプリプレビュー",
-  "generate": "HTML を生成",
-  "regenerate": "HTML を再生成",
-  "download": "HTML をダウンロード",
-  "generating": "完全な HTML アプリを生成中…",
-  "empty": "UI ベースラインを確定してから「HTML を生成」を押すと、インタラクティブなアプリのプレビューがここに表示されます。",
+  "title": "アプリプレビュー",
+  "generate": "プロジェクトを生成",
+  "regenerate": "プロジェクトを再生成",
+  "download": "ソースをダウンロード",
+  "generating": "コーディングエージェントがサンドボックスコンテナでプロジェクトをビルド中…",
+  "empty": "UI ベースラインを確定してから「プロジェクトを生成」を押すと、コーディングエージェントがサンドボックスで完全なマルチファイル React アプリをビルドし、ライブプレビューがここに表示されます。",
   "needConfirmHint": "UI ベースラインが未確定です。生成は可能ですが、先に確定することをおすすめします。",
-  "reviewPassed": "インタラクティブ性レビュー合格",
-  "reviewRepaired": "問題を検出し自動修正しました",
-  "htmlReady": "index.html · {{count}} 文字",
-  "iframeTitle": "生成された HTML アプリのプレビュー",
-  "loadingHistory": "生成済みの HTML を読み込み中…",
+  "filesReady": "ソース {{source}} ファイル · ビルド {{dist}} ファイル",
+  "cost": "≈ ${{cost}}",
+  "iframeTitle": "生成されたアプリのプレビュー",
+  "loadingHistory": "生成済みのプロジェクトを読み込み中…",
   "toast": {
-    "started": "HTML 生成を開始しました",
-    "startFailed": "開始に失敗しました"
+    "started": "プロジェクト生成を開始しました",
+    "startFailed": "開始に失敗しました",
+    "downloadFailed": "ダウンロードに失敗しました"
   }
 }

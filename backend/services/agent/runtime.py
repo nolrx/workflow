@@ -192,6 +192,9 @@ agent_runtime = AgentRuntime(max_workers=4)
 
 
 def _register_builtin_workflows() -> None:
+    from backend.services.agent.workflows.code_frontend_project_workflow import (
+        run_code_frontend_project_workflow,
+    )
     from backend.services.agent.workflows.code_frontend_workflow import (
         run_code_frontend_workflow,
     )
@@ -199,6 +202,7 @@ def _register_builtin_workflows() -> None:
 
     register_workflow("code_full_generation", run_code_workflow)
     register_workflow("code_frontend_generation", run_code_frontend_workflow)
+    register_workflow("code_frontend_project_generation", run_code_frontend_project_workflow)
 
 
 _register_builtin_workflows()

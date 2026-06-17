@@ -42,7 +42,7 @@ class BaseConfig:
     # Text generation (default: Claude)
     AI_TEXT_PROVIDER = os.getenv("AI_TEXT_PROVIDER", AI_PROVIDER)
     AI_TEXT_MODEL = os.getenv("AI_TEXT_MODEL", "claude-opus-4-8")
-    AI_TEXT_MAX_TOKENS = int(os.getenv("AI_TEXT_MAX_TOKENS", "16000"))
+    AI_TEXT_MAX_TOKENS = int(os.getenv("AI_TEXT_MAX_TOKENS", "32000"))
 
     # Image generation (default: Panlaxy)
     AI_IMAGE_PROVIDER = os.getenv("AI_IMAGE_PROVIDER", AI_PROVIDER)

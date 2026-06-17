@@ -11,11 +11,11 @@ import { cn } from "@/lib/utils"
 import { StreamingText } from "@/components/code/StreamingText"
 import { DocumentSplitThinking } from "@/components/code/DocumentSplitThinking"
 import { PREVIEW_TABS, type PreviewTab } from "@/components/code/previewTabs"
+import { useStickToBottom } from "@/hooks/use-stick-to-bottom"
 import { useAgentStore } from "@/stores/agentStore"
 import { useCodeStore } from "@/stores/codeStore"
 
-// Lazy-loaded: Sandpack's in-browser bundler is heavy (~1.3MB), so it only
-// loads when the user actually opens the app preview tab.
+// Lazy-loaded so the app preview code only loads when the user opens that tab.
 const CodeAppPreview = lazy(() => import("@/components/code/CodeAppPreview"))
 
 interface CodePreviewPaneProps {
@@ -60,6 +60,12 @@ export function CodePreviewPane({ activeTab, onTabChange }: CodePreviewPaneProps
     }
     return null
   }
+
+  // Keep the active tab's scroll pinned to the newest tokens (ChatGPT/Claude
+  // style), yet yield if the user scrolls up to read back. The dep grows with the
+  // streamed text, and only the active TabsContent is mounted, so the same ref
+  // safely follows whichever tab is currently live.
+  const followRef = useStickToBottom(liveFor(activeTab))
 
   const saveProjectField = async (data: Parameters<typeof updateProject>[0]) => {
     await updateProject(data)
@@ -237,7 +243,16 @@ export function CodePreviewPane({ activeTab, onTabChange }: CodePreviewPaneProps
             {t("style.generate")}
           </Button>
           <Button
-            onClick={() => void generatePreviews()}
+            onClick={async () => {
+              // When the image upstream is down the backend skips previews,
+              // adopts the style prompt as the UI baseline (ui_confirmed) and
+              // returns previewSkipped — jump straight into the dev flow.
+              const skipped = await generatePreviews()
+              if (skipped) {
+                toast.info(t("preview.skipped"))
+                onTabChange("app")
+              }
+            }}
             disabled={isLoading || !project.style_prompt?.trim()}
           >
             {activeAction === "preview" ? (
@@ -303,16 +318,16 @@ export function CodePreviewPane({ activeTab, onTabChange }: CodePreviewPaneProps
           </TabsTrigger>
         ))}
       </TabsList>
-      <TabsContent value="requirements" className="min-h-0 flex-1 overflow-y-auto pt-3">
+      <TabsContent ref={followRef} value="requirements" className="min-h-0 flex-1 overflow-y-auto pt-3">
         {renderRequirements()}
       </TabsContent>
-      <TabsContent value="flow" className="min-h-0 flex-1 overflow-y-auto pt-3">
+      <TabsContent ref={followRef} value="flow" className="min-h-0 flex-1 overflow-y-auto pt-3">
         {renderFlow()}
       </TabsContent>
-      <TabsContent value="documents" className="min-h-0 flex-1 overflow-y-auto pt-3">
+      <TabsContent ref={followRef} value="documents" className="min-h-0 flex-1 overflow-y-auto pt-3">
         {renderDocuments()}
       </TabsContent>
-      <TabsContent value="style" className="min-h-0 flex-1 overflow-y-auto pt-3">
+      <TabsContent ref={followRef} value="style" className="min-h-0 flex-1 overflow-y-auto pt-3">
         {renderStyle()}
       </TabsContent>
       <TabsContent value="app" className="min-h-0 flex-1 pt-3">

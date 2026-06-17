@@ -34,9 +34,12 @@ REDBOOK_IMAGE_PAGE = _credits("PRICE_RB_IMAGE_PAGE", 2)     # per generated imag
 
 # --- Code (agent) domain ------------------------------------------------------
 CODE_FULL_GENERATION = _credits("PRICE_CODE_FULL", 6)       # base workflow cost
+CODE_CONTEXT_VERIFY = _credits("PRICE_CODE_CONTEXT_VERIFY", 1)  # per AI context-consistency gate
 
 # Up-front reservation for the full code workflow (requirements -> flow ->
-# document split -> style -> previews -> publish).
+# document split -> style -> previews -> publish). Context-verify gates are
+# charged per-call as they fire (not folded in), so runs that never trigger a
+# gate — e.g. no AI provider configured — are not over-charged.
 CODE_FULL_GENERATION_TOTAL = CODE_FULL_GENERATION
 
 # Frontend project generation + adversarial review (+ one repair pass) — heavier.
@@ -53,4 +56,5 @@ OPERATION = {
     "redbook_content": ("redbook_task", REDBOOK_CONTENT),
     "redbook_image": ("redbook_task", REDBOOK_IMAGE_PAGE),
     "agent_run": ("agent_run", CODE_FULL_GENERATION_TOTAL),
+    "code_context_verify": ("agent_run", CODE_CONTEXT_VERIFY),
 }

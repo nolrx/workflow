@@ -138,10 +138,11 @@ class CodeGenerationService:
             )
         return text
 
-    def _requirements_context(self, requirement: str) -> tuple[str, str]:
+    def _requirements_context(self, requirement: str, context_ledger: str = "") -> tuple[str, str]:
         """Build the prompt and local fallback for requirements generation."""
         prompt = self._load_prompt("requirements_prompt.txt").format(
             system_prefix=compose_recipe_prompt("product_requirement"),
+            context_ledger=context_ledger,
             requirement=requirement,
         )
         fallback = (
@@ -155,20 +156,25 @@ class CodeGenerationService:
         )
         return prompt, fallback
 
-    def generate_requirements(self, requirement: str, on_model_call=None) -> str:
+    def generate_requirements(self, requirement: str, on_model_call=None, context_ledger: str = "") -> str:
         """Generate a product requirements document from the user input."""
-        prompt, fallback = self._requirements_context(requirement)
+        prompt, fallback = self._requirements_context(requirement, context_ledger)
         return self._generate_text(prompt, fallback, on_model_call)
 
-    def stream_requirements(self, requirement: str, on_delta=None, on_model_call=None) -> str:
+    def stream_requirements(
+        self, requirement: str, on_delta=None, on_model_call=None, context_ledger: str = ""
+    ) -> str:
         """Stream the requirements document; returns the full text when done."""
-        prompt, fallback = self._requirements_context(requirement)
+        prompt, fallback = self._requirements_context(requirement, context_ledger)
         return self._generate_text_streaming(prompt, fallback, on_delta, on_model_call)
 
-    def _development_flow_context(self, requirements_doc: str) -> tuple[str, str]:
+    def _development_flow_context(
+        self, requirements_doc: str, context_ledger: str = ""
+    ) -> tuple[str, str]:
         """Build the prompt and local fallback for development flow generation."""
         prompt = self._load_prompt("development_flow_prompt.txt").format(
             system_prefix=compose_recipe_prompt("engineering_implementation"),
+            context_ledger=context_ledger,
             requirements_doc=requirements_doc,
         )
         fallback = (
@@ -184,24 +190,27 @@ class CodeGenerationService:
         )
         return prompt, fallback
 
-    def generate_development_flow(self, requirements_doc: str, on_model_call=None) -> str:
+    def generate_development_flow(
+        self, requirements_doc: str, on_model_call=None, context_ledger: str = ""
+    ) -> str:
         """Generate the software development process document."""
-        prompt, fallback = self._development_flow_context(requirements_doc)
+        prompt, fallback = self._development_flow_context(requirements_doc, context_ledger)
         return self._generate_text(prompt, fallback, on_model_call)
 
     def stream_development_flow(
-        self, requirements_doc: str, on_delta=None, on_model_call=None
+        self, requirements_doc: str, on_delta=None, on_model_call=None, context_ledger: str = ""
     ) -> str:
         """Stream the development flow; returns the full text when done."""
-        prompt, fallback = self._development_flow_context(requirements_doc)
+        prompt, fallback = self._development_flow_context(requirements_doc, context_ledger)
         return self._generate_text_streaming(prompt, fallback, on_delta, on_model_call)
 
     def _documents_context(
-        self, requirements_doc: str, development_flow: str
+        self, requirements_doc: str, development_flow: str, context_ledger: str = ""
     ) -> tuple[str, str]:
         """Build the prompt and local fallback for document splitting."""
         prompt = self._load_prompt("document_split_prompt.txt").format(
             system_prefix=compose_recipe_prompt("engineering_implementation"),
+            context_ledger=context_ledger,
             requirements_doc=requirements_doc,
             development_flow=development_flow,
         )
@@ -221,23 +230,28 @@ class CodeGenerationService:
         return [self._normalize_document(document, index) for index, document in enumerate(documents)]
 
     def split_documents(
-        self, requirements_doc: str, development_flow: str, on_model_call=None
+        self, requirements_doc: str, development_flow: str, on_model_call=None, context_ledger: str = ""
     ) -> list[dict]:
         """Split the flow into editable development documents."""
-        prompt, fallback = self._documents_context(requirements_doc, development_flow)
+        prompt, fallback = self._documents_context(requirements_doc, development_flow, context_ledger)
         text = self._generate_text(prompt, fallback, on_model_call)
         return self._normalize_split_text(text, requirements_doc, development_flow)
 
     def stream_documents(
-        self, requirements_doc: str, development_flow: str, on_delta=None, on_model_call=None
+        self,
+        requirements_doc: str,
+        development_flow: str,
+        on_delta=None,
+        on_model_call=None,
+        context_ledger: str = "",
     ) -> list[dict]:
         """Stream the raw document-split JSON; returns normalized documents when done."""
-        prompt, fallback = self._documents_context(requirements_doc, development_flow)
+        prompt, fallback = self._documents_context(requirements_doc, development_flow, context_ledger)
         text = self._generate_text_streaming(prompt, fallback, on_delta, on_model_call)
         return self._normalize_split_text(text, requirements_doc, development_flow)
 
     def _style_prompt_context(
-        self, requirement: str, style_ids: list[str]
+        self, requirement: str, style_ids: list[str], context_ledger: str = ""
     ) -> tuple[str, str]:
         """Build the prompt and local fallback for style document generation."""
         styles = get_styles(style_ids)
@@ -248,6 +262,7 @@ class CodeGenerationService:
             style_text = "- Minimal SaaS: 清晰、专业、克制的产品工作台。"
         prompt = self._load_prompt("style_prompt.txt").format(
             system_prefix=compose_recipe_prompt("product_requirement"),
+            context_ledger=context_ledger,
             requirement=requirement,
             styles=style_text,
         )
@@ -265,17 +280,22 @@ class CodeGenerationService:
         return prompt, fallback
 
     def generate_style_prompt(
-        self, requirement: str, style_ids: list[str], on_model_call=None
+        self, requirement: str, style_ids: list[str], on_model_call=None, context_ledger: str = ""
     ) -> str:
         """Generate a style-specific document for selected UI styles."""
-        prompt, fallback = self._style_prompt_context(requirement, style_ids)
+        prompt, fallback = self._style_prompt_context(requirement, style_ids, context_ledger)
         return self._generate_text(prompt, fallback, on_model_call)
 
     def stream_style_prompt(
-        self, requirement: str, style_ids: list[str], on_delta=None, on_model_call=None
+        self,
+        requirement: str,
+        style_ids: list[str],
+        on_delta=None,
+        on_model_call=None,
+        context_ledger: str = "",
     ) -> str:
         """Stream the style document; returns the full text when done."""
-        prompt, fallback = self._style_prompt_context(requirement, style_ids)
+        prompt, fallback = self._style_prompt_context(requirement, style_ids, context_ledger)
         return self._generate_text_streaming(prompt, fallback, on_delta, on_model_call)
 
     def generate_preview_images(

@@ -36,7 +36,8 @@
     "artifacts": "산출물",
     "prompt": "프롬프트",
     "response": "모델 응답",
-    "error": "오류"
+    "error": "오류",
+    "context": "컨텍스트"
   },
   "field": {
     "model": "모델",
@@ -65,7 +66,15 @@
     "warning": "경고",
     "error": "오류",
     "step_completed": "단계 완료",
-    "run_completed": "작업 종료"
+    "run_completed": "작업 종료",
+    "context_updated": "컨텍스트 업데이트",
+    "context_conflict": "컨텍스트 충돌"
+  },
+  "context": {
+    "injected": "주입된 스냅샷",
+    "ledger": "원장 상태",
+    "check": "검증 결과",
+    "conflict": "컨텍스트 충돌 감지됨"
   },
   "toast": {
     "started": "Agent 작업을 시작했습니다",

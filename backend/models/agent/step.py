@@ -5,6 +5,7 @@ One AgentStep is one agent's turn inside a run (e.g. the Requirements Agent).
 It stores both the user-facing explainable summary and the full debug trace
 (prompt snapshot + model response) so the workspace can show what happened.
 """
+import json
 import uuid
 from datetime import datetime
 
@@ -54,11 +55,40 @@ class AgentStep(db.Model):
     prompt_snapshot = db.Column(db.Text, nullable=True)
     model_response = db.Column(db.Text, nullable=True)
 
+    # Session context ledger (internal / debug-only). ``context_snapshot_raw``
+    # records the consensus block injected into THIS step's prompt plus the
+    # ledger state at this point; ``context_check_raw`` records the deterministic
+    # + AI consistency-gate result. Both null for steps that touch no context.
+    context_snapshot_raw = db.Column(db.Text, nullable=True)
+    context_check_raw = db.Column(db.Text, nullable=True)
+
     error_message = db.Column(db.Text, nullable=True)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     started_at = db.Column(db.DateTime, nullable=True)
     completed_at = db.Column(db.DateTime, nullable=True)
+
+    # ---- JSON column helpers -------------------------------------------------
+    @staticmethod
+    def _load_json(raw, default):
+        if not raw:
+            return default
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return default
+
+    def get_context_snapshot(self) -> dict:
+        return self._load_json(self.context_snapshot_raw, {})
+
+    def set_context_snapshot(self, data: dict | None) -> None:
+        self.context_snapshot_raw = json.dumps(data or {}, ensure_ascii=False)
+
+    def get_context_check(self) -> dict:
+        return self._load_json(self.context_check_raw, {})
+
+    def set_context_check(self, data: dict | None) -> None:
+        self.context_check_raw = json.dumps(data or {}, ensure_ascii=False)
 
     def to_dict(self) -> dict:
         return {
@@ -81,6 +111,8 @@ class AgentStep(db.Model):
             "model_name": self.model_name,
             "prompt_snapshot": self.prompt_snapshot,
             "model_response": self.model_response,
+            "context_snapshot": self.get_context_snapshot(),
+            "context_check": self.get_context_check(),
             "error_message": self.error_message,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "started_at": self.started_at.isoformat() + "Z" if self.started_at else None,

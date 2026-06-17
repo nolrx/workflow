@@ -1,16 +1,18 @@
 {
-  "title": "前端应用预览",
-  "generate": "生成前端项目",
-  "regenerate": "重新生成前端",
-  "generating": "正在生成完整前端项目…",
-  "empty": "确认 UI 基调后点击「生成前端项目」，这里会显示可交互的应用预览。",
+  "title": "HTML 应用预览",
+  "generate": "生成 HTML",
+  "regenerate": "重新生成 HTML",
+  "download": "下载 HTML",
+  "generating": "正在生成完整 HTML 应用…",
+  "empty": "确认 UI 基调后点击「生成 HTML」，这里会显示可交互的应用预览。",
   "needConfirmHint": "项目尚未确认 UI 基调，仍可生成，但建议先确认。",
   "reviewPassed": "已通过可交互审查",
   "reviewRepaired": "审查发现问题并已自动修复",
-  "filesCount": "{{count}} 个文件",
-  "loadingHistory": "加载已生成的前端…",
+  "htmlReady": "index.html · {{count}} 字符",
+  "iframeTitle": "生成的 HTML 应用预览",
+  "loadingHistory": "加载已生成的 HTML…",
   "toast": {
-    "started": "前端生成任务已启动",
+    "started": "HTML 生成任务已启动",
     "startFailed": "启动失败"
   }
 }

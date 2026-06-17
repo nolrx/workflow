@@ -7,6 +7,7 @@ official `anthropic` SDK. This provider is used for TEXT generation only
 a dedicated image provider (see factory.get_image_provider).
 """
 import logging
+import os
 from typing import List, Optional
 
 from backend.services.ai.base import (
@@ -22,6 +23,23 @@ DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
 
 # Streaming is used for all requests so large outputs don't hit HTTP timeouts.
 DEFAULT_MAX_TOKENS = 16000
+
+# Max gap (seconds) between streamed chunks before the connection is considered
+# dead. Generation streams deltas/pings continuously, so a gap this long is a
+# stall, not slow output. Overridable via env for ops tuning.
+READ_TIMEOUT = float(os.getenv("AI_TEXT_READ_TIMEOUT", "120"))
+
+# Retry transient transport failures that surface WHILE consuming the stream
+# body — e.g. "peer closed connection without sending complete message body
+# (incomplete chunked read)". These happen on long single-shot generations
+# (a big single-file build is much longer than the old multi-file approach).
+# The SDK's built-in max_retries only covers establishing the initial request,
+# NOT mid-stream drops, so we retry the whole generation here. There is no
+# partial result to salvage on a dropped stream, so a clean re-run is correct.
+# Overridable via env for ops tuning.
+STREAM_MAX_RETRIES = int(os.getenv("AI_TEXT_STREAM_RETRIES", "2"))
+STREAM_RETRY_BASE_DELAY = float(os.getenv("AI_TEXT_STREAM_RETRY_DELAY", "2"))
+STREAM_RETRY_MAX_DELAY = 15.0
 
 
 def _guess_media_type(data: bytes) -> str:
@@ -62,10 +80,17 @@ class ClaudeProvider(AIProvider):
 
         try:
             import anthropic
+            import httpx
 
             kwargs = {"api_key": self.api_key}
             if self.base_url:
                 kwargs["base_url"] = self.base_url
+            # Bound every request with a finite timeout. Streaming delivers chunks
+            # (text deltas + periodic pings) every few seconds, so a 120s read gap
+            # means the connection is dead — without this the SDK default lets a
+            # stalled stream hang the worker thread (and thus the whole AgentRun)
+            # indefinitely, permanently burning one of the runtime's 4 slots.
+            kwargs["timeout"] = httpx.Timeout(READ_TIMEOUT, connect=10.0, write=30.0, pool=10.0)
             self._client = anthropic.Anthropic(**kwargs)
             self._configured = True
             logger.info(f"Claude provider configured with model: {self.model}")
@@ -103,50 +128,94 @@ class ClaudeProvider(AIProvider):
                 error="Claude provider not configured. Please check API key.",
             )
 
-        try:
-            messages = [{"role": "user", "content": self._build_content(prompt, images)}]
+        import time
 
-            # Stream + adaptive thinking: recommended setup for Opus 4.8.
-            # Streaming protects against HTTP timeouts on long generations.
-            with self._client.messages.stream(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                thinking={"type": "adaptive"},
-                messages=messages,
-            ) as stream:
-                message = stream.get_final_message()
+        import anthropic
+        import httpx
 
-            if message.stop_reason == "refusal":
-                detail = getattr(getattr(message, "stop_details", None), "explanation", None)
-                logger.warning(f"Claude refused the request: {detail}")
-                return TextGenerationResult(
-                    text="",
-                    success=False,
-                    error=f"Request was declined for safety reasons. {detail or ''}".strip(),
+        # Transient transport failures (mid-stream connection drops, read
+        # stalls, connection resets) are worth retrying as a whole-generation
+        # re-run; everything else is classified and surfaced immediately.
+        retryable = (httpx.TransportError, anthropic.APIConnectionError)
+
+        messages = [{"role": "user", "content": self._build_content(prompt, images)}]
+        last_error: Optional[Exception] = None
+
+        for attempt in range(STREAM_MAX_RETRIES + 1):
+            try:
+                # Stream + adaptive thinking: recommended setup for Opus 4.8.
+                # Streaming protects against HTTP timeouts on long generations.
+                with self._client.messages.stream(
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    thinking={"type": "adaptive"},
+                    messages=messages,
+                ) as stream:
+                    message = stream.get_final_message()
+
+                if message.stop_reason == "refusal":
+                    detail = getattr(getattr(message, "stop_details", None), "explanation", None)
+                    logger.warning(f"Claude refused the request: {detail}")
+                    return TextGenerationResult(
+                        text="",
+                        success=False,
+                        error=f"Request was declined for safety reasons. {detail or ''}".strip(),
+                    )
+
+                text = "".join(
+                    block.text for block in message.content if block.type == "text"
                 )
 
-            text = "".join(
-                block.text for block in message.content if block.type == "text"
-            )
+                if message.stop_reason == "max_tokens":
+                    # Output is truncated at the token ceiling — common when a
+                    # single-file build needs more room than the default.
+                    logger.warning(
+                        "Claude output hit max_tokens=%s and is truncated; "
+                        "raise AI_TEXT_MAX_TOKENS for long single-file generations.",
+                        self.max_tokens,
+                    )
 
-            logger.debug(f"Claude text generation successful, length: {len(text)}")
-            return TextGenerationResult(text=text, success=True)
+                logger.debug(f"Claude text generation successful, length: {len(text)}")
+                return TextGenerationResult(text=text, success=True)
 
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Claude text generation failed: {error_msg}")
+            except retryable as e:
+                last_error = e
+                if attempt < STREAM_MAX_RETRIES:
+                    delay = min(STREAM_RETRY_BASE_DELAY * (2 ** attempt), STREAM_RETRY_MAX_DELAY)
+                    logger.warning(
+                        "Claude stream interrupted (attempt %d/%d): %s — retrying in %.1fs",
+                        attempt + 1, STREAM_MAX_RETRIES + 1, e, delay,
+                    )
+                    time.sleep(delay)
+                    continue
+                logger.error(
+                    "Claude stream failed after %d attempts: %s",
+                    STREAM_MAX_RETRIES + 1, e,
+                )
+                break
+            except Exception as e:
+                last_error = e
+                break
 
-            lowered = error_msg.lower()
-            if "authentication" in lowered or "api_key" in lowered or "401" in error_msg:
-                detailed_error = f"API authentication failed. Please check API key. Error: {error_msg}"
-            elif "not_found" in lowered or "model" in lowered or "404" in error_msg:
-                detailed_error = f"Model access failed. Please check model configuration. Error: {error_msg}"
-            elif "rate_limit" in lowered or "429" in error_msg:
-                detailed_error = f"Rate limited. Please retry later. Error: {error_msg}"
-            else:
-                detailed_error = f"Text generation failed. Error: {error_msg}"
+        return self._error_result(last_error)
 
-            return TextGenerationResult(text="", success=False, error=detailed_error)
+    @staticmethod
+    def _error_result(error: Optional[Exception]) -> TextGenerationResult:
+        """Classify a model/transport error into a user-facing failure result."""
+        error_msg = str(error)
+        logger.error(f"Claude text generation failed: {error_msg}")
+
+        lowered = error_msg.lower()
+        if "authentication" in lowered or "api_key" in lowered or "401" in error_msg:
+            detailed_error = f"API authentication failed. Please check API key. Error: {error_msg}"
+        elif "not_found" in lowered or "model" in lowered or "404" in error_msg:
+            detailed_error = f"Model access failed. Please check model configuration. Error: {error_msg}"
+        elif "rate_limit" in lowered or "429" in error_msg:
+            detailed_error = f"Rate limited. Please retry later. Error: {error_msg}"
+        else:
+            detailed_error = f"Text generation failed. Error: {error_msg}"
+
+        return TextGenerationResult(text="", success=False, error=detailed_error)
 
     def _build_content(self, prompt: str, images: Optional[List[bytes]]) -> list:
         """Build a user-message content list, prepending any images as blocks."""

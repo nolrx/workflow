@@ -49,7 +49,8 @@
     "confirm": "Use as UI baseline",
     "confirmed": "Confirmed",
     "empty": "Generated thumbnails will appear here after you choose styles.",
-    "imageAlt": "App thumbnail"
+    "imageAlt": "App thumbnail",
+    "skipped": "Thumbnail service is unavailable — using the style prompt as the UI baseline and moving on to frontend development."
   },
   "baseline": {
     "title": "Confirmed UI Baseline"
@@ -61,7 +62,7 @@
   "workspace": {
     "previewTitle": "Live preview",
     "empty": "Run the agent and results stream in here — then edit them inline.",
-    "streamingHint": "AI is generating…",
+    "streamingHint": "Generating…",
     "newProject": "New",
     "splitThinking": {
       "title": "AI is splitting the development docs",

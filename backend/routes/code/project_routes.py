@@ -270,11 +270,28 @@ def generate_previews(project_id: str):
     try:
         images = service.generate_preview_images(prompt, count=int(data.get("count") or 2))
     except RuntimeError as error:
-        return error_response("PREVIEW_IMAGE_FAILED", str(error), 502)
+        # Image upstream unavailable (e.g. Panlaxy "no available compatible
+        # accounts"). Don't dead-end the flow: skip the thumbnails, adopt the
+        # style prompt as the UI baseline, and advance to ui_confirmed so the
+        # frontend development flow is unblocked without a manual confirm.
+        project.set_preview_images([])
+        project.ui_baseline_prompt = prompt
+        project.status = CodeProjectStatus.UI_CONFIRMED
+        db.session.commit()
+        return success_response(
+            {
+                "project": project.to_dict(),
+                "preview_skipped": True,
+                "preview_error": str(error),
+            },
+            "缩略图服务暂不可用，已用风格提示词作为 UI 基调，可直接进入前端开发",
+        )
     project.set_preview_images(images)
     project.status = CodeProjectStatus.PREVIEW_READY
     db.session.commit()
-    return success_response({"project": project.to_dict()}, "应用缩略图已生成")
+    return success_response(
+        {"project": project.to_dict(), "preview_skipped": False}, "应用缩略图已生成"
+    )
 
 
 @code_project_bp.route("/projects/<project_id>/confirm-preview", methods=["POST"])

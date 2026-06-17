@@ -157,7 +157,7 @@ def _create_provider(cfg: ResolvedProviderConfig) -> Optional[AIProvider]:
     if provider == "claude":
         from backend.services.ai.claude import ClaudeProvider
 
-        max_tokens = int(os.getenv("AI_TEXT_MAX_TOKENS", "16000"))
+        max_tokens = int(os.getenv("AI_TEXT_MAX_TOKENS", "32000"))
         return ClaudeProvider(
             api_key=cfg.api_key,
             model=cfg.model,

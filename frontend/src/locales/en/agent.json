@@ -36,7 +36,8 @@
     "artifacts": "Artifacts",
     "prompt": "Prompt",
     "response": "Response",
-    "error": "Error"
+    "error": "Error",
+    "context": "Context"
   },
   "field": {
     "model": "Model",
@@ -65,7 +66,15 @@
     "warning": "Warning",
     "error": "Error",
     "step_completed": "Step completed",
-    "run_completed": "Run completed"
+    "run_completed": "Run completed",
+    "context_updated": "Context updated",
+    "context_conflict": "Context conflict"
+  },
+  "context": {
+    "injected": "Injected snapshot",
+    "ledger": "Ledger state",
+    "check": "Verification result",
+    "conflict": "Context conflict detected"
   },
   "toast": {
     "started": "Agent run started",

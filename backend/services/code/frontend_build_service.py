@@ -1,9 +1,9 @@
 """
-Frontend project build service.
+Frontend HTML build service.
 
 The phase after UI-baseline confirmation: turn the confirmed requirements /
-flow / documents / style into a COMPLETE, fully-interactive React + TypeScript
-single-page app, returned as a Sandpack-compatible file map.
+flow / documents / style into a COMPLETE, fully-interactive single-file HTML
+application that can be saved as index.html and opened directly in a browser.
 
 Kept separate from ``CodeGenerationService`` on purpose (different concern, and
 so this can evolve independently). Prompts use ``[[TOKEN]]`` placeholders filled
@@ -22,13 +22,12 @@ logger = logging.getLogger(__name__)
 
 PROMPT_DIR = Path(__file__).parent.parent.parent / "prompts" / "code"
 
-# Hard cap so a runaway model response can't blow up the DB / Sandpack.
-MAX_FILES = 24
-MAX_FILE_CHARS = 24_000
+# Hard cap so a runaway model response can't blow up the DB / artifact storage.
+MAX_HTML_CHARS = 160_000
 
 
 class FrontendBuildService:
-    """Generate, critique and repair a runnable React/TS frontend project."""
+    """Generate, critique and repair a runnable single-file HTML app."""
 
     def _load_prompt(self, name: str) -> str:
         with open(PROMPT_DIR / name, "r", encoding="utf-8") as handle:
@@ -87,21 +86,37 @@ class FrontendBuildService:
             return None
 
     @staticmethod
-    def _normalize_files(raw_files) -> dict[str, str]:
-        """Coerce a {path: content|{code}} map into {/path: content} for Sandpack."""
-        files: dict[str, str] = {}
-        if not isinstance(raw_files, dict):
-            return files
-        for path, content in list(raw_files.items())[:MAX_FILES]:
-            if not isinstance(path, str):
-                continue
-            if isinstance(content, dict):
-                content = content.get("code") or content.get("content") or ""
-            if not isinstance(content, str):
-                continue
-            norm_path = path if path.startswith("/") else f"/{path}"
-            files[norm_path] = content[:MAX_FILE_CHARS]
-        return files
+    def _extract_html_payload(text: str) -> Optional[dict]:
+        """Return {html, summary} from JSON output, accepting raw HTML as a backup."""
+        parsed = FrontendBuildService._extract_json(text)
+        if parsed and isinstance(parsed.get("html"), str):
+            html = FrontendBuildService._normalize_html(parsed["html"])
+            if html:
+                return {"html": html, "summary": parsed.get("summary") or ""}
+
+        raw = (text or "").strip()
+        fenced_html = re.search(r"```html\s*(.*?)```", raw, re.DOTALL | re.IGNORECASE)
+        if fenced_html:
+            raw = fenced_html.group(1).strip()
+        if raw.lower().startswith("<!doctype") or "<html" in raw.lower():
+            html = FrontendBuildService._normalize_html(raw)
+            if html:
+                return {"html": html, "summary": ""}
+        return None
+
+    @staticmethod
+    def _normalize_html(html: str) -> str:
+        cleaned = (html or "").strip()[:MAX_HTML_CHARS]
+        lowered = cleaned.lower()
+        if "<html" not in lowered or "</html>" not in lowered:
+            return ""
+        if "<script" not in lowered:
+            return ""
+        if "<style" not in lowered:
+            return ""
+        if not lowered.startswith("<!doctype"):
+            cleaned = "<!doctype html>\n" + cleaned
+        return cleaned
 
     # --- public API ----------------------------------------------------------
     def build_app(
@@ -113,11 +128,13 @@ class FrontendBuildService:
         documents_digest: str,
         style_prompt: str,
         ui_baseline_prompt: str,
+        context_ledger: str = "",
         on_model_call=None,
     ) -> dict:
-        """Return {files, entry, components, summary, used_fallback}."""
+        """Return {html, summary, used_fallback}."""
         prompt = self._fill(
             self._load_prompt("frontend_build_prompt.txt"),
+            CONTEXT_LEDGER=context_ledger or "",
             REQUIREMENT=requirement,
             REQUIREMENTS_DOC=requirements_doc or "",
             DEVELOPMENT_FLOW=development_flow or "",
@@ -125,26 +142,23 @@ class FrontendBuildService:
             STYLE_PROMPT=style_prompt or "",
             UI_BASELINE=ui_baseline_prompt or "",
         )
-        text, success, _error = self._call_model(prompt, on_model_call)
-        parsed = self._extract_json(text) if success else None
-        files = self._normalize_files(parsed.get("files")) if parsed else {}
-        if not files or "/App.tsx" not in files:
-            fallback = self._fallback_app(requirement)
-            fallback["used_fallback"] = True
-            return fallback
+        text, success, error = self._call_model(prompt, on_model_call)
+        if not success:
+            raise RuntimeError(f"前端 HTML 生成失败：{error or '模型不可用'}")
+        payload = self._extract_html_payload(text or "")
+        if not payload:
+            raise RuntimeError("前端 HTML 生成失败：模型没有返回完整的 index.html")
         return {
-            "files": files,
-            "entry": parsed.get("entry") or "/App.tsx",
-            "components": parsed.get("components") or sorted(files.keys()),
-            "summary": parsed.get("summary") or "",
+            "html": payload["html"],
+            "summary": payload.get("summary") or "",
             "used_fallback": False,
         }
 
-    def critique_app(self, files: dict[str, str], on_model_call=None) -> dict:
+    def critique_app(self, html: str, on_model_call=None) -> dict:
         """Return {passed, issues:[{file,problem,severity}], summary}."""
         prompt = self._fill(
             self._load_prompt("frontend_critic_prompt.txt"),
-            FILES=self._files_to_text(files),
+            HTML=html,
         )
         text, success, _error = self._call_model(prompt, on_model_call)
         parsed = self._extract_json(text) if success else None
@@ -158,106 +172,25 @@ class FrontendBuildService:
             "summary": parsed.get("summary") or "",
         }
 
-    def repair_app(self, files: dict[str, str], issues: list, on_model_call=None) -> dict:
-        """Return a corrected {files, entry, components, summary}."""
+    def repair_app(self, html: str, issues: list, on_model_call=None) -> dict:
+        """Return a corrected {html, summary}."""
         prompt = self._fill(
             self._load_prompt("frontend_repair_prompt.txt"),
-            FILES=self._files_to_text(files),
+            HTML=html,
             ISSUES=json.dumps(issues, ensure_ascii=False, indent=2),
         )
-        text, success, _error = self._call_model(prompt, on_model_call)
-        parsed = self._extract_json(text) if success else None
-        repaired = self._normalize_files(parsed.get("files")) if parsed else {}
-        if not repaired or "/App.tsx" not in repaired:
-            # Repair failed; keep the original files rather than losing work.
-            return {"files": files, "entry": "/App.tsx", "components": sorted(files.keys()), "summary": ""}
+        text, success, error = self._call_model(prompt, on_model_call)
+        if not success:
+            logger.warning("Frontend HTML repair failed; keeping original HTML: %s", error)
+            return {"html": html, "summary": ""}
+        payload = self._extract_html_payload(text or "")
+        if not payload:
+            logger.warning("Frontend HTML repair returned invalid HTML; keeping original HTML")
+            return {"html": html, "summary": ""}
         return {
-            "files": repaired,
-            "entry": parsed.get("entry") or "/App.tsx",
-            "components": parsed.get("components") or sorted(repaired.keys()),
-            "summary": parsed.get("summary") or "",
+            "html": payload["html"],
+            "summary": payload.get("summary") or "",
         }
-
-    @staticmethod
-    def _files_to_text(files: dict[str, str]) -> str:
-        parts = []
-        for path, content in files.items():
-            parts.append(f"=== FILE: {path} ===\n{content}")
-        return "\n\n".join(parts)
-
-    @staticmethod
-    def _fallback_app(requirement: str) -> dict:
-        """A minimal but FULLY interactive app used when AI is unavailable."""
-        title = (requirement or "Demo App").strip()[:60].replace("`", "'")
-        app_tsx = (
-            "import { useState } from \"react\";\n"
-            "import \"./styles.css\";\n\n"
-            "interface Task { id: number; text: string; done: boolean; }\n\n"
-            "export default function App() {\n"
-            "  const [tasks, setTasks] = useState<Task[]>([\n"
-            "    { id: 1, text: \"体验可交互的待办\", done: false },\n"
-            "  ]);\n"
-            "  const [draft, setDraft] = useState(\"\");\n"
-            "  const add = () => {\n"
-            "    const text = draft.trim();\n"
-            "    if (!text) return;\n"
-            "    setTasks((t) => [...t, { id: Date.now(), text, done: false }]);\n"
-            "    setDraft(\"\");\n"
-            "  };\n"
-            "  const toggle = (id: number) =>\n"
-            "    setTasks((t) => t.map((x) => (x.id === id ? { ...x, done: !x.done } : x)));\n"
-            "  const remove = (id: number) => setTasks((t) => t.filter((x) => x.id !== id));\n"
-            "  const remaining = tasks.filter((t) => !t.done).length;\n"
-            "  return (\n"
-            "    <main className=\"app\">\n"
-            f"      <h1>{title}</h1>\n"
-            "      <p className=\"muted\">{remaining} 项待完成</p>\n"
-            "      <div className=\"row\">\n"
-            "        <input\n"
-            "          value={draft}\n"
-            "          onChange={(e) => setDraft(e.target.value)}\n"
-            "          onKeyDown={(e) => e.key === \"Enter\" && add()}\n"
-            "          placeholder=\"输入后回车添加\"\n"
-            "        />\n"
-            "        <button onClick={add}>添加</button>\n"
-            "      </div>\n"
-            "      <ul>\n"
-            "        {tasks.map((task) => (\n"
-            "          <li key={task.id} className={task.done ? \"done\" : \"\"}>\n"
-            "            <label>\n"
-            "              <input type=\"checkbox\" checked={task.done} onChange={() => toggle(task.id)} />\n"
-            "              <span>{task.text}</span>\n"
-            "            </label>\n"
-            "            <button className=\"link\" onClick={() => remove(task.id)}>删除</button>\n"
-            "          </li>\n"
-            "        ))}\n"
-            "      </ul>\n"
-            "    </main>\n"
-            "  );\n"
-            "}\n"
-        )
-        styles_css = (
-            ".app{max-width:520px;margin:40px auto;padding:24px;font-family:ui-sans-serif,system-ui;"
-            "color:#0f172a}\n"
-            "h1{font-size:22px;margin:0 0 4px}\n"
-            ".muted{color:#64748b;margin:0 0 16px;font-size:14px}\n"
-            ".row{display:flex;gap:8px;margin-bottom:16px}\n"
-            "input[type=text],.row input{flex:1;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px}\n"
-            "button{padding:8px 14px;border:0;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer}\n"
-            "button.link{background:none;color:#ef4444;padding:4px 8px}\n"
-            "ul{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:8px}\n"
-            "li{display:flex;align-items:center;justify-content:space-between;border:1px solid #e2e8f0;"
-            "border-radius:8px;padding:8px 12px}\n"
-            "li.done span{text-decoration:line-through;color:#94a3b8}\n"
-            "label{display:flex;align-items:center;gap:8px;cursor:pointer}\n"
-        )
-        return {
-            "files": {"/App.tsx": app_tsx, "/styles.css": styles_css},
-            "entry": "/App.tsx",
-            "components": ["/App.tsx", "/styles.css"],
-            "summary": "AI 不可用，使用内置可交互待办示例作为占位前端。",
-        }
-
 
 _service_instance: FrontendBuildService | None = None
 

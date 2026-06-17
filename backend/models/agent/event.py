@@ -24,6 +24,9 @@ class AgentEventType:
     ARTIFACT_CREATED = "artifact_created"
     FILE_CREATED = "file_created"
     PROGRESS = "progress"
+    # Session context ledger lifecycle (internal / debug-only observability).
+    CONTEXT_UPDATED = "context_updated"
+    CONTEXT_CONFLICT = "context_conflict"
     WARNING = "warning"
     ERROR = "error"
     STEP_COMPLETED = "step_completed"

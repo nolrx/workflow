@@ -1,4 +1,3 @@
-import { useEffect, useRef } from "react"
 import { useTranslation } from "react-i18next"
 import {
   CheckCircle2,
@@ -18,6 +17,7 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent } from "@/components/ui/dialog"
 import { Progress } from "@/components/ui/progress"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useStickToBottom } from "@/hooks/use-stick-to-bottom"
 import { cn } from "@/lib/utils"
 import { selectCurrentStep, useAgentStore } from "@/stores/agentStore"
 
@@ -87,12 +87,8 @@ export function AgentRunPanel() {
   const panelOpen = useAgentStore((state) => state.panelOpen)
 
   const selectedStep = useAgentStore(selectCurrentStep)
-  const timelineRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const node = timelineRef.current
-    if (node) node.scrollTop = node.scrollHeight
-  }, [events.length])
+  // Follow new events to the bottom, but yield if the user scrolls up to read back.
+  const timelineRef = useStickToBottom(events.length)
 
   if (!run || !panelOpen) return null
 
@@ -100,6 +96,12 @@ export function AgentRunPanel() {
   const stepArtifacts: AgentArtifact[] = selectedStep
     ? (run.artifacts || []).filter((artifact) => artifact.step_id === selectedStep.id)
     : []
+  // Internal / debug-only context-ledger view (never shown to end users).
+  const ledgerSnapshot = selectedStep?.context_snapshot?.ledger
+  const contextCheck = selectedStep?.context_check
+  const hasContext = Boolean(
+    selectedStep?.context_snapshot?.injected_text || ledgerSnapshot || contextCheck?.deterministic
+  )
   const progress = run.progress
   const progressValue = progress.total_steps
     ? Math.round((progress.completed_steps / progress.total_steps) * 100)
@@ -281,6 +283,9 @@ export function AgentRunPanel() {
                     {debugMode && selectedStep.model_response && (
                       <TabsTrigger value="response">{t("tabs.response")}</TabsTrigger>
                     )}
+                    {debugMode && hasContext && (
+                      <TabsTrigger value="context">{t("tabs.context")}</TabsTrigger>
+                    )}
                     {selectedStep.error_message && (
                       <TabsTrigger value="error">{t("tabs.error")}</TabsTrigger>
                     )}
@@ -331,6 +336,44 @@ export function AgentRunPanel() {
                       <pre className="whitespace-pre-wrap break-words rounded-md border bg-muted/40 p-3 text-xs leading-relaxed">
                         {selectedStep.model_response}
                       </pre>
+                    </TabsContent>
+                  )}
+
+                  {debugMode && hasContext && (
+                    <TabsContent value="context" className="space-y-4 pt-3">
+                      {contextCheck?.ai_gate?.conflict && (
+                        <Badge variant="destructive">{t("context.conflict")}</Badge>
+                      )}
+                      {selectedStep.context_snapshot?.injected_text && (
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            {t("context.injected")}
+                          </p>
+                          <pre className="whitespace-pre-wrap break-words rounded-md border bg-muted/40 p-3 text-xs leading-relaxed">
+                            {selectedStep.context_snapshot.injected_text}
+                          </pre>
+                        </div>
+                      )}
+                      {ledgerSnapshot && (
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            {t("context.ledger")}
+                          </p>
+                          <pre className="whitespace-pre-wrap break-words rounded-md border bg-muted/40 p-3 text-xs leading-relaxed">
+                            {JSON.stringify(ledgerSnapshot, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                      {contextCheck?.deterministic && (
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            {t("context.check")}
+                          </p>
+                          <pre className="whitespace-pre-wrap break-words rounded-md border bg-muted/40 p-3 text-xs leading-relaxed">
+                            {JSON.stringify(contextCheck, null, 2)}
+                          </pre>
+                        </div>
+                      )}
                     </TabsContent>
                   )}
 

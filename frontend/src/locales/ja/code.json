@@ -49,7 +49,8 @@
     "confirm": "UI 基準として確定",
     "confirmed": "確定済み",
     "empty": "スタイルを選択して生成すると、サムネイルがここに表示されます。",
-    "imageAlt": "アプリサムネイル"
+    "imageAlt": "アプリサムネイル",
+    "skipped": "サムネイル生成サービスを利用できないため、スタイルプロンプトを UI 基準としてフロントエンド開発に進みます。"
   },
   "baseline": {
     "title": "確定した UI 基準"
@@ -61,7 +62,7 @@
   "workspace": {
     "previewTitle": "リアルタイムプレビュー",
     "empty": "エージェントを実行すると結果がここにストリーミング表示され、その場で編集できます。",
-    "streamingHint": "AI が生成中…",
+    "streamingHint": "生成中…",
     "newProject": "新規",
     "splitThinking": {
       "title": "AI が開発文書を分割しています",

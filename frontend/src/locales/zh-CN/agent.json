@@ -36,7 +36,8 @@
     "artifacts": "产物",
     "prompt": "Prompt",
     "response": "模型返回",
-    "error": "错误"
+    "error": "错误",
+    "context": "上下文"
   },
   "field": {
     "model": "模型",
@@ -65,7 +66,15 @@
     "warning": "警告",
     "error": "错误",
     "step_completed": "步骤完成",
-    "run_completed": "任务结束"
+    "run_completed": "任务结束",
+    "context_updated": "上下文更新",
+    "context_conflict": "上下文冲突"
+  },
+  "context": {
+    "injected": "注入快照",
+    "ledger": "账本状态",
+    "check": "校验结果",
+    "conflict": "检测到上下文冲突"
   },
   "toast": {
     "started": "Agent 任务已启动",

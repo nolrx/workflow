@@ -136,6 +136,18 @@ class StepHandle:
             self.step.next_action = next_action
         db.session.commit()
 
+    def set_context(self, snapshot=None, check=None):
+        """Persist this step's context-ledger snapshot / verification result.
+
+        Internal / debug-only: surfaced in the AgentRunPanel "Context" tab, never
+        in user-facing output. See backend/services/agent/context_verifier.py.
+        """
+        if snapshot is not None:
+            self.step.set_context_snapshot(snapshot)
+        if check is not None:
+            self.step.set_context_check(check)
+        db.session.commit()
+
     def add_artifact(
         self,
         artifact_type: str,

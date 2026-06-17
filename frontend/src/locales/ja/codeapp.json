@@ -1,16 +1,18 @@
 {
-  "title": "アプリプレビュー",
-  "generate": "フロントエンドを生成",
-  "regenerate": "フロントエンドを再生成",
-  "generating": "フロントエンド一式を生成中…",
-  "empty": "UI ベースラインを確定してから「フロントエンドを生成」を押すと、インタラクティブなアプリのプレビューがここに表示されます。",
+  "title": "HTML アプリプレビュー",
+  "generate": "HTML を生成",
+  "regenerate": "HTML を再生成",
+  "download": "HTML をダウンロード",
+  "generating": "完全な HTML アプリを生成中…",
+  "empty": "UI ベースラインを確定してから「HTML を生成」を押すと、インタラクティブなアプリのプレビューがここに表示されます。",
   "needConfirmHint": "UI ベースラインが未確定です。生成は可能ですが、先に確定することをおすすめします。",
   "reviewPassed": "インタラクティブ性レビュー合格",
   "reviewRepaired": "問題を検出し自動修正しました",
-  "filesCount": "{{count}} ファイル",
-  "loadingHistory": "生成済みのフロントエンドを読み込み中…",
+  "htmlReady": "index.html · {{count}} 文字",
+  "iframeTitle": "生成された HTML アプリのプレビュー",
+  "loadingHistory": "生成済みの HTML を読み込み中…",
   "toast": {
-    "started": "フロントエンド生成を開始しました",
+    "started": "HTML 生成を開始しました",
     "startFailed": "開始に失敗しました"
   }
 }

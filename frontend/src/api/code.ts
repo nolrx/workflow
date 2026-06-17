@@ -171,11 +171,13 @@ export const codeApi = {
     return response.data.project
   },
   generatePreviews: async (projectId: string, prompt?: string) => {
-    const response = await api.post<Envelope<{ project: CodeProject }>>(
-      `/code/projects/${projectId}/previews`,
-      { prompt, count: 2 }
-    )
-    return response.data.project
+    const response = await api.post<
+      Envelope<{ project: CodeProject; preview_skipped?: boolean }>
+    >(`/code/projects/${projectId}/previews`, { prompt, count: 2 })
+    return {
+      project: response.data.project,
+      previewSkipped: response.data.preview_skipped ?? false,
+    }
   },
   confirmPreview: async (
     projectId: string,

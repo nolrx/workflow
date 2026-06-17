@@ -121,7 +121,9 @@ class AgentRuntime:
                 run.status = result.get("status", AgentRunStatus.COMPLETED)
                 if result.get("resource_id"):
                     run.resource_id = result["resource_id"]
-                run.credit_used = run.credit_reserved
+                # Up-front reservation + any per-call context-verify gate charges
+                # the workflow reported (charged as they fired, never refunded).
+                run.credit_used = run.credit_reserved + int(result.get("extra_credits", 0) or 0)
                 run.completed_at = datetime.utcnow()
                 db.session.commit()
                 recorder.emit(

@@ -48,6 +48,11 @@ class AgentRun(db.Model):
     input_snapshot_raw = db.Column(db.Text, nullable=True)
     config_raw = db.Column(db.Text, nullable=True)
     progress_raw = db.Column(db.Text, nullable=True)
+    # Session context ledger — the evolving, validated "consensus" (tech stack,
+    # glossary, key decisions, scope) shared across all steps of this run. Never
+    # shown to end users; surfaced only in the debug Context tab. See
+    # docs/agent-context-ledger.md.
+    context_ledger_raw = db.Column(db.Text, nullable=True)
 
     credit_reserved = db.Column(db.Integer, nullable=False, default=0)
     credit_used = db.Column(db.Integer, nullable=False, default=0)
@@ -111,6 +116,12 @@ class AgentRun(db.Model):
     def set_progress(self, data: dict | None) -> None:
         self.progress_raw = json.dumps(data or {}, ensure_ascii=False)
 
+    def get_context_ledger(self) -> dict:
+        return self._load_json(self.context_ledger_raw, {})
+
+    def set_context_ledger(self, data: dict | None) -> None:
+        self.context_ledger_raw = json.dumps(data or {}, ensure_ascii=False)
+
     # ---- Serialization -------------------------------------------------------
     def to_dict(self, include_children: bool = False) -> dict:
         data = {
@@ -126,6 +137,7 @@ class AgentRun(db.Model):
             "input_snapshot": self.get_input_snapshot(),
             "config": self.get_config(),
             "progress": self.get_progress(),
+            "context_ledger": self.get_context_ledger(),
             "credit_reserved": self.credit_reserved,
             "credit_used": self.credit_used,
             "error_message": self.error_message,

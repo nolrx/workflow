@@ -47,6 +47,12 @@ export interface AgentStep {
   model_name: string | null
   prompt_snapshot: string | null
   model_response: string | null
+  /** Internal / debug-only: context-ledger snapshot + verification recorded for this step. */
+  context_snapshot?: { injected_text?: string; ledger?: Record<string, unknown> } | null
+  context_check?: {
+    deterministic?: { ok?: boolean; level?: string; checks?: unknown[]; summary?: string }
+    ai_gate?: { conflict?: boolean; conflicts?: unknown[]; summary?: string; degraded?: boolean } | null
+  } | null
   error_message: string | null
   created_at: string | null
   started_at: string | null
@@ -96,6 +102,8 @@ export interface AgentRun {
   input_snapshot: Record<string, unknown>
   config: Record<string, unknown>
   progress: AgentRunProgress
+  /** Internal / debug-only: the run's evolving consensus ledger. */
+  context_ledger?: Record<string, unknown>
   credit_reserved: number
   credit_used: number
   error_message: string | null

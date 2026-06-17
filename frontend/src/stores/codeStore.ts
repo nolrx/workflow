@@ -39,7 +39,7 @@ interface CodeState {
   updateDocumentDraft: (documentId: string, data: Partial<CodeDocument>) => void
   toggleStyle: (styleId: string) => void
   generateStylePrompt: () => Promise<void>
-  generatePreviews: () => Promise<void>
+  generatePreviews: () => Promise<boolean>
   confirmPreview: (previewUrl: string) => Promise<void>
   clearError: () => void
 }
@@ -252,17 +252,22 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
 
   generatePreviews: async () => {
     const project = get().project
-    if (!project) return
+    if (!project) return false
     set({ isLoading: true, activeAction: "preview", error: null })
     try {
-      const updated = await codeApi.generatePreviews(project.id, project.style_prompt || undefined)
+      const { project: updated, previewSkipped } = await codeApi.generatePreviews(
+        project.id,
+        project.style_prompt || undefined
+      )
       set({ project: updated, isLoading: false, activeAction: null })
+      return previewSkipped
     } catch (error) {
       set({
         error: getErrorMessage(error, t("errors:code.generatePreviewFailed")),
         isLoading: false,
         activeAction: null,
       })
+      return false
     }
   },
 

@@ -181,6 +181,25 @@ def run_code_frontend_project_workflow(ctx, recorder) -> dict:
                         AgentEventType.TOOL_RESULT, step_id=step.id,
                         message="工具返回", payload={"output": (text or "")[:2000]},
                     )
+            elif etype == "fe_phase":
+                # Sentinel from the container's self-healing build ladder.
+                phase = event.get("phase") or ""
+                labels = {
+                    "install": "安装依赖（npm install）",
+                    "build": "运行构建（npm run build）",
+                    "ai-repair": "构建未通过，启动 AI 定向修复",
+                    "stub": "构建仍未通过，确定性补桩缺失模块",
+                    "vite-only": "跳过类型检查，直接用 Vite 构建",
+                    "fallback": "构建仍未通过，合成降级预览页以保证有产物",
+                }
+                is_recovery = phase in ("ai-repair", "stub", "vite-only", "fallback")
+                recorder.emit(
+                    AgentEventType.WARNING if is_recovery else AgentEventType.TOOL_CALL,
+                    level=AgentEventLevel.WARNING if is_recovery else AgentEventLevel.INFO,
+                    step_id=step.id,
+                    message=labels.get(phase, f"构建阶段：{phase}"),
+                    payload={"phase": phase},
+                )
 
         result = service.build_project(
             requirement=project.requirement_input,
@@ -196,8 +215,27 @@ def run_code_frontend_project_workflow(ctx, recorder) -> dict:
 
         if result.get("error") == "cancelled":
             return cancel_result(project_id)
+        # The container always synthesizes a previewable dist, so a hard failure
+        # here means the agent produced no source at all (config/auth) — runtime
+        # refunds it. A degraded-but-published run is NOT a failure.
         if not result.get("success"):
             raise RuntimeError(f"前端工程生成失败：{result.get('error') or '未知错误'}")
+
+        degraded_reason = result.get("degraded_reason")
+        _DEGRADED_LABELS = {
+            "ai-repair": "首轮构建未通过，经 AI 定向修复后构建成功",
+            "stub": "构建经确定性补桩（缺失模块占位）后成功，部分模块为占位实现",
+            "vite-only": "跳过类型检查后由 Vite 构建成功，可能存在未解决的类型问题",
+            "fallback": "多轮修复后构建仍未通过，已合成降级预览页（源码可下载）",
+        }
+        if result.get("degraded"):
+            recorder.emit(
+                AgentEventType.WARNING,
+                level=AgentEventLevel.WARNING,
+                step_id=step.id,
+                message=f"前端工程以降级方式产出：{_DEGRADED_LABELS.get(degraded_reason, degraded_reason)}",
+                payload={"degraded_reason": degraded_reason},
+            )
 
         usage = result.get("usage") or {}
         n_src = len(result.get("files") or {})
@@ -207,12 +245,14 @@ def run_code_frontend_project_workflow(ctx, recorder) -> dict:
         recorder.emit(
             AgentEventType.MODEL_RESPONSE, step_id=step.id, message="agent 完成",
             payload={"summary": result.get("summary"), "usage": usage,
-                     "cost_usd": result.get("cost_usd")},
+                     "cost_usd": result.get("cost_usd"),
+                     "degraded_reason": degraded_reason},
         )
+        _degraded_note = f"（降级：{_DEGRADED_LABELS.get(degraded_reason, degraded_reason)}）" if result.get("degraded") else ""
         step.set_output(
-            output_summary=f"已生成完整前端工程：{n_src} 个源码文件，{n_dist} 个构建产物。{result.get('summary', '')}".strip(),
-            reasoning_summary="沙箱容器内的编码 agent 自主创建多文件 React/Vite/TS 工程，并自行 npm install + build 自检直至通过。",
-            self_check=f"源码 {n_src} 文件；dist {n_dist} 文件；cost≈${result.get('cost_usd')}",
+            output_summary=f"已生成完整前端工程：{n_src} 个源码文件，{n_dist} 个构建产物{_degraded_note}。{result.get('summary', '')}".strip(),
+            reasoning_summary="沙箱容器内的编码 agent 自主创建多文件 React/Vite/TS 工程，并经自愈构建梯队（AI 修复 → 确定性补桩 → Vite 兜底 → 合成降级页）确保产出可预览 dist。",
+            self_check=f"源码 {n_src} 文件；dist {n_dist} 文件；cost≈${result.get('cost_usd')}；降级={degraded_reason or '无'}",
             next_action="发布并提供预览。",
         )
     completed += 1
@@ -256,6 +296,8 @@ def run_code_frontend_project_workflow(ctx, recorder) -> dict:
                 "usage": result.get("usage"),
                 "summary": result.get("summary"),
                 "delivery": "multi-file-project",
+                "degraded": result.get("degraded", False),
+                "degraded_reason": result.get("degraded_reason"),
             },
             filename="frontend_project_meta.json",
             preview_url=preview_url,

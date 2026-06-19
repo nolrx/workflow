@@ -1,24 +1,39 @@
+# ==============================================================================
+# AI Creative Studio — full stack (frontend + backend + middleware)
+#   frontend : nginx serving the built SPA, reverse-proxying /api  (worksflow.xyz)
+#   backend  : Flask API via gunicorn
+#   postgres : primary datastore (middleware)
+#   redis    : cache / queue (middleware)
+# All config comes from .env (see .env.example).
+# ==============================================================================
+
 services:
+  # --- Middleware: PostgreSQL ------------------------------------------------
   postgres:
     image: postgres:16-alpine
     container_name: ai-creative-studio-postgres
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: ai_studio
-      POSTGRES_PASSWORD: ai_studio_dev_2024
-      POSTGRES_DB: ai_creative_studio
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ai_studio -d ai_creative_studio"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - app-net
 
+  # --- Middleware: Redis -----------------------------------------------------
   redis:
     image: redis:7-alpine
     container_name: ai-creative-studio-redis
+    restart: unless-stopped
     ports:
       - "6379:6379"
     volumes:
@@ -28,7 +43,80 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - app-net
+
+  # --- Backend: Flask API (gunicorn) -----------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: ai-creative-studio-backend:latest
+    container_name: ai-creative-studio-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Reach Postgres by its compose service name. The .env DATABASE_URL points
+      # at localhost (correct for bare-metal), which is wrong inside the container;
+      # this override stays in sync with the POSTGRES_* vars the postgres service uses.
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # Docker-out-of-Docker lane for the code_frontend_project_generation
+      # workflow. TMPDIR must resolve to an IDENTICAL path on host and in the
+      # container so the sibling fe-agent container's `-v {workdir}:/out` bind
+      # mount points at real host files.
+      FE_AGENT_IMAGE: fe-agent:latest
+      TMPDIR: /data/workflow/.fe-agent-work
+    ports:
+      - "5001:5001"
+    volumes:
+      - backend_uploads:/app/backend/uploads
+      # DooD: talk to the host daemon to spawn throwaway fe-agent containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Shared work dir, mounted at the same absolute path on both sides.
+      - ./.fe-agent-work:/data/workflow/.fe-agent-work
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app-net
+
+  # --- Frontend: nginx (SPA + /api reverse proxy) ----------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: ai-creative-studio-frontend:latest
+    container_name: ai-creative-studio-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - app-net
+
+  # --- Build-only: fe-agent sandbox image ------------------------------------
+  # Produces `fe-agent:latest` into the host image store so the backend's
+  # `docker run` (code_frontend_project_generation workflow) can find it. Gated
+  # behind the `setup` profile, so `docker compose up` never starts it. Build it
+  # alongside the app images with:
+  #   docker compose --profile setup build
+  fe-agent:
+    image: fe-agent:latest
+    build:
+      context: ./backend/docker/fe-agent
+    profiles: ["setup"]
+    command: ["true"]
+    restart: "no"
 
 volumes:
   postgres_data:
   redis_data:
+  backend_uploads:
+
+networks:
+  app-net:
+    driver: bridge

@@ -25,6 +25,13 @@ def claude_text_env(monkeypatch):
 
 @pytest.fixture
 def panlaxy_image_env(monkeypatch):
+    # Clear the capability-level image overrides first: they take precedence over
+    # the PANLAXY_* keys in the resolver, so if the ambient .env sets any of them
+    # (e.g. AI_IMAGE_MODEL) they would leak in and defeat this fixture's intent of
+    # exercising panlaxy-specific resolution in isolation.
+    monkeypatch.delenv("AI_IMAGE_MODEL", raising=False)
+    monkeypatch.delenv("AI_IMAGE_API_KEY", raising=False)
+    monkeypatch.delenv("AI_IMAGE_BASE_URL", raising=False)
     monkeypatch.setenv("AI_IMAGE_PROVIDER", "panlaxy")
     monkeypatch.setenv("PANLAXY_API_KEY", "sk-panlaxy-test-key")
     monkeypatch.setenv("PANLAXY_BASE_URL", "https://api.panlaxy.io/v1")

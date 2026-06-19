@@ -192,19 +192,31 @@ class GeminiProvider(AIProvider):
                 )
             )
 
-            # Extract image data from response
-            if response.candidates:
-                for part in response.candidates[0].content.parts:
+            # Extract image data from response. Guard every level: when a model
+            # declines (e.g. Gemini 3 image models return finish_reason
+            # IMAGE_RECITATION / SAFETY / PROHIBITED_CONTENT), `candidate.content`
+            # or `.parts` can be None — iterating that blindly raised a confusing
+            # "'NoneType' object is not iterable". Surface the finish_reason
+            # instead so the failure is actionable.
+            candidate = response.candidates[0] if response.candidates else None
+            parts = getattr(getattr(candidate, "content", None), "parts", None) if candidate else None
+            if parts:
+                for part in parts:
                     if part.inline_data and part.inline_data.data:
                         image_data = part.inline_data.data
                         logger.debug(f"Gemini image generation successful, size: {len(image_data)} bytes")
                         return ImageGenerationResult(image_data=image_data, success=True)
 
-            logger.warning("No image data in Gemini response")
+            finish_reason = getattr(candidate, "finish_reason", None) if candidate else None
+            reason_note = f" (finish_reason={finish_reason})" if finish_reason else ""
+            logger.warning(f"No image data in Gemini response{reason_note}")
             return ImageGenerationResult(
                 image_data=None,
                 success=False,
-                error="No image generated in response. The model may not support image generation."
+                error=(
+                    "No image generated in response. The model declined or returned "
+                    f"no image{reason_note}. Try a different prompt or image model."
+                ),
             )
 
         except Exception as e:

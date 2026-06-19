@@ -1,18 +1,14 @@
 """
 Software creation generation service.
 """
+import base64
 import json
 import logging
-import os
 import re
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any
 
-from flask import current_app
-
-from backend.services.ai import get_text_provider
+from backend.services.ai import get_image_provider, get_text_provider
 from backend.services.code.styles import get_styles
 from backend.services.prompt_library import compose_recipe_prompt
 
@@ -301,91 +297,52 @@ class CodeGenerationService:
     def generate_preview_images(
         self, prompt: str, count: int = 2, on_model_call=None
     ) -> list[dict[str, Any]]:
-        """Generate UI preview thumbnails through the configured Panlaxy-compatible API."""
-        api_key = (
-            current_app.config.get("PANLAXY_API_KEY")
-            or os.getenv("PANLAXY_API_KEY")
-            or os.getenv("OPENAI_API_KEY")
-        )
-        if not api_key:
-            raise RuntimeError("PANLAXY_API_KEY is not configured")
+        """Generate UI preview thumbnails through the configured image provider.
 
-        base_url = (
-            current_app.config.get("PANLAXY_BASE_URL")
-            or os.getenv("PANLAXY_BASE_URL")
-            or "https://api.panlaxy.io/v1"
-        ).rstrip("/")
-        model = (
-            current_app.config.get("PANLAXY_IMAGE_MODEL")
-            or os.getenv("PANLAXY_IMAGE_MODEL")
-            or "gpt-image-1"
-        )
-        payload = {
-            "model": model,
-            "prompt": prompt,
-            "n": max(1, min(count, 4)),
-            "size": "1024x1024",
-        }
-        request = urllib.request.Request(
-            f"{base_url}/images/generations",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=90) as response:
-                data = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as error:
-            detail = error.read().decode("utf-8", errors="ignore")
-            raise RuntimeError(self._format_image_api_error(detail)) from error
-        except urllib.error.URLError as error:
-            raise RuntimeError(f"Preview image generation failed: {error}") from error
+        Routes through the AI factory's capability layer (``get_image_provider``)
+        so previews honour ``AI_IMAGE_PROVIDER`` (Gemini by default) instead of
+        hard-wiring a single vendor's HTTP endpoint. Runs inside the Agent Swarm
+        thread pool, so a fresh (non-cached) provider instance is requested.
+        """
+        provider = get_image_provider(force_new=True)
+        if provider is None or not provider.is_configured():
+            raise RuntimeError("缩略图生成失败：未配置图像生成 provider，请检查图像 API Key 配置")
 
-        images = []
-        for index, item in enumerate(data.get("data", [])):
-            image_url = item.get("url")
-            if not image_url and item.get("b64_json"):
-                image_url = f"data:image/png;base64,{item['b64_json']}"
-            if image_url:
-                images.append({"id": f"preview-{index + 1}", "url": image_url, "prompt": prompt})
+        provider_name = getattr(provider, "provider_name", "image")
+        model_name = getattr(provider, "model", None)
+
+        images: list[dict[str, Any]] = []
+        last_error: str | None = None
+        for index in range(max(1, min(count, 4))):
+            result = provider.generate_image(prompt)
+            if result.success and result.image_data:
+                encoded = base64.b64encode(result.image_data).decode("ascii")
+                images.append(
+                    {
+                        "id": f"preview-{index + 1}",
+                        "url": f"data:image/png;base64,{encoded}",
+                        "prompt": prompt,
+                    }
+                )
+            else:
+                last_error = result.error or "图像生成失败"
+
+        # All attempts failed: surface the provider error so the caller (the
+        # Agent Swarm preview step) can mark the step failed. A partial success
+        # still returns whatever images we did get.
+        if not images:
+            raise RuntimeError(f"缩略图生成失败：{last_error or '未知错误'}")
+
         if on_model_call:
             on_model_call(
                 prompt=prompt,
                 text=f"生成 {len(images)} 张预览缩略图",
                 success=True,
                 error=None,
-                provider="panlaxy",
-                model=model,
+                provider=provider_name,
+                model=model_name,
             )
         return images
-
-    def _format_image_api_error(self, detail: str) -> str:
-        """Return an actionable preview image API error message."""
-        try:
-            payload = json.loads(detail)
-        except json.JSONDecodeError:
-            return f"缩略图生成失败：{detail}"
-
-        error = payload.get("error", payload) if isinstance(payload, dict) else {}
-        message = error.get("message") if isinstance(error, dict) else None
-        if not message:
-            return f"缩略图生成失败：{detail}"
-
-        lower_message = message.lower()
-        if "no available compatible accounts" in lower_message:
-            return (
-                "缩略图生成失败：Panlaxy 当前没有可用的图片生成上游账号。"
-                "请在 Panlaxy 后台确认 gpt-image 系列模型额度/通道可用，或联系管理员开通。"
-            )
-        if "upstream access forbidden" in lower_message:
-            return (
-                "缩略图生成失败：Panlaxy 上游拒绝访问当前图片模型。"
-                "请确认该 API Key 已开通图片生成上游权限，或联系管理员处理。"
-            )
-        return f"缩略图生成失败：{message}"
 
     @staticmethod
     def _strip_code_fence(text: str) -> str:

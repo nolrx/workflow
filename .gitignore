@@ -117,3 +117,11 @@ coverage.xml
 *.tmp
 *.temp
 .cache/
+
+# =========================
+# Local tooling & runtime scratch
+# =========================
+# Claude Code 本地技能/配置(非项目共享)
+.claude/skills/
+# Agent Swarm 前端工作流的运行时临时目录(构建日志、退出码、临时工程)
+.fe-agent-work/

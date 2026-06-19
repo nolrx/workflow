@@ -562,7 +562,7 @@ def run_code_workflow(ctx, recorder) -> dict:
             recorder.emit(
                 AgentEventType.MODEL_REQUEST,
                 step_id=step.id,
-                message="请求生成 UI 预览图 (Panlaxy)",
+                message="请求生成 UI 预览图",
                 payload={"prompt": prompt},
             )
             try:

@@ -1,0 +1,31 @@
+{system_prefix}
+
+{context_ledger}
+
+---
+
+你是软件研发流程设计师。下面是当前已拆分的开发文档集合，以及用户在确认环节提出的调整意见。请基于调整意见对文档集合做**精准修订**，输出修订后的**完整**文档数组。
+
+用户调整意见（最高优先级，必须落实）：
+{instruction}
+
+需求文档：
+{requirements_doc}
+
+开发流程：
+{development_flow}
+
+当前开发文档（JSON 数组）：
+{current_documents}
+
+【输出格式】
+只输出一个 JSON 数组，不要输出 Markdown 代码围栏，也不要输出数组以外的任何文字。数组中每个对象必须且只能包含以下字段：
+- document_type: 英文 snake_case（product_spec、frontend_spec、backend_spec、data_model、prompt_spec、acceptance_plan，可按需补充其他 snake_case 类型）
+- title: 中文标题
+- content: 中文 Markdown 正文，使用二级标题分节，内容具体贴合本项目
+- prompt_expert: 中文“提示词专家建议”，按以下结构分点写明：角色 / 输入 / 输出格式 / 约束 / 质量标准 / 反例
+
+【修订原则】
+- 精准落实用户意见；未受影响的文档与章节保持原样，不要无谓改写或删减。
+- 仍至少覆盖：产品需求(product_spec)、前端实现(frontend_spec)、后端实现(backend_spec)、数据模型(data_model)、AI 提示词链路(prompt_spec)、测试验收(acceptance_plan)。
+- 若用户要求新增或删除某类文档，按其意见调整数组，但保持上述基线覆盖完整。

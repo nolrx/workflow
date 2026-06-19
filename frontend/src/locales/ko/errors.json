@@ -40,7 +40,8 @@
     "saveDocumentFailed": "문서 저장에 실패했습니다",
     "generateStyleFailed": "스타일 문서 생성에 실패했습니다",
     "generatePreviewFailed": "썸네일 생성에 실패했습니다",
-    "confirmPreviewFailed": "UI 기준 확정에 실패했습니다"
+    "confirmPreviewFailed": "UI 기준 확정에 실패했습니다",
+    "reviseSectionFailed": "부분 수정 실패"
   },
   "team": {
     "fetchTeamsFailed": "팀 목록을 가져오는 데 실패했습니다",

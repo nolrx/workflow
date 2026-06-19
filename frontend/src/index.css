@@ -88,3 +88,24 @@ body {
 #root {
   min-height: 100vh;
 }
+
+/* Native interactive elements get a pointer cursor.
+   Tailwind v4's Preflight no longer sets this, so buttons would otherwise
+   show the default arrow — see ui-ux cursor-pointer guideline. */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]) {
+  cursor: pointer;
+}
+
+/* Respect users who opt out of motion (WCAG 2.3.3 / prefers-reduced-motion).
+   Neutralizes spinners, the streaming caret, pulse and thinking animations. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

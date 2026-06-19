@@ -83,5 +83,9 @@
     "saved": "Saved successfully",
     "deleted": "Deleted successfully",
     "error": "An error occurred"
+  },
+  "a11y": {
+    "notifications": "Notifications",
+    "profile": "Profile"
   }
 }

@@ -50,6 +50,7 @@
     "confirmed": "확정됨",
     "empty": "스타일을 선택하고 생성하면 썸네일이 여기에 표시됩니다.",
     "imageAlt": "앱 썸네일",
+    "generating": "썸네일 생성 중…",
     "skipped": "썸네일 서비스를 사용할 수 없어 스타일 프롬프트를 UI 기준으로 삼아 프런트엔드 개발로 진행합니다."
   },
   "baseline": {
@@ -58,6 +59,16 @@
   "toast": {
     "saved": "프로젝트가 저장되었습니다",
     "documentSaved": "문서가 저장되었습니다"
+  },
+  "partialRevise": {
+    "hint": "{{count}}자 선택됨 · 이 부분만 수정합니다",
+    "placeholder": "이 부분을 어떻게 바꿀까요?",
+    "submit": "수정",
+    "cancel": "취소",
+    "applying": "수정 중…",
+    "applied": "선택 부분을 업데이트했습니다",
+    "unchanged": "변경 사항이 없습니다",
+    "failed": "부분 수정 실패"
   },
   "workspace": {
     "previewTitle": "실시간 미리보기",
@@ -81,6 +92,70 @@
       "documents": "개발 문서",
       "style": "UI 스타일",
       "app": "앱 미리보기"
+    }
+  },
+  "conversation": {
+    "title": "대화",
+    "intro": "만들고 싶은 제품을 설명해 주세요. 먼저 요구사항 문서를 작성하고, 각 단계마다 확인을 받은 뒤 진행합니다.",
+    "generating": "생성 중…",
+    "awaitingHint": "이 단계의 생성 결과를 펼쳐서 확인하세요. 만족하면 '승인'으로 다음 단계로, 수정은 아래에 알려 주세요.",
+    "reviseLabel": "무엇을 수정할까요?",
+    "revisePlaceholder": "이 단계를 어떻게 조정할지 알려 주세요. 예: 특정 부분 변경, 누락 보완, 방향·표현 조정…",
+    "approve": "승인하고 계속",
+    "revise": "수정 제출",
+    "start": "생성 시작",
+    "running": "생성 중입니다. 잠시만 기다려 주세요…",
+    "resolved": "확인됨 — 다음 단계로",
+    "completedTitle": "제품 생성 완료",
+    "completedHint": "각 단계를 펼쳐서 확인하고 편집하거나 새 세션을 시작할 수 있습니다.",
+    "failed": "생성에 실패했습니다. 요구사항을 조정한 뒤 다시 시도하세요.",
+    "retry": "재시도",
+    "newSession": "새 세션",
+    "liveLabel": "실시간 생성 중…",
+    "generatingStage": "{{stage}} 생성 중",
+    "reviewBadge": "확인 대기",
+    "doneBadge": "완료",
+    "cardReviewHint": "내용을 확인한 뒤 승인하거나 아래에서 조정을 알려 주세요",
+    "cardDoneHint": "완료 · 펼쳐서 확인·편집",
+    "appCardHint": "미리보기 가능한 프런트엔드 앱 생성"
+  },
+  "clarify": {
+    "title": "요구사항 빠른 확인",
+    "subtitle": "핵심 결정을 항목별로 확인하세요. 변경하지 않은 항목은 추천값이 적용되며, 선택에 따라 요구사항 문서를 다시 반영합니다.",
+    "empty": "확인이 필요한 핵심 질문이 없습니다.",
+    "openButton": "요구사항 빠른 확인 ({{count}}개)",
+    "apply": "확정하고 반영",
+    "applySuggestions": "모두 추천 적용",
+    "suggestedBadge": "추천",
+    "customPlaceholder": "기타(직접 입력)…"
+  },
+  "versions": {
+    "button": "기록",
+    "styleHistory": "스타일 기록",
+    "previewHistory": "미리보기 기록",
+    "title": "버전 기록",
+    "current": "현재",
+    "empty": "아직 기록이 없습니다",
+    "restore": "이 버전으로 복원",
+    "restored": "이 버전으로 복원했습니다",
+    "restoreFailed": "복원 실패",
+    "loadFailed": "기록을 불러오지 못했습니다",
+    "versionLabel": "버전 {{n}}",
+    "selectHint": "왼쪽에서 버전을 선택해 내용을 확인하세요",
+    "noContent": "이 버전에는 내용이 없습니다",
+    "source": {
+      "generated": "AI 생성",
+      "manual_edit": "수동 편집",
+      "partial_revision": "부분 수정",
+      "rollback": "롤백",
+      "import": "초기 버전"
+    },
+    "stage": {
+      "requirements": "요구사항",
+      "flow": "개발 플로우",
+      "documents": "문서",
+      "style": "스타일",
+      "preview": "미리보기"
     }
   }
 }

@@ -45,7 +45,8 @@
     "saveDocumentFailed": "保存文档失败",
     "generateStyleFailed": "生成风格文档失败",
     "generatePreviewFailed": "生成缩略图失败",
-    "confirmPreviewFailed": "确认 UI 基调失败"
+    "confirmPreviewFailed": "确认 UI 基调失败",
+    "reviseSectionFailed": "局部修订失败"
   },
   "team": {
     "fetchTeamsFailed": "获取团队列表失败",

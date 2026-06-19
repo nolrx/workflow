@@ -87,6 +87,7 @@ export function CodeAgentTimeline({ onSelectTab }: CodeAgentTimelineProps) {
               }}
               className={cn(
                 "flex w-full items-start gap-2.5 rounded-md border px-3 py-2 text-left transition-colors",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
                 selectedStepId === step.id
                   ? "border-primary bg-primary/10"
                   : "border-transparent hover:bg-muted"

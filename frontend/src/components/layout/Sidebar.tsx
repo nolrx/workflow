@@ -14,6 +14,7 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import { useAgentStore } from "@/stores/agentStore"
 import { useCodeStore } from "@/stores/codeStore"
 import { usePPTStore } from "@/stores/pptStore"
 import { useRedBookStore } from "@/stores/redbookStore"
@@ -106,8 +107,12 @@ export function Sidebar() {
   }
 
   const handleNewSession = () => {
-    // For Code, clear the in-memory project so the studio opens blank.
-    if (activeDomain === "code") useCodeStore.getState().setCurrentProject(null)
+    // For Code, clear the in-memory project AND tear down any replayed agent run
+    // so the studio opens to a blank conversation (not the previous session's).
+    if (activeDomain === "code") {
+      useCodeStore.getState().setCurrentProject(null)
+      useAgentStore.getState().reset()
+    }
     navigate(activeTab.home)
   }
 

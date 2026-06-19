@@ -29,7 +29,8 @@
     "failed": "失败",
     "cancelled": "已取消",
     "pending": "待执行",
-    "skipped": "已跳过"
+    "skipped": "已跳过",
+    "paused": "等待确认"
   },
   "tabs": {
     "summary": "摘要",
@@ -68,7 +69,10 @@
     "step_completed": "步骤完成",
     "run_completed": "任务结束",
     "context_updated": "上下文更新",
-    "context_conflict": "上下文冲突"
+    "context_conflict": "上下文冲突",
+    "step_awaiting_review": "等待确认",
+    "user_revision": "用户调整",
+    "review_resolved": "已确认"
   },
   "context": {
     "injected": "注入快照",

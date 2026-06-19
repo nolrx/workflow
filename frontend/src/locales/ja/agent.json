@@ -29,7 +29,8 @@
     "failed": "失敗",
     "cancelled": "中止",
     "pending": "未実行",
-    "skipped": "スキップ"
+    "skipped": "スキップ",
+    "paused": "確認待ち"
   },
   "tabs": {
     "summary": "概要",
@@ -68,7 +69,10 @@
     "step_completed": "ステップ完了",
     "run_completed": "実行終了",
     "context_updated": "コンテキスト更新",
-    "context_conflict": "コンテキスト矛盾"
+    "context_conflict": "コンテキスト矛盾",
+    "step_awaiting_review": "確認待ち",
+    "user_revision": "ユーザー調整",
+    "review_resolved": "確認済み"
   },
   "context": {
     "injected": "注入スナップショット",

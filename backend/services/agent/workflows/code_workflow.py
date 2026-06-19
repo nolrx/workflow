@@ -1,5 +1,5 @@
 """
-Code domain workflow — ``code_full_generation``.
+Code domain workflow — ``code_full_generation`` (human-in-the-loop, resumable).
 
 Wraps the existing synchronous ``CodeGenerationService`` pipeline (requirements
 -> development flow -> document split -> style -> UI previews -> publish) into an
@@ -8,15 +8,26 @@ events, captures the real prompt/response via the service ``on_model_call`` hook
 and writes its output as an artifact. The final business state is still written
 back to the normal ``CodeProject`` / ``CodeDocument`` tables.
 
+**Human-in-the-loop**: a stage in ``REVIEW_STAGES`` pauses the run after it
+produces its document — the run goes ``PAUSED`` and the worker exits. The user
+then either approves (resume → advance to the next stage) or submits an
+adjustment instruction (resume → regenerate that document, fold the instruction
+into the ledger, pause again). This makes the workflow **resumable**: every
+launch rebuilds its state from the persisted progress cursor + ledger + project,
+so it can stop after any reviewed stage and continue later — surviving a closed
+page or a server restart.
+
 A per-run **context ledger** (backend/services/agent/context_ledger.py) is seeded
 at the planner step, injected into every downstream prompt, enriched after each
 step, and verified — deterministically every step plus one AI consistency gate at
 the document-split boundary — so later agents stay on-口径 instead of drifting.
-The ledger is internal / debug-only and never part of user-facing output. See
-docs/agent-context-ledger.md.
+User adjustments at a review gate are recorded into the ledger too, so they carry
+forward into later生成. The ledger is internal / debug-only and never part of
+user-facing output. See docs/agent-context-ledger.md.
 """
 import logging
 import re
+import time
 
 from backend.extensions import db
 from backend.models.agent import (
@@ -25,8 +36,9 @@ from backend.models.agent import (
     AgentEventType,
     AgentRun,
     AgentRunStatus,
+    AgentStep,
 )
-from backend.models.code import CodeDocument, CodeProject, CodeProjectStatus
+from backend.models.code import CodeDocument, CodeProject, CodeProjectStatus, CodeStage
 from backend.services import pricing
 from backend.services.agent.context_ledger import ContextLedger, seed_from_inputs
 from backend.services.agent.context_verifier import (
@@ -35,12 +47,41 @@ from backend.services.agent.context_verifier import (
     run_ai_consistency_gate,
     run_deterministic_checks,
 )
+from backend.services.agent.files import artifact_abs_path
 from backend.services.code import get_code_generation_service
+from backend.services.code.version_service import safe_record_stage_version
 from backend.services.credit_service import charge
 
 logger = logging.getLogger(__name__)
 
 TOTAL_STEPS = 7
+
+# Ordered stages that follow the implicit planner. The planner (project creation
+# + ledger seed) always runs first on a fresh run; ``_TAIL`` is what a resume
+# advances through.
+_TAIL = ["flow", "documents", "style", "preview", "publisher"]
+_STAGE_AFTER = {
+    "requirements": "flow",
+    "flow": "documents",
+    "documents": "style",
+    "style": "preview",
+    "preview": "publisher",
+    "publisher": None,
+}
+
+# Stages that pause for user confirmation before advancing. Every produced
+# document is reviewed: the user approves it (advance) or submits an adjustment
+# (regenerate + fold into the ledger, pause again). The scheduler (fresh path,
+# revise dispatch and _run_from) honours this set generically.
+REVIEW_STAGES = {"requirements", "flow", "documents", "style"}
+
+# Per-stage prompt shown when the run pauses for that stage's review.
+_PAUSE_MESSAGE = {
+    "requirements": "需求文档已生成，请确认或提出调整意见",
+    "flow": "开发流程已生成，请确认或提出调整意见",
+    "documents": "开发文档已拆分，请确认或提出调整意见",
+    "style": "风格文档已生成，请确认或提出调整意见",
+}
 
 # The baseline document types the split step must cover (mirrors the切分原则 in
 # document_split_prompt.txt). Used by the deterministic coverage check.
@@ -95,22 +136,63 @@ def _bullets(text: str, limit: int = 6) -> list:
     return out
 
 
+def _await_artifact_on_disk(artifact, *, attempts: int = 10, interval: float = 0.2) -> bool:
+    """Block until an artifact's on-disk file is present, non-empty and readable.
+
+    The preview step must not (re)generate the next thumbnail until the current
+    one has fully landed on disk. ``save_artifact_file`` writes synchronously, so
+    this normally passes on the first probe; the short poll is a safety net
+    against slow / networked storage. Best-effort — returns True once the bytes
+    are confirmed loadable, False if they never showed up, and never raises.
+    """
+    if not artifact or not artifact.storage_path:
+        return False
+    path = artifact_abs_path(artifact.storage_path)
+    for _ in range(max(1, attempts)):
+        try:
+            if path.exists() and path.stat().st_size > 0:
+                # Touch the first byte to confirm it is actually loadable, not
+                # just a present-but-empty placeholder.
+                with open(path, "rb") as handle:
+                    if handle.read(1):
+                        return True
+        except OSError:
+            pass
+        time.sleep(interval)
+    logger.warning("preview artifact %s not confirmed on disk at %s", artifact.id, path)
+    return False
+
+
 def run_code_workflow(ctx, recorder) -> dict:
-    """Execute the full Code generation pipeline as an agent run."""
+    """Execute the Code generation pipeline as a resumable, review-gated run.
+
+    Launch paths (decided by the run config's one-shot ``_resume`` directive):
+      • fresh  → planner + requirements, then pause at the requirements review gate
+      • revise → regenerate the under-review document from the user instruction,
+                 fold it into the ledger, pause again
+      • approve→ advance from the persisted cursor through the remaining stages
+    """
     service = get_code_generation_service()
-    config = ctx.config or {}
+    config = dict(ctx.config or {})
+    resume = config.get("_resume") or None
 
-    # Resolve inputs from the run config, falling back to an existing project.
+    run = db.session.get(AgentRun, ctx.run_id)
+    prev_progress = run.get_progress() if run else {}
+    completed = int(prev_progress.get("completed_steps", 0))
+    failed = int(prev_progress.get("failed_steps", 0))
+    extra_credits = 0  # per-call context-verify gate charges, surfaced to runtime
+    cursor = prev_progress.get("cursor")  # next stage to run on approve
+
+    # Restore the ledger (resume) or start empty (reseeded at the planner step).
+    ledger = ContextLedger.load(run.get_context_ledger()) if run else ContextLedger.empty()
+
+    # Resolve inputs from the run config, falling back to the bound project.
     existing = None
-    if ctx.resource_id:
-        existing = CodeProject.query.filter_by(
-            id=ctx.resource_id, user_id=ctx.user_id
-        ).first()
-
+    resource_id = ctx.resource_id or (run.resource_id if run else None)
+    if resource_id:
+        existing = CodeProject.query.filter_by(id=resource_id, user_id=ctx.user_id).first()
     requirement = (
-        config.get("requirement")
-        or (existing.requirement_input if existing else "")
-        or ""
+        config.get("requirement") or (existing.requirement_input if existing else "") or ""
     ).strip()
     title = (
         config.get("title") or (existing.title if existing else "") or requirement[:60]
@@ -121,24 +203,22 @@ def run_code_workflow(ctx, recorder) -> dict:
         or []
     )
     want_previews = bool(config.get("generate_previews", True))
-
-    completed = 0
-    failed = 0
-    extra_credits = 0  # per-call context-verify gate charges, surfaced to runtime
     project_id = existing.id if existing else None
-    ledger = ContextLedger.empty()  # reseeded at the planner step
 
-    def progress(current_step: str) -> None:
-        run = db.session.get(AgentRun, ctx.run_id)
-        if run:
-            run.set_progress(
-                {
-                    "total_steps": TOTAL_STEPS,
-                    "completed_steps": completed,
-                    "failed_steps": failed,
-                    "current_step": current_step,
-                }
-            )
+    # --- shared helpers ------------------------------------------------------
+    def progress(current_step: str, *, cursor_stage="__keep__", review_stage="__keep__") -> None:
+        r = db.session.get(AgentRun, ctx.run_id)
+        if r:
+            prog = r.get_progress()
+            prog["total_steps"] = TOTAL_STEPS
+            prog["completed_steps"] = completed
+            prog["failed_steps"] = failed
+            prog["current_step"] = current_step
+            if cursor_stage != "__keep__":
+                prog["cursor"] = cursor_stage
+            if review_stage != "__keep__":
+                prog["review_stage"] = review_stage
+            r.set_progress(prog)
             db.session.commit()
         recorder.emit(
             AgentEventType.PROGRESS,
@@ -148,9 +228,9 @@ def run_code_workflow(ctx, recorder) -> dict:
 
     def persist_ledger() -> None:
         """Persist the current ledger onto the run (the canonical, latest state)."""
-        run = db.session.get(AgentRun, ctx.run_id)
-        if run:
-            run.set_context_ledger(ledger.to_dict())
+        r = db.session.get(AgentRun, ctx.run_id)
+        if r:
+            r.set_context_ledger(ledger.to_dict())
             db.session.commit()
 
     def cancel_result() -> dict:
@@ -165,477 +245,703 @@ def run_code_workflow(ctx, recorder) -> dict:
             "extra_credits": extra_credits,
         }
 
-    # --- Step 1: Planner -----------------------------------------------------
-    with recorder.step(
-        "planner", "规划 Agent", "planner", 1, input_summary=f"需求：{requirement[:200]}"
-    ) as step:
-        if not requirement:
-            raise ValueError("需求为空，无法启动 Code 工作流")
-
-        if existing is None:
-            project = CodeProject(
-                user_id=ctx.user_id,
-                team_id=ctx.team_id,
-                title=title,
-                requirement_input=requirement,
-                status=CodeProjectStatus.REQUIREMENT_READY,
-            )
-            db.session.add(project)
+    def pause_at(stage: str) -> dict:
+        """Mark the run paused for review of ``stage`` and end the worker."""
+        r = db.session.get(AgentRun, ctx.run_id)
+        if r:
+            prog = r.get_progress()
+            prog["total_steps"] = TOTAL_STEPS
+            prog["completed_steps"] = completed
+            prog["failed_steps"] = failed
+            prog["current_step"] = stage
+            prog["review_stage"] = stage
+            prog["cursor"] = _STAGE_AFTER.get(stage)  # where approve resumes
+            r.set_progress(prog)
             db.session.commit()
-        else:
-            project = db.session.get(CodeProject, existing.id)
-            project.requirement_input = requirement
-            if title:
-                project.title = title
-            db.session.commit()
-        project_id = project.id
-
-        # Seed the context ledger from the run inputs (project定位 + default stack).
-        ledger = seed_from_inputs(requirement, project.title, style_ids)
-
-        plan = {
-            "project_id": project_id,
-            "target_documents": [
-                "需求文档",
-                "开发流程",
-                "拆分开发文档",
-                "风格文档",
-                "UI 预览缩略图",
-            ],
-            "selected_styles": style_ids or ["(未选择，默认 minimal-saas)"],
-            "generate_previews": want_previews,
+        recorder.emit(
+            AgentEventType.STEP_AWAITING_REVIEW,
+            message=_PAUSE_MESSAGE.get(stage, "文档已生成，请确认或提出调整意见"),
+            payload={"stage": stage},
+        )
+        return {
+            "status": AgentRunStatus.PAUSED,
+            "resource_id": project_id,
+            "extra_credits": extra_credits,
         }
-        step.add_artifact(
-            AgentArtifactType.JSON, "执行计划", content_json=plan, filename="plan.json"
-        )
-        step.set_context(snapshot={"injected_text": "", "ledger": ledger.to_dict()})
-        step.set_output(
-            output_summary=f"已就绪项目「{project.title}」，规划 {TOTAL_STEPS} 个步骤。",
-            reasoning_summary="先固化需求与目标产物，并初始化上下文共识账本，确保后续每一步口径一致。",
-            decision_notes=(
-                f"风格：{style_ids or '默认 minimal-saas'}；"
-                f"预览图：{'开启' if want_previews else '关闭'}。"
-            ),
-            self_check="需求非空、项目已创建/定位、账本已播种。",
-            next_action="生成需求文档。",
-        )
 
-    # Bind the run to the resolved project + persist the seeded ledger.
-    run = db.session.get(AgentRun, ctx.run_id)
-    run.resource_type = "code_project"
-    run.resource_id = project_id
-    if not run.title:
-        run.title = title
-    run.set_context_ledger(ledger.to_dict())
-    db.session.commit()
-    completed += 1
-    progress("requirements")
+    def _attempt_for(agent_key: str) -> int:
+        """Attempt number for a new step (counts existing same-key steps incl. self)."""
+        return AgentStep.query.filter_by(run_id=ctx.run_id, agent_key=agent_key).count()
 
-    # --- Step 2: Requirements ------------------------------------------------
-    if ctx.is_cancelled():
-        return cancel_result()
-    with recorder.step(
-        "requirements", "需求 Agent", "generator", 2, input_summary=requirement[:500]
-    ) as step:
-        injected = ledger.render_for_prompt()
-        doc = service.stream_requirements(
-            requirement,
-            on_delta=step.model_delta_tracer(),
-            on_model_call=step.model_tracer(),
-            context_ledger=injected,
-        )
-        project = db.session.get(CodeProject, project_id)
-        project.requirements_doc = doc
-        project.status = CodeProjectStatus.REQUIREMENT_READY
-        db.session.commit()
-        step.add_artifact(
-            AgentArtifactType.MARKDOWN,
-            "需求文档",
-            content_text=doc,
-            filename="requirements.md",
-            mime_type="text/markdown",
-            write_file=True,
-            domain_ref_type="code_project",
-            domain_ref_id=project_id,
-        )
-        # Establish the baseline口径 from the requirements doc (best-effort parse).
-        sections = _md_sections(doc)
-        one_liner = _bullets(_section_body(sections, "产品定位", "定位"), 1)
-        ledger.merge(
-            project={
-                "one_liner": one_liner[0] if one_liner else "",
-                "target_users": _bullets(_section_body(sections, "目标用户"), 5),
-                "scope_in": _bullets(_section_body(sections, "功能范围", "功能"), 8),
-            },
-            open_questions=_bullets(_section_body(sections, "待确认", "边界"), 6),
-            provenance_entry={
-                "step": "requirements",
-                "agent_key": "requirements",
-                "fields_touched": ["project", "open_questions"],
-            },
-        )
-        det = run_deterministic_checks(
-            step_key="requirements",
-            ledger=ledger,
-            new_output={"text": doc},
-            expectations={"nonempty_output": True},
-        )
-        emit_context_events(
-            recorder, step, det_result=det, ai_result=None,
-            ledger_after=ledger, injected_text=injected,
-        )
-        step.set_output(
-            output_summary="需求文档已生成。",
-            reasoning_summary="把一句话需求展开为产品定位、目标用户、核心场景、功能范围与待确认问题，并写入共识账本。",
-            self_check=f"文档长度约 {len(doc)} 字符。",
-            next_action="基于需求文档生成开发流程。",
-        )
-    persist_ledger()
-    completed += 1
-    progress("flow")
-
-    # --- Step 3: Development flow --------------------------------------------
-    if ctx.is_cancelled():
-        return cancel_result()
-    with recorder.step(
-        "flow", "开发流程 Agent", "generator", 3, input_summary="基于需求文档生成开发流程"
-    ) as step:
-        project = db.session.get(CodeProject, project_id)
-        injected = ledger.render_for_prompt()
-        flow = service.stream_development_flow(
-            project.requirements_doc,
-            on_delta=step.model_delta_tracer(),
-            on_model_call=step.model_tracer(),
-            context_ledger=injected,
-        )
-        project = db.session.get(CodeProject, project_id)
-        project.development_flow = flow
-        project.status = CodeProjectStatus.FLOW_READY
-        db.session.commit()
-        step.add_artifact(
-            AgentArtifactType.MARKDOWN,
-            "开发流程",
-            content_text=flow,
-            filename="development_flow.md",
-            mime_type="text/markdown",
-            write_file=True,
-            domain_ref_type="code_project",
-            domain_ref_id=project_id,
-        )
-        sections = _md_sections(flow)
-        ledger.merge(
-            tech_stack={"constraints": _bullets(_section_body(sections, "技术假设", "技术"), 6)},
-            provenance_entry={
-                "step": "flow",
-                "agent_key": "flow",
-                "fields_touched": ["tech_stack.constraints"],
-            },
-        )
-        det = run_deterministic_checks(
-            step_key="flow",
-            ledger=ledger,
-            new_output={"text": flow},
-            expectations={"nonempty_output": True, "required_ledger_fields": ["project.one_liner"]},
-        )
-        emit_context_events(
-            recorder, step, det_result=det, ai_result=None,
-            ledger_after=ledger, injected_text=injected,
-        )
-        step.set_output(
-            output_summary="开发流程文档已生成。",
-            reasoning_summary="将需求拆解为技术假设、模块划分、里程碑与验收标准，并把技术假设并入账本约束。",
-            next_action="把需求与流程拆分为可编辑的开发文档。",
-        )
-    persist_ledger()
-    completed += 1
-    progress("documents")
-
-    # --- Step 4: Document split (HIGH-RISK BOUNDARY — AI consistency gate) ---
-    if ctx.is_cancelled():
-        return cancel_result()
-    with recorder.step(
-        "documents", "文档拆分 Agent", "generator", 4, input_summary="基于需求与流程拆分开发文档"
-    ) as step:
-        project = db.session.get(CodeProject, project_id)
-        injected = ledger.render_for_prompt()
-        docs = service.stream_documents(
-            project.requirements_doc,
-            project.development_flow,
-            on_delta=step.model_delta_tracer(),
-            on_model_call=step.model_tracer(),
-            context_ledger=injected,
-        )
-        project = db.session.get(CodeProject, project_id)
-        # NB: project.documents has order_by, so .delete() on it raises under
-        # SQLAlchemy 2.x; delete via a plain query instead.
-        CodeDocument.query.filter_by(project_id=project_id).delete()
-        created = []
-        for item in docs:
-            document = CodeDocument(
-                project_id=project_id,
-                document_type=item["document_type"],
-                title=item["title"],
-                content=item["content"],
-                prompt_expert=item["prompt_expert"],
-                order_index=item["order_index"],
+    # --- stage implementations ----------------------------------------------
+    def _do_planner() -> None:
+        nonlocal project_id, ledger
+        with recorder.step(
+            "planner", "规划 Agent", "planner", 1, input_summary=f"需求：{requirement[:200]}"
+        ) as step:
+            if not requirement:
+                raise ValueError("需求为空，无法启动 Code 工作流")
+            if existing is None:
+                proj = CodeProject(
+                    user_id=ctx.user_id,
+                    team_id=ctx.team_id,
+                    title=title,
+                    requirement_input=requirement,
+                    status=CodeProjectStatus.REQUIREMENT_READY,
+                )
+                db.session.add(proj)
+                db.session.commit()
+            else:
+                proj = db.session.get(CodeProject, existing.id)
+                proj.requirement_input = requirement
+                if title:
+                    proj.title = title
+                db.session.commit()
+            project_id = proj.id
+            ledger = seed_from_inputs(requirement, proj.title, style_ids)
+            plan = {
+                "project_id": project_id,
+                "target_documents": [
+                    "需求文档",
+                    "开发流程",
+                    "拆分开发文档",
+                    "风格文档",
+                    "UI 预览缩略图",
+                ],
+                "selected_styles": style_ids or ["(未选择，默认 minimal-saas)"],
+                "generate_previews": want_previews,
+                "review_gates": sorted(REVIEW_STAGES),
+            }
+            step.add_artifact(
+                AgentArtifactType.JSON, "执行计划", content_json=plan, filename="plan.json"
             )
-            db.session.add(document)
-            created.append(document)
-        project.status = CodeProjectStatus.DOCUMENTS_READY
+            step.set_context(snapshot={"injected_text": "", "ledger": ledger.to_dict()})
+            step.set_output(
+                output_summary=f"已就绪项目「{proj.title}」，规划 {TOTAL_STEPS} 个步骤。",
+                reasoning_summary="先固化需求与目标产物，并初始化上下文共识账本，确保后续每一步口径一致。",
+                decision_notes=(
+                    f"风格：{style_ids or '默认 minimal-saas'}；"
+                    f"预览图：{'开启' if want_previews else '关闭'}；"
+                    f"每个文档生成后需用户确认。"
+                ),
+                self_check="需求非空、项目已创建/定位、账本已播种。",
+                next_action="生成需求文档，交用户确认。",
+            )
+        # Bind the run to the resolved project + persist the seeded ledger.
+        r = db.session.get(AgentRun, ctx.run_id)
+        r.resource_type = "code_project"
+        r.resource_id = project_id
+        if not r.title:
+            r.title = title
+        r.set_context_ledger(ledger.to_dict())
         db.session.commit()
-        for document, item in zip(created, docs):
+
+    def _do_requirements(*, revise: bool, instruction: str = "") -> None:
+        label = "需求修订 Agent" if revise else "需求 Agent"
+        input_summary = (
+            f"按调整意见修订需求：{instruction[:300]}" if revise else requirement[:500]
+        )
+        with recorder.step("requirements", label, "generator", 2, input_summary=input_summary) as step:
+            step.step.attempt = _attempt_for("requirements")
+            db.session.commit()
+            injected = ledger.render_for_prompt()
+            proj = db.session.get(CodeProject, project_id)
+            if revise:
+                doc = service.revise_requirements(
+                    proj.requirements_doc or "",
+                    instruction,
+                    on_delta=step.model_delta_tracer(),
+                    on_model_call=step.model_tracer(),
+                    context_ledger=injected,
+                )
+            else:
+                doc = service.stream_requirements(
+                    requirement,
+                    on_delta=step.model_delta_tracer(),
+                    on_model_call=step.model_tracer(),
+                    context_ledger=injected,
+                )
+            proj = db.session.get(CodeProject, project_id)
+            proj.requirements_doc = doc
+            proj.status = CodeProjectStatus.REQUIREMENT_READY
+            db.session.commit()
+            # Snapshot this product as a new (current) version of the stage.
+            safe_record_stage_version(
+                proj,
+                CodeStage.REQUIREMENTS,
+                run_id=ctx.run_id,
+                step_id=step.id,
+                note=(f"按调整意见修订：{instruction[:200]}" if revise else None),
+            )
             step.add_artifact(
                 AgentArtifactType.MARKDOWN,
-                document.title,
-                content_text=item["content"],
-                filename=f"{item['document_type']}.md",
+                "需求文档（已修订）" if revise else "需求文档",
+                content_text=doc,
+                filename="requirements.md",
                 mime_type="text/markdown",
                 write_file=True,
-                domain_ref_type="code_document",
-                domain_ref_id=document.id,
+                domain_ref_type="code_project",
+                domain_ref_id=project_id,
             )
-
-        # Enrich the ledger glossary with the produced documents.
-        ledger.merge(
-            glossary_add=[
-                {
-                    "term": item["title"],
-                    "definition": f"{item['document_type']} 开发文档",
-                    "source_step": "documents",
-                }
-                for item in docs
-            ],
-            provenance_entry={
-                "step": "documents",
-                "agent_key": "documents",
-                "fields_touched": ["glossary"],
-            },
-        )
-
-        # Deterministic coverage + non-empty checks.
-        det = run_deterministic_checks(
-            step_key="documents",
-            ledger=ledger,
-            new_output={
-                "text": "\n".join(i["content"] for i in docs),
-                "doc_types": [i["document_type"] for i in docs],
-            },
-            expectations={"nonempty_output": True, "doc_types_covered": _BASELINE_DOC_TYPES},
-        )
-
-        # AI consistency gate at this high-risk boundary. Charged per call; never
-        # charged when no provider is configured; the model call deliberately does
-        # NOT use step.model_tracer() so the split prompt/response trace is kept.
-        ai_result = None
-        if not gate_available():
-            recorder.emit(
-                AgentEventType.PROGRESS,
-                step_id=step.id,
-                message="未配置文本模型，跳过上下文一致性 AI 闸门（仅程序化校验）",
+            # Establish / refresh the baseline口径 from the requirements doc.
+            sections = _md_sections(doc)
+            one_liner = _bullets(_section_body(sections, "产品定位", "定位"), 1)
+            ledger.merge(
+                project={
+                    "one_liner": one_liner[0] if one_liner else "",
+                    "target_users": _bullets(_section_body(sections, "目标用户"), 5),
+                    "scope_in": _bullets(_section_body(sections, "功能范围", "功能"), 8),
+                },
+                # Carry the project-appropriate architecture (designed by the
+                # requirements step) forward as consensus constraints so flow /
+                # documents / style build on it instead of re-deciding the stack.
+                # Kept in tech_stack.constraints (not frontend/backend/data) on
+                # purpose: it shapes downstream design口径 without entering the
+                # fingerprint, so the frontend-build consistency gate — whose
+                # runnable preview is always single-file HTML — is never tripped.
+                tech_stack={"constraints": _bullets(_section_body(sections, "技术架构", "架构"), 6)},
+                open_questions=_bullets(_section_body(sections, "待确认", "边界"), 6),
+                provenance_entry={
+                    "step": "requirements_revision" if revise else "requirements",
+                    "agent_key": "requirements",
+                    "fields_touched": ["project", "tech_stack.constraints", "open_questions"],
+                },
             )
-        elif charge(
-            user_id=ctx.user_id,
-            amount=pricing.CODE_CONTEXT_VERIFY,
-            operation="code_context_verify",
-            resource_type="agent_run",
-            resource_id=ctx.run_id,
-            description="context verify @ documents",
-            team_id=ctx.team_id,
-        ):
-            extra_credits += pricing.CODE_CONTEXT_VERIFY
-            summary = "\n".join(
-                f"- {i['title']} ({i['document_type']}): {i['content'][:200]}" for i in docs
+            det = run_deterministic_checks(
+                step_key="requirements",
+                ledger=ledger,
+                new_output={"text": doc},
+                expectations={"nonempty_output": True},
             )
-            ai_result = run_ai_consistency_gate(
-                ledger=ledger, new_product_summary=summary, step_key="documents"
+            emit_context_events(
+                recorder, step, det_result=det, ai_result=None,
+                ledger_after=ledger, injected_text=injected,
             )
-        else:
-            recorder.emit(
-                AgentEventType.WARNING,
-                level=AgentEventLevel.WARNING,
-                step_id=step.id,
-                message="积分不足，本步仅执行程序化上下文校验",
-            )
-
-        emit_context_events(
-            recorder, step, det_result=det, ai_result=ai_result,
-            ledger_after=ledger, injected_text=injected,
-        )
-        step.set_output(
-            output_summary=f"已拆分 {len(created)} 份可编辑开发文档。",
-            reasoning_summary="按产品/开发/前端/后端/提示词/验收等维度切分，每份附提示词专家建议，并对照账本做一致性校验。",
-            self_check=f"生成 {len(created)} 份文档；{det['summary']}。",
-            next_action="根据所选 UI 风格生成风格文档。",
-        )
-    persist_ledger()
-    completed += 1
-    progress("style")
-
-    # --- Step 5: Style -------------------------------------------------------
-    if ctx.is_cancelled():
-        return cancel_result()
-    with recorder.step(
-        "style",
-        "风格 Agent",
-        "generator",
-        5,
-        input_summary=f"风格选择：{style_ids or '默认 minimal-saas'}",
-    ) as step:
-        chosen_styles = style_ids or ["minimal-saas"]
-        project = db.session.get(CodeProject, project_id)
-        injected = ledger.render_for_prompt()
-        style_doc = service.stream_style_prompt(
-            project.requirement_input,
-            chosen_styles,
-            on_delta=step.model_delta_tracer(),
-            on_model_call=step.model_tracer(),
-            context_ledger=injected,
-        )
-        project = db.session.get(CodeProject, project_id)
-        project.set_selected_style_ids(chosen_styles)
-        project.style_prompt = style_doc
-        project.status = CodeProjectStatus.STYLE_READY
-        db.session.commit()
-        step.add_artifact(
-            AgentArtifactType.MARKDOWN,
-            "风格文档",
-            content_text=style_doc,
-            filename="style.md",
-            mime_type="text/markdown",
-            write_file=True,
-            domain_ref_type="code_project",
-            domain_ref_id=project_id,
-        )
-        sections = _md_sections(style_doc)
-        tone = _bullets(_section_body(sections, "UI 基调", "基调", "视觉定位"), 1)
-        ledger.merge(
-            decisions_add=[
-                {
-                    "id": "ui-tone",
-                    "statement": tone[0] if tone else "已确立 UI 风格基调",
-                    "rationale": "风格 Agent 产出，供前端代码生成遵循",
-                    "source_step": "style",
-                }
-            ],
-            constraints_add=[f"UI 风格: {', '.join(str(s) for s in chosen_styles)}"],
-            provenance_entry={
-                "step": "style",
-                "agent_key": "style",
-                "fields_touched": ["decisions", "constraints"],
-            },
-        )
-        det = run_deterministic_checks(
-            step_key="style",
-            ledger=ledger,
-            new_output={"text": style_doc},
-            expectations={"nonempty_output": True},
-        )
-        emit_context_events(
-            recorder, step, det_result=det, ai_result=None,
-            ledger_after=ledger, injected_text=injected,
-        )
-        step.set_output(
-            output_summary="风格文档已生成。",
-            decision_notes=(
-                "使用用户所选风格。" if style_ids else "用户未选风格，默认采用 minimal-saas。"
-            ),
-            next_action="生成 UI 预览缩略图。",
-        )
-    persist_ledger()
-    completed += 1
-    progress("preview")
-
-    # --- Step 6: Preview thumbnails (non-critical) ---------------------------
-    if ctx.is_cancelled():
-        return cancel_result()
-    preview_ok = True
-    with recorder.step(
-        "preview", "预览图 Agent", "generator", 6, input_summary="基于风格文档生成 UI 预览缩略图"
-    ) as step:
-        project = db.session.get(CodeProject, project_id)
-        prompt = (project.style_prompt or "").strip()
-        if not want_previews:
-            step.mark_skipped("配置未开启预览图生成")
-        elif not prompt:
-            step.mark_skipped("缺少风格提示词，跳过预览图")
-        else:
-            recorder.emit(
-                AgentEventType.MODEL_REQUEST,
-                step_id=step.id,
-                message="请求生成 UI 预览图",
-                payload={"prompt": prompt},
-            )
+            # Generate the clarification questionnaire that drives the front-end
+            # quick-confirm dialog at this review gate. It is delivered purely as a
+            # JSON artifact on this step (no new CodeProject column, so no schema
+            # migration) — the front-end reads it from the run snapshot. Best-effort:
+            # a questionnaire hiccup must never fail the (already persisted) doc. Runs
+            # for both fresh and revised docs so each round reflects what is still
+            # open. Uses no model tracer so it doesn't overwrite the step's doc
+            # prompt/response.
+            clarify_count = 0
             try:
-                images = service.generate_preview_images(prompt, count=2)
-            except RuntimeError as error:
-                preview_ok = False
-                failed += 1
-                step.mark_failed(str(error))
-            else:
-                project = db.session.get(CodeProject, project_id)
-                project.set_preview_images(images)
-                project.status = CodeProjectStatus.PREVIEW_READY
-                db.session.commit()
-                recorder.emit(
-                    AgentEventType.MODEL_RESPONSE,
-                    step_id=step.id,
-                    message=f"生成 {len(images)} 张预览图",
-                    payload={"count": len(images)},
+                questions = service.generate_clarifications(
+                    requirement, doc, context_ledger=injected
                 )
-                for image in images:
+                clarify_count = len(questions)
+                if questions:
                     step.add_artifact(
-                        AgentArtifactType.IMAGE,
-                        image.get("id", "预览图"),
-                        preview_url=image.get("url"),
-                        mime_type="image/png",
+                        AgentArtifactType.JSON,
+                        "需求澄清问卷",
+                        content_json={"questions": questions},
+                        filename="requirements_questions.json",
                         domain_ref_type="code_project",
                         domain_ref_id=project_id,
                     )
-                step.set_output(
-                    output_summary=f"已生成 {len(images)} 张 UI 预览缩略图。",
-                    next_action="在 Code 工作台选择并确认 UI 基调。",
+                recorder.emit(
+                    AgentEventType.PROGRESS,
+                    step_id=step.id,
+                    message=f"生成 {clarify_count} 个需求澄清问题，供用户快速确认",
+                    payload={"stage": "requirements", "clarify_count": clarify_count},
                 )
-        # Continuity snapshot so the Context tab shows the ledger at every step.
-        step.set_context(snapshot={"injected_text": "", "ledger": ledger.to_dict()})
-    # Count the preview step as completed only when it succeeded or was
-    # intentionally skipped; a failed preview is already counted in `failed`.
-    if preview_ok:
-        completed += 1
-    progress("publish")
+            except Exception:  # noqa: BLE001 — questionnaire is auxiliary, never fatal
+                logger.warning("requirements clarification generation failed", exc_info=True)
+                db.session.rollback()
+            step.set_output(
+                output_summary="需求文档已根据调整重新生成，请再次确认。" if revise
+                else "需求文档已生成，请确认或提出调整意见。",
+                reasoning_summary="把需求展开为产品定位、目标用户、核心场景、功能范围、贴合该项目的技术架构与待确认问题，并写入共识账本。",
+                self_check=f"文档长度约 {len(doc)} 字符；生成 {clarify_count} 个澄清问题。",
+                next_action="等待用户确认；确认后生成开发流程。",
+            )
 
-    # --- Step 7: Publisher ---------------------------------------------------
-    with recorder.step(
-        "publisher", "发布 Agent", "publisher", 7, input_summary="汇总并发布项目状态"
-    ) as step:
-        project = db.session.get(CodeProject, project_id)
-        step.add_artifact(
-            AgentArtifactType.JSON,
-            "项目快照",
-            content_json=project.to_dict(include_documents=True),
-            filename="project.json",
+    def _do_flow(*, revise: bool = False, instruction: str = "") -> None:
+        label = "开发流程修订 Agent" if revise else "开发流程 Agent"
+        input_summary = (
+            f"按调整意见修订流程：{instruction[:300]}" if revise else "基于需求文档生成开发流程"
         )
-        # Durable record of the final consensus ledger (debug / audit).
-        step.add_artifact(
-            AgentArtifactType.JSON,
-            "上下文账本（最终）",
-            content_json=ledger.to_dict(),
-            filename="context_ledger.json",
-            domain_ref_type="code_project",
-            domain_ref_id=project_id,
+        with recorder.step("flow", label, "generator", 3, input_summary=input_summary) as step:
+            step.step.attempt = _attempt_for("flow")
+            db.session.commit()
+            proj = db.session.get(CodeProject, project_id)
+            injected = ledger.render_for_prompt()
+            if revise:
+                flow = service.revise_development_flow(
+                    proj.development_flow or "",
+                    instruction,
+                    on_delta=step.model_delta_tracer(),
+                    on_model_call=step.model_tracer(),
+                    context_ledger=injected,
+                )
+            else:
+                flow = service.stream_development_flow(
+                    proj.requirements_doc,
+                    on_delta=step.model_delta_tracer(),
+                    on_model_call=step.model_tracer(),
+                    context_ledger=injected,
+                )
+            proj = db.session.get(CodeProject, project_id)
+            proj.development_flow = flow
+            proj.status = CodeProjectStatus.FLOW_READY
+            db.session.commit()
+            safe_record_stage_version(
+                proj, CodeStage.FLOW, run_id=ctx.run_id, step_id=step.id,
+                note=(f"按调整意见修订：{instruction[:200]}" if revise else None),
+            )
+            step.add_artifact(
+                AgentArtifactType.MARKDOWN,
+                "开发流程",
+                content_text=flow,
+                filename="development_flow.md",
+                mime_type="text/markdown",
+                write_file=True,
+                domain_ref_type="code_project",
+                domain_ref_id=project_id,
+            )
+            sections = _md_sections(flow)
+            ledger.merge(
+                tech_stack={"constraints": _bullets(_section_body(sections, "技术假设", "技术"), 6)},
+                provenance_entry={
+                    "step": "flow_revision" if revise else "flow",
+                    "agent_key": "flow",
+                    "fields_touched": ["tech_stack.constraints"],
+                },
+            )
+            det = run_deterministic_checks(
+                step_key="flow",
+                ledger=ledger,
+                new_output={"text": flow},
+                expectations={"nonempty_output": True, "required_ledger_fields": ["project.one_liner"]},
+            )
+            emit_context_events(
+                recorder, step, det_result=det, ai_result=None,
+                ledger_after=ledger, injected_text=injected,
+            )
+            step.set_output(
+                output_summary="开发流程已根据调整重新生成，请再次确认。" if revise
+                else "开发流程文档已生成，请确认或提出调整意见。",
+                reasoning_summary="将需求拆解为技术假设、模块划分、里程碑与验收标准，并把技术假设并入账本约束。",
+                next_action="等待用户确认；确认后拆分开发文档。",
+            )
+
+    def _do_documents(*, revise: bool = False, instruction: str = "") -> None:
+        nonlocal extra_credits
+        label = "文档拆分修订 Agent" if revise else "文档拆分 Agent"
+        input_summary = (
+            f"按调整意见修订文档：{instruction[:300]}" if revise else "基于需求与流程拆分开发文档"
         )
-        step.set_context(snapshot={"injected_text": "", "ledger": ledger.to_dict()})
-        step.set_output(
-            output_summary=f"项目「{project.title}」已发布，当前状态 {project.status}。",
-            reasoning_summary="所有产物已写回 CodeProject / CodeDocument，上下文账本已固化，可在 Code 工作台继续编辑。",
-            self_check=(
-                f"需求/流程/文档({project.documents.count()})/风格 均已生成；"
-                f"预览图 {'成功' if preview_ok else '失败或跳过'}。"
-            ),
-            next_action="在 Code 工作台确认 UI 基调。",
+        with recorder.step("documents", label, "generator", 4, input_summary=input_summary) as step:
+            step.step.attempt = _attempt_for("documents")
+            db.session.commit()
+            proj = db.session.get(CodeProject, project_id)
+            injected = ledger.render_for_prompt()
+            if revise:
+                current_docs = [
+                    {
+                        "document_type": d.document_type,
+                        "title": d.title,
+                        "content": d.content,
+                        "prompt_expert": d.prompt_expert,
+                        "order_index": d.order_index,
+                    }
+                    for d in proj.documents.all()
+                ]
+                docs = service.revise_documents(
+                    proj.requirements_doc,
+                    proj.development_flow,
+                    current_docs,
+                    instruction,
+                    on_delta=step.model_delta_tracer(),
+                    on_model_call=step.model_tracer(),
+                    context_ledger=injected,
+                )
+            else:
+                docs = service.stream_documents(
+                    proj.requirements_doc,
+                    proj.development_flow,
+                    on_delta=step.model_delta_tracer(),
+                    on_model_call=step.model_tracer(),
+                    context_ledger=injected,
+                )
+            # NB: project.documents has order_by, so .delete() on it raises under
+            # SQLAlchemy 2.x; delete via a plain query instead.
+            CodeDocument.query.filter_by(project_id=project_id).delete()
+            created = []
+            for item in docs:
+                document = CodeDocument(
+                    project_id=project_id,
+                    document_type=item["document_type"],
+                    title=item["title"],
+                    content=item["content"],
+                    prompt_expert=item["prompt_expert"],
+                    order_index=item["order_index"],
+                )
+                db.session.add(document)
+                created.append(document)
+            proj = db.session.get(CodeProject, project_id)
+            proj.status = CodeProjectStatus.DOCUMENTS_READY
+            db.session.commit()
+            safe_record_stage_version(
+                proj, CodeStage.DOCUMENTS, run_id=ctx.run_id, step_id=step.id
+            )
+            for document, item in zip(created, docs):
+                step.add_artifact(
+                    AgentArtifactType.MARKDOWN,
+                    document.title,
+                    content_text=item["content"],
+                    filename=f"{item['document_type']}.md",
+                    mime_type="text/markdown",
+                    write_file=True,
+                    domain_ref_type="code_document",
+                    domain_ref_id=document.id,
+                )
+            ledger.merge(
+                glossary_add=[
+                    {
+                        "term": item["title"],
+                        "definition": f"{item['document_type']} 开发文档",
+                        "source_step": "documents",
+                    }
+                    for item in docs
+                ],
+                provenance_entry={
+                    "step": "documents_revision" if revise else "documents",
+                    "agent_key": "documents",
+                    "fields_touched": ["glossary"],
+                },
+            )
+            det = run_deterministic_checks(
+                step_key="documents",
+                ledger=ledger,
+                new_output={
+                    "text": "\n".join(i["content"] for i in docs),
+                    "doc_types": [i["document_type"] for i in docs],
+                },
+                expectations={"nonempty_output": True, "doc_types_covered": _BASELINE_DOC_TYPES},
+            )
+            # AI consistency gate at this high-risk boundary. Charged per call;
+            # never charged when no provider is configured.
+            ai_result = None
+            if not gate_available():
+                recorder.emit(
+                    AgentEventType.PROGRESS,
+                    step_id=step.id,
+                    message="未配置文本模型，跳过上下文一致性 AI 闸门（仅程序化校验）",
+                )
+            elif charge(
+                user_id=ctx.user_id,
+                amount=pricing.CODE_CONTEXT_VERIFY,
+                operation="code_context_verify",
+                resource_type="agent_run",
+                resource_id=ctx.run_id,
+                description="context verify @ documents",
+                team_id=ctx.team_id,
+            ):
+                extra_credits += pricing.CODE_CONTEXT_VERIFY
+                summary = "\n".join(
+                    f"- {i['title']} ({i['document_type']}): {i['content'][:200]}" for i in docs
+                )
+                ai_result = run_ai_consistency_gate(
+                    ledger=ledger, new_product_summary=summary, step_key="documents"
+                )
+            else:
+                recorder.emit(
+                    AgentEventType.WARNING,
+                    level=AgentEventLevel.WARNING,
+                    step_id=step.id,
+                    message="积分不足，本步仅执行程序化上下文校验",
+                )
+            emit_context_events(
+                recorder, step, det_result=det, ai_result=ai_result,
+                ledger_after=ledger, injected_text=injected,
+            )
+            step.set_output(
+                output_summary=(
+                    f"已按调整重新拆分 {len(created)} 份开发文档，请再次确认。" if revise
+                    else f"已拆分 {len(created)} 份可编辑开发文档，请确认或提出调整意见。"
+                ),
+                reasoning_summary="按产品/开发/前端/后端/提示词/验收等维度切分，每份附提示词专家建议，并对照账本做一致性校验。",
+                self_check=f"生成 {len(created)} 份文档；{det['summary']}。",
+                next_action="等待用户确认；确认后生成风格文档。",
+            )
+
+    def _do_style(*, revise: bool = False, instruction: str = "") -> None:
+        label = "风格修订 Agent" if revise else "风格 Agent"
+        input_summary = (
+            f"按调整意见修订风格：{instruction[:300]}" if revise
+            else f"风格选择：{style_ids or '默认 minimal-saas'}"
         )
-    persist_ledger()
+        with recorder.step("style", label, "generator", 5, input_summary=input_summary) as step:
+            step.step.attempt = _attempt_for("style")
+            db.session.commit()
+            chosen_styles = style_ids or ["minimal-saas"]
+            proj = db.session.get(CodeProject, project_id)
+            injected = ledger.render_for_prompt()
+            if revise:
+                style_doc = service.revise_style_prompt(
+                    proj.style_prompt or "",
+                    instruction,
+                    on_delta=step.model_delta_tracer(),
+                    on_model_call=step.model_tracer(),
+                    context_ledger=injected,
+                )
+            else:
+                style_doc = service.stream_style_prompt(
+                    proj.requirement_input,
+                    chosen_styles,
+                    on_delta=step.model_delta_tracer(),
+                    on_model_call=step.model_tracer(),
+                    context_ledger=injected,
+                )
+            proj = db.session.get(CodeProject, project_id)
+            proj.set_selected_style_ids(chosen_styles)
+            proj.style_prompt = style_doc
+            proj.status = CodeProjectStatus.STYLE_READY
+            db.session.commit()
+            safe_record_stage_version(
+                proj, CodeStage.STYLE, run_id=ctx.run_id, step_id=step.id,
+                note=(f"按调整意见修订：{instruction[:200]}" if revise else None),
+            )
+            step.add_artifact(
+                AgentArtifactType.MARKDOWN,
+                "风格文档",
+                content_text=style_doc,
+                filename="style.md",
+                mime_type="text/markdown",
+                write_file=True,
+                domain_ref_type="code_project",
+                domain_ref_id=project_id,
+            )
+            sections = _md_sections(style_doc)
+            tone = _bullets(_section_body(sections, "UI 基调", "基调", "视觉定位"), 1)
+            ledger.merge(
+                decisions_add=[
+                    {
+                        "id": "ui-tone",
+                        "statement": tone[0] if tone else "已确立 UI 风格基调",
+                        "rationale": "风格 Agent 产出，供前端代码生成遵循",
+                        "source_step": "style",
+                    }
+                ],
+                constraints_add=[f"UI 风格: {', '.join(str(s) for s in chosen_styles)}"],
+                provenance_entry={
+                    "step": "style_revision" if revise else "style",
+                    "agent_key": "style",
+                    "fields_touched": ["decisions", "constraints"],
+                },
+            )
+            det = run_deterministic_checks(
+                step_key="style",
+                ledger=ledger,
+                new_output={"text": style_doc},
+                expectations={"nonempty_output": True},
+            )
+            emit_context_events(
+                recorder, step, det_result=det, ai_result=None,
+                ledger_after=ledger, injected_text=injected,
+            )
+            step.set_output(
+                output_summary="风格文档已根据调整重新生成，请再次确认。" if revise
+                else "风格文档已生成，请确认或提出调整意见。",
+                decision_notes=(
+                    "使用用户所选风格。" if style_ids else "用户未选风格，默认采用 minimal-saas。"
+                ),
+                next_action="等待用户确认；确认后生成 UI 预览缩略图。",
+            )
+
+    def _do_preview() -> bool:
+        nonlocal failed
+        preview_ok = True
+        with recorder.step(
+            "preview", "预览图 Agent", "generator", 6, input_summary="基于风格文档生成 UI 预览缩略图"
+        ) as step:
+            proj = db.session.get(CodeProject, project_id)
+            prompt = (proj.style_prompt or "").strip()
+            if not want_previews:
+                step.mark_skipped("配置未开启预览图生成")
+            elif not prompt:
+                step.mark_skipped("缺少风格提示词，跳过预览图")
+            else:
+                recorder.emit(
+                    AgentEventType.MODEL_REQUEST,
+                    step_id=step.id,
+                    message="请求生成 UI 预览图",
+                    payload={"prompt": prompt},
+                )
+                def _persist_preview(index: int, image: dict, image_bytes: bytes) -> None:
+                    """Write one thumbnail to disk + a compact file URL.
+
+                    The raw PNG goes to disk (``storage_path``) and ``preview_url``
+                    holds only the short ``/file`` route — NOT the ~1.7MB base64
+                    data URL, which overflows preview_url's varchar(1000) and used
+                    to abort the whole run. We then block until the file is
+                    back-readable, so the generator only advances to the next
+                    thumbnail once this one has truly landed on disk.
+                    """
+                    title = image.get("id") or f"预览图-{index + 1}"
+                    artifact = step.add_artifact(
+                        AgentArtifactType.IMAGE,
+                        title,
+                        filename=f"{title}.png",
+                        mime_type="image/png",
+                        write_file=True,
+                        content_bytes=image_bytes,
+                        domain_ref_type="code_project",
+                        domain_ref_id=project_id,
+                    )
+                    artifact.preview_url = f"/api/agent/artifacts/{artifact.id}/file"
+                    db.session.commit()
+                    _await_artifact_on_disk(artifact)
+
+                try:
+                    images = service.generate_preview_images(
+                        prompt, count=2, on_image=_persist_preview
+                    )
+                except RuntimeError as error:
+                    preview_ok = False
+                    failed += 1
+                    step.mark_failed(str(error))
+                else:
+                    proj = db.session.get(CodeProject, project_id)
+                    # The project keeps the inline base64 data URLs so the Code
+                    # workspace <img> previews render without an auth round-trip;
+                    # the disk-backed artifacts (above) are what the run timeline
+                    # serves. preview_images_raw is a Text column, so the base64
+                    # fits there — only the artifact's varchar preview_url did not.
+                    proj.set_preview_images(images)
+                    proj.status = CodeProjectStatus.PREVIEW_READY
+                    db.session.commit()
+                    safe_record_stage_version(
+                        proj, CodeStage.PREVIEW, run_id=ctx.run_id, step_id=step.id
+                    )
+                    recorder.emit(
+                        AgentEventType.MODEL_RESPONSE,
+                        step_id=step.id,
+                        message=f"生成 {len(images)} 张预览图",
+                        payload={"count": len(images)},
+                    )
+                    step.set_output(
+                        output_summary=f"已生成 {len(images)} 张 UI 预览缩略图。",
+                        next_action="在 Code 工作台选择并确认 UI 基调。",
+                    )
+            step.set_context(snapshot={"injected_text": "", "ledger": ledger.to_dict()})
+        return preview_ok
+
+    def _do_publisher(preview_ok: bool) -> None:
+        with recorder.step(
+            "publisher", "发布 Agent", "publisher", 7, input_summary="汇总并发布项目状态"
+        ) as step:
+            proj = db.session.get(CodeProject, project_id)
+            step.add_artifact(
+                AgentArtifactType.JSON,
+                "项目快照",
+                content_json=proj.to_dict(include_documents=True),
+                filename="project.json",
+            )
+            step.add_artifact(
+                AgentArtifactType.JSON,
+                "上下文账本（最终）",
+                content_json=ledger.to_dict(),
+                filename="context_ledger.json",
+                domain_ref_type="code_project",
+                domain_ref_id=project_id,
+            )
+            step.set_context(snapshot={"injected_text": "", "ledger": ledger.to_dict()})
+            step.set_output(
+                output_summary=f"项目「{proj.title}」已发布，当前状态 {proj.status}。",
+                reasoning_summary="所有产物已写回 CodeProject / CodeDocument，上下文账本已固化，可在 Code 工作台继续编辑。",
+                self_check=(
+                    f"需求/流程/文档({proj.documents.count()})/风格 均已生成；"
+                    f"预览图 {'成功' if preview_ok else '失败或跳过'}。"
+                ),
+                next_action="在 Code 工作台确认 UI 基调。",
+            )
+
+    def _run_from(start_stage: str) -> dict:
+        """Run the tail stages from ``start_stage`` to the end (pausing at gates)."""
+        nonlocal completed
+        preview_ok = True
+        try:
+            start_idx = _TAIL.index(start_stage)
+        except ValueError:
+            start_idx = 0
+        for stage in _TAIL[start_idx:]:
+            if ctx.is_cancelled():
+                return cancel_result()
+            if stage == "flow":
+                _do_flow()
+                completed += 1
+            elif stage == "documents":
+                _do_documents()
+                completed += 1
+            elif stage == "style":
+                _do_style()
+                completed += 1
+            elif stage == "preview":
+                preview_ok = _do_preview()
+                if preview_ok:
+                    completed += 1
+            elif stage == "publisher":
+                _do_publisher(preview_ok)
+                completed += 1
+            persist_ledger()
+            nxt = _STAGE_AFTER.get(stage)
+            progress(nxt or "done", cursor_stage=nxt)
+            # Future-proof: pause here if this stage is a review gate.
+            if stage in REVIEW_STAGES:
+                return pause_at(stage)
+        status = AgentRunStatus.COMPLETED if preview_ok else AgentRunStatus.PARTIAL
+        return {"status": status, "resource_id": project_id, "extra_credits": extra_credits}
+
+    # --- scheduler -----------------------------------------------------------
+    # Consume the one-shot resume directive so a future relaunch never repeats it.
+    if resume and run:
+        cfg = run.get_config()
+        cfg.pop("_resume", None)
+        run.set_config(cfg)
+        db.session.commit()
+
+    # REVISE: regenerate the document under review, then pause again.
+    if resume and resume.get("action") == "revise":
+        stage = resume.get("stage") or "requirements"
+        instruction = (resume.get("instruction") or "").strip()
+        recorder.emit(
+            AgentEventType.USER_REVISION,
+            message=f"收到调整意见：{instruction}",
+            payload={"stage": stage, "instruction": instruction},
+        )
+        ledger.record_user_revision(stage, instruction)
+        persist_ledger()
+        revise_fn = {
+            "requirements": _do_requirements,
+            "flow": _do_flow,
+            "documents": _do_documents,
+            "style": _do_style,
+        }.get(stage)
+        if revise_fn is None:
+            raise ValueError(f"stage 不支持调整: {stage}")
+        revise_fn(revise=True, instruction=instruction)
+        persist_ledger()
+        return pause_at(stage)
+
+    # APPROVE: advance from the persisted cursor through the remaining stages.
+    if resume and resume.get("action") == "approve":
+        recorder.emit(
+            AgentEventType.REVIEW_RESOLVED,
+            message="已确认，继续后续生成",
+            payload={"stage": prev_progress.get("review_stage")},
+        )
+        return _run_from(cursor or "flow")
+
+    # FRESH: planner + requirements, then pause for the first review.
+    _do_planner()
     completed += 1
-    progress("done")
-
-    status = AgentRunStatus.COMPLETED if preview_ok else AgentRunStatus.PARTIAL
-    return {"status": status, "resource_id": project_id, "extra_credits": extra_credits}
+    progress("requirements", cursor_stage="requirements", review_stage=None)
+    if ctx.is_cancelled():
+        return cancel_result()
+    _do_requirements(revise=False)
+    completed += 1
+    persist_ledger()
+    return pause_at("requirements")

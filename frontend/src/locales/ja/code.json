@@ -50,6 +50,7 @@
     "confirmed": "確定済み",
     "empty": "スタイルを選択して生成すると、サムネイルがここに表示されます。",
     "imageAlt": "アプリサムネイル",
+    "generating": "サムネイルを生成中…",
     "skipped": "サムネイル生成サービスを利用できないため、スタイルプロンプトを UI 基準としてフロントエンド開発に進みます。"
   },
   "baseline": {
@@ -58,6 +59,16 @@
   "toast": {
     "saved": "プロジェクトを保存しました",
     "documentSaved": "文書を保存しました"
+  },
+  "partialRevise": {
+    "hint": "{{count}} 文字を選択中 · この部分のみ修正します",
+    "placeholder": "この部分をどう変えますか？",
+    "submit": "修正",
+    "cancel": "キャンセル",
+    "applying": "修正中…",
+    "applied": "選択部分を更新しました",
+    "unchanged": "変更はありませんでした",
+    "failed": "部分修正に失敗しました"
   },
   "workspace": {
     "previewTitle": "リアルタイムプレビュー",
@@ -81,6 +92,70 @@
       "documents": "開発文書",
       "style": "UI スタイル",
       "app": "アプリプレビュー"
+    }
+  },
+  "conversation": {
+    "title": "会話",
+    "intro": "作りたいプロダクトを説明してください。まず要件定義書を作成し、各ステップで確認してから次へ進みます。",
+    "generating": "生成中…",
+    "awaitingHint": "このステップの生成内容を展開して確認してください。問題なければ「承認」で次へ、調整は下に入力してください。",
+    "reviseLabel": "どこを調整しますか？",
+    "revisePlaceholder": "このステップの調整内容を教えてください。例：ある部分を変更、不足を補う、方向や表現を調整…",
+    "approve": "承認して次へ",
+    "revise": "調整を送信",
+    "start": "生成を開始",
+    "running": "生成中です。お待ちください…",
+    "resolved": "確認しました。次へ進みます",
+    "completedTitle": "プロダクトが完成しました",
+    "completedHint": "各ステップを展開して確認・編集できます。新しいセッションも開始できます。",
+    "failed": "生成に失敗しました。要件を調整して再試行してください。",
+    "retry": "再試行",
+    "newSession": "新しいセッション",
+    "liveLabel": "リアルタイム生成中…",
+    "generatingStage": "{{stage}} を生成中",
+    "reviewBadge": "確認待ち",
+    "doneBadge": "完了",
+    "cardReviewHint": "内容を確認し、承認するか下で調整を指示してください",
+    "cardDoneHint": "完了 · 展開して確認・編集",
+    "appCardHint": "プレビュー可能なフロントエンドアプリを生成"
+  },
+  "clarify": {
+    "title": "要件のクイック確認",
+    "subtitle": "重要な決定を質問ごとに確認します。変更しなかった項目は推奨値が採用され、回答に基づいて要件ドキュメントを再生成します。",
+    "empty": "確認が必要な重要な質問はありません。",
+    "openButton": "要件をクイック確認（{{count}} 件）",
+    "apply": "確定して要件に反映",
+    "applySuggestions": "すべて推奨を採用",
+    "suggestedBadge": "推奨",
+    "customPlaceholder": "その他（自由入力）…"
+  },
+  "versions": {
+    "button": "履歴",
+    "styleHistory": "スタイル履歴",
+    "previewHistory": "プレビュー履歴",
+    "title": "バージョン履歴",
+    "current": "現在",
+    "empty": "履歴はまだありません",
+    "restore": "このバージョンに戻す",
+    "restored": "このバージョンに復元しました",
+    "restoreFailed": "復元に失敗しました",
+    "loadFailed": "履歴の読み込みに失敗しました",
+    "versionLabel": "バージョン {{n}}",
+    "selectHint": "左側のバージョンを選択して内容を確認",
+    "noContent": "このバージョンには内容がありません",
+    "source": {
+      "generated": "AI 生成",
+      "manual_edit": "手動編集",
+      "partial_revision": "部分修正",
+      "rollback": "ロールバック",
+      "import": "初期バージョン"
+    },
+    "stage": {
+      "requirements": "要件定義書",
+      "flow": "開発フロー",
+      "documents": "開発ドキュメント",
+      "style": "スタイル",
+      "preview": "プレビュー"
     }
   }
 }

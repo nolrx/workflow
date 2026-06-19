@@ -8,7 +8,8 @@
       "Bash(.venv/bin/python -c \"from backend.services import pricing, credit_service; print\\('CODE total =', pricing.CODE_FULL_GENERATION_TOTAL\\); print\\('OPERATION keys =', list\\(pricing.OPERATION\\)\\); print\\('charge ok =', callable\\(credit_service.charge\\)\\); print\\('refund ok =', callable\\(credit_service.refund_credits\\)\\)\")",
       "Read(//home/ubuntu/.local/bin/**)",
       "Bash(find / -name uv -type f)",
-      "Bash(python3 -c \"import anthropic, openai, dotenv; from google import genai; print\\('OK anthropic', anthropic.__version__, '| openai', openai.__version__, '| genai', genai.__version__\\)\")"
+      "Bash(python3 -c \"import anthropic, openai, dotenv; from google import genai; print\\('OK anthropic', anthropic.__version__, '| openai', openai.__version__, '| genai', genai.__version__\\)\")",
+      "Bash(python3 *)"
     ]
   }
 }

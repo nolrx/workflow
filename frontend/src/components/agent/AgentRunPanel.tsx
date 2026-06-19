@@ -1,12 +1,5 @@
 import { useTranslation } from "react-i18next"
-import {
-  CheckCircle2,
-  Circle,
-  Loader2,
-  MinusCircle,
-  X,
-  XCircle,
-} from "lucide-react"
+import { CheckCircle2, Circle, Loader2, MinusCircle, XCircle } from "lucide-react"
 import { toast } from "sonner"
 
 import type { AgentArtifact, AgentRunStatus, AgentStepStatus } from "@/api/agent"
@@ -14,7 +7,12 @@ import { agentApi } from "@/api/agent"
 import { ArtifactViewer } from "@/components/agent/ArtifactViewer"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Progress } from "@/components/ui/progress"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useStickToBottom } from "@/hooks/use-stick-to-bottom"
@@ -27,6 +25,7 @@ const RUN_STATUS_VARIANT: Record<
 > = {
   queued: "secondary",
   running: "secondary",
+  paused: "default",
   completed: "default",
   partial: "secondary",
   failed: "destructive",
@@ -139,13 +138,16 @@ export function AgentRunPanel() {
         className="flex h-[85vh] w-[95vw] max-w-6xl flex-col gap-0 overflow-hidden p-0"
         onInteractOutside={(event) => event.preventDefault()}
       >
+        <DialogDescription className="sr-only">{t("panel.title")}</DialogDescription>
         {/* Header */}
         <div className="flex flex-col gap-3 border-b px-5 py-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          {/* pr-9 reserves room for DialogContent's built-in corner close (X),
+              so it never overlaps these controls — and we don't add a second X. */}
+          <div className="flex flex-wrap items-center justify-between gap-3 pr-9">
             <div className="flex min-w-0 items-center gap-2">
-              <h2 className="truncate text-lg font-semibold">
+              <DialogTitle className="truncate text-lg font-semibold">
                 {run.title || t("panel.title")}
-              </h2>
+              </DialogTitle>
               <Badge variant={RUN_STATUS_VARIANT[run.status]}>
                 {t(`status.${run.status}`, { defaultValue: run.status })}
               </Badge>
@@ -166,9 +168,6 @@ export function AgentRunPanel() {
                   {t("panel.cancel")}
                 </Button>
               )}
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={closePanel}>
-                <X className="h-4 w-4" />
-              </Button>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -184,14 +183,14 @@ export function AgentRunPanel() {
           )}
         </div>
 
-        {/* Body: steps | timeline | detail */}
-        <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[220px_minmax(0,1fr)_360px]">
+        {/* Body: steps | timeline | detail — stacked on small screens, 3 columns on lg+ */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:grid lg:grid-cols-[200px_minmax(0,1fr)_340px]">
           {/* Steps */}
-          <div className="flex min-h-0 flex-col border-r">
+          <div className="flex min-h-0 shrink-0 flex-col border-b lg:border-b-0 lg:border-r">
             <div className="border-b px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               {t("panel.steps")}
             </div>
-            <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
+            <div className="min-h-0 max-h-40 flex-1 space-y-1 overflow-y-auto p-2 lg:max-h-none">
               {steps.map((step) => (
                 <button
                   key={step.id}
@@ -199,6 +198,7 @@ export function AgentRunPanel() {
                   onClick={() => selectStep(step.id)}
                   className={cn(
                     "flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left text-sm transition-colors",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
                     selectedStepId === step.id
                       ? "border-primary bg-primary/10"
                       : "border-transparent hover:bg-muted"
@@ -222,11 +222,11 @@ export function AgentRunPanel() {
           </div>
 
           {/* Timeline */}
-          <div className="flex min-h-0 flex-col border-r">
+          <div className="flex min-h-0 shrink-0 flex-col border-b lg:border-b-0 lg:border-r">
             <div className="border-b px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               {t("panel.timeline")}
             </div>
-            <div ref={timelineRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+            <div ref={timelineRef} className="min-h-0 max-h-60 flex-1 space-y-2 overflow-y-auto p-3 lg:max-h-none">
               {events.map((event) => (
                 <div key={event.id} className="flex gap-2 text-sm">
                   <span
@@ -259,7 +259,7 @@ export function AgentRunPanel() {
           </div>
 
           {/* Detail */}
-          <div className="flex min-h-0 flex-col">
+          <div className="flex min-h-0 flex-1 flex-col">
             <div className="border-b px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               {t("panel.detail")}
             </div>

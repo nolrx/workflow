@@ -5,8 +5,25 @@ from flask import Blueprint, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from backend.extensions import db
-from backend.models.code import CodeDocument, CodeProject, CodeProjectStatus
+from backend.models.agent.run import AgentRun
+from backend.models.code import (
+    CodeDocument,
+    CodeProject,
+    CodeProjectStatus,
+    CodeStage,
+    CodeStageVersionSource,
+)
+from backend.services import pricing
+from backend.services.agent.context_ledger import ContextLedger
 from backend.services.code import get_code_generation_service, list_styles
+from backend.services.code.version_service import (
+    activate_stage_version,
+    get_stage_version,
+    list_stage_versions,
+    record_versions_for_fields,
+    safe_record_stage_version,
+)
+from backend.services.credit_service import charge, refund_credits
 from backend.services.prompt_library import (
     PROMPT_RECIPE_EXAMPLES,
     PROMPT_RECIPES,
@@ -131,6 +148,7 @@ def create_project():
     )
     db.session.add(project)
     db.session.commit()
+    safe_record_stage_version(project, CodeStage.REQUIREMENTS)
     return success_response({"project": project.to_dict()}, "项目已创建", 201)
 
 
@@ -153,18 +171,24 @@ def update_project(project_id: str):
         return error_response("NOT_FOUND", "项目不存在", 404)
 
     data = request.get_json() or {}
-    for field in (
-        "title",
-        "requirement_input",
-        "requirements_doc",
-        "development_flow",
-        "style_prompt",
-        "ui_baseline_prompt",
-        "confirmed_preview_url",
-    ):
-        if field in data:
-            setattr(project, field, data.get(field))
+    changed = [
+        field
+        for field in (
+            "title",
+            "requirement_input",
+            "requirements_doc",
+            "development_flow",
+            "style_prompt",
+            "ui_baseline_prompt",
+            "confirmed_preview_url",
+        )
+        if field in data
+    ]
+    for field in changed:
+        setattr(project, field, data.get(field))
     db.session.commit()
+    # Record manual edits as new versions for the affected stages (deduped).
+    record_versions_for_fields(project, changed)
     return success_response({"project": project.to_dict()}, "项目已保存")
 
 
@@ -182,6 +206,7 @@ def generate_flow(project_id: str):
     project.development_flow = service.generate_development_flow(project.requirements_doc)
     project.status = CodeProjectStatus.FLOW_READY
     db.session.commit()
+    safe_record_stage_version(project, CodeStage.FLOW)
     return success_response({"project": project.to_dict()}, "开发流程已生成")
 
 
@@ -211,6 +236,7 @@ def split_documents(project_id: str):
         )
     project.status = CodeProjectStatus.DOCUMENTS_READY
     db.session.commit()
+    safe_record_stage_version(project, CodeStage.DOCUMENTS)
     return success_response({"project": project.to_dict()}, "开发文档已切分")
 
 
@@ -230,6 +256,9 @@ def update_document(project_id: str, document_id: str):
         if field in data:
             setattr(document, field, data.get(field))
     db.session.commit()
+    safe_record_stage_version(
+        project, CodeStage.DOCUMENTS, source=CodeStageVersionSource.MANUAL_EDIT
+    )
     return success_response({"document": document.to_dict()}, "文档已保存")
 
 
@@ -250,6 +279,7 @@ def generate_style_prompt(project_id: str):
     project.style_prompt = service.generate_style_prompt(project.requirement_input, style_ids)
     project.status = CodeProjectStatus.STYLE_READY
     db.session.commit()
+    safe_record_stage_version(project, CodeStage.STYLE)
     return success_response({"project": project.to_dict()}, "风格文档已生成")
 
 
@@ -278,6 +308,7 @@ def generate_previews(project_id: str):
         project.ui_baseline_prompt = prompt
         project.status = CodeProjectStatus.UI_CONFIRMED
         db.session.commit()
+        safe_record_stage_version(project, CodeStage.PREVIEW)
         return success_response(
             {
                 "project": project.to_dict(),
@@ -289,6 +320,7 @@ def generate_previews(project_id: str):
     project.set_preview_images(images)
     project.status = CodeProjectStatus.PREVIEW_READY
     db.session.commit()
+    safe_record_stage_version(project, CodeStage.PREVIEW)
     return success_response(
         {"project": project.to_dict(), "preview_skipped": False}, "应用缩略图已生成"
     )
@@ -310,9 +342,319 @@ def confirm_preview(project_id: str):
     project.ui_baseline_prompt = data.get("ui_baseline_prompt") or project.style_prompt
     project.status = CodeProjectStatus.UI_CONFIRMED
     db.session.commit()
+    safe_record_stage_version(
+        project, CodeStage.PREVIEW, source=CodeStageVersionSource.MANUAL_EDIT
+    )
     return success_response({"project": project.to_dict()}, "UI 基调已确认")
+
+
+# --- inline section (partial) revision ----------------------------------------
+# Rewrite only a user-selected span of an already-confirmed stage product. The
+# model is given the whole document + the project's latest full-generation context
+# ledger as context (so the tweak stays on-口径) but returns ONLY the replacement
+# for the span; we splice it back at the resolved offsets, snapshot a new version,
+# and return the exact changed range so the client can highlight just what moved.
+
+# Text-primary stages that support section revision -> (CodeProject field, stage).
+_SECTION_REVISION_FIELDS = {
+    "requirements": ("requirements_doc", CodeStage.REQUIREMENTS),
+    "flow": ("development_flow", CodeStage.FLOW),
+    "style": ("style_prompt", CodeStage.STYLE),
+}
+
+
+def _read_section_revision_payload():
+    """Parse + validate the shared section-revision body.
+
+    Returns ``(selected_text, instruction, sel_start, sel_end, None)`` on success
+    or ``(None, None, None, None, error_response)`` on a validation failure. The
+    raw selection offsets are passed through untouched (coerced in ``_resolve_span``).
+    """
+    data = request.get_json() or {}
+    selected_text = data.get("selected_text") or ""
+    instruction = (data.get("instruction") or "").strip()
+    if not selected_text.strip():
+        return None, None, None, None, error_response(
+            "VALIDATION_ERROR", "请先选中要修改的文字", 400
+        )
+    if not instruction:
+        return None, None, None, None, error_response(
+            "VALIDATION_ERROR", "请填写调整意见", 400
+        )
+    return selected_text, instruction, data.get("selection_start"), data.get("selection_end"), None
+
+
+def _resolve_span(current_doc: str, start, end, selected_text: str):
+    """Locate the span to replace, returning ``(start, end)`` or ``None``.
+
+    Prefers the client-supplied offsets when they still bracket exactly the
+    selected text (the document may have been re-generated/edited since), else
+    falls back to the first verbatim occurrence. ``None`` means the selection no
+    longer exists in the document — the caller asks the user to reselect.
+    """
+    length = len(current_doc)
+    try:
+        s, e = int(start), int(end)
+    except (TypeError, ValueError):
+        s = e = -1
+    if 0 <= s <= e <= length and current_doc[s:e] == selected_text:
+        return s, e
+    idx = current_doc.find(selected_text)
+    if idx >= 0:
+        return idx, idx + len(selected_text)
+    return None
+
+
+@code_project_bp.route("/projects/<project_id>/stages/<stage>/revise-section", methods=["POST"])
+@jwt_required()
+def revise_stage_section(project_id: str, stage: str):
+    """Apply an AI partial revision to a selected span of a text stage product."""
+    if stage not in _SECTION_REVISION_FIELDS:
+        return error_response("VALIDATION_ERROR", "该环节不支持局部修订", 400)
+    project = _get_owned_project(project_id)
+    if not project:
+        return error_response("NOT_FOUND", "项目不存在", 404)
+
+    selected_text, instruction, sel_start, sel_end, error = _read_section_revision_payload()
+    if error:
+        return error
+
+    field, stage_key = _SECTION_REVISION_FIELDS[stage]
+    current_doc = getattr(project, field) or ""
+    if not current_doc.strip():
+        return error_response("VALIDATION_ERROR", "当前环节暂无可修订的内容", 400)
+
+    span = _resolve_span(current_doc, sel_start, sel_end, selected_text)
+    if span is None:
+        return error_response("VALIDATION_ERROR", "文档内容已变化，请重新选择要修改的文字", 400)
+
+    user_id = get_jwt_identity()
+    if not charge(
+        user_id,
+        pricing.CODE_SECTION_REVISION,
+        "code_section_revise",
+        "code_project",
+        project.id,
+        team_id=project.team_id,
+    ):
+        return error_response("INSUFFICIENT_CREDITS", "积分不足，无法进行局部修订", 402)
+
+    try:
+        service = get_code_generation_service()
+        replacement = service.revise_section(
+            stage,
+            current_doc,
+            selected_text,
+            instruction,
+            context_ledger=_load_ledger_for_project(project),
+        )
+        start, end = span
+        new_doc = current_doc[:start] + replacement + current_doc[end:]
+        setattr(project, field, new_doc)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        refund_credits(
+            user_id,
+            pricing.CODE_SECTION_REVISION,
+            "code_section_revise",
+            "code_project",
+            project.id,
+            team_id=project.team_id,
+        )
+        raise
+
+    changed = new_doc != current_doc
+    version = (
+        safe_record_stage_version(
+            project,
+            stage_key,
+            source=CodeStageVersionSource.PARTIAL_REVISION,
+            note=f"局部修订：{instruction[:200]}",
+        )
+        if changed
+        else None
+    )
+    return success_response(
+        {
+            "project": project.to_dict(),
+            "version": version.to_dict() if version else None,
+            "change": {"start": start, "end": start + len(replacement)} if changed else None,
+        },
+        "已应用局部修订" if changed else "内容未发生变化",
+    )
+
+
+@code_project_bp.route(
+    "/projects/<project_id>/documents/<document_id>/revise-section", methods=["POST"]
+)
+@jwt_required()
+def revise_document_section(project_id: str, document_id: str):
+    """Apply an AI partial revision to a selected span of a single development document."""
+    project = _get_owned_project(project_id)
+    if not project:
+        return error_response("NOT_FOUND", "项目不存在", 404)
+    document = CodeDocument.query.filter_by(id=document_id, project_id=project.id).first()
+    if not document:
+        return error_response("NOT_FOUND", "文档不存在", 404)
+
+    selected_text, instruction, sel_start, sel_end, error = _read_section_revision_payload()
+    if error:
+        return error
+
+    current_doc = document.content or ""
+    if not current_doc.strip():
+        return error_response("VALIDATION_ERROR", "该文档暂无可修订的内容", 400)
+
+    span = _resolve_span(current_doc, sel_start, sel_end, selected_text)
+    if span is None:
+        return error_response("VALIDATION_ERROR", "文档内容已变化，请重新选择要修改的文字", 400)
+
+    user_id = get_jwt_identity()
+    if not charge(
+        user_id,
+        pricing.CODE_SECTION_REVISION,
+        "code_section_revise",
+        "code_project",
+        project.id,
+        team_id=project.team_id,
+    ):
+        return error_response("INSUFFICIENT_CREDITS", "积分不足，无法进行局部修订", 402)
+
+    try:
+        service = get_code_generation_service()
+        replacement = service.revise_section(
+            "document",
+            current_doc,
+            selected_text,
+            instruction,
+            context_ledger=_load_ledger_for_project(project),
+        )
+        start, end = span
+        new_doc = current_doc[:start] + replacement + current_doc[end:]
+        document.content = new_doc
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        refund_credits(
+            user_id,
+            pricing.CODE_SECTION_REVISION,
+            "code_section_revise",
+            "code_project",
+            project.id,
+            team_id=project.team_id,
+        )
+        raise
+
+    changed = new_doc != current_doc
+    # The documents stage versions the whole set, mirroring update_document.
+    version = (
+        safe_record_stage_version(
+            project,
+            CodeStage.DOCUMENTS,
+            source=CodeStageVersionSource.PARTIAL_REVISION,
+            note=f"局部修订：{document.title[:80]} · {instruction[:160]}",
+        )
+        if changed
+        else None
+    )
+    return success_response(
+        {
+            "document": document.to_dict(),
+            "version": version.to_dict() if version else None,
+            "change": {"start": start, "end": start + len(replacement)} if changed else None,
+        },
+        "已应用局部修订" if changed else "内容未发生变化",
+    )
+
+
+# --- stage version history ----------------------------------------------------
+
+
+@code_project_bp.route("/projects/<project_id>/versions", methods=["GET"])
+@jwt_required()
+def list_all_stage_versions(project_id: str):
+    """Return every stage's version trail for the project (metadata only)."""
+    project = _get_owned_project(project_id)
+    if not project:
+        return error_response("NOT_FOUND", "项目不存在", 404)
+    versions = {
+        stage: [version.to_dict() for version in list_stage_versions(project, stage)]
+        for stage in CodeStage.ALL
+    }
+    return success_response({"versions": versions})
+
+
+@code_project_bp.route("/projects/<project_id>/stages/<stage>/versions", methods=["GET"])
+@jwt_required()
+def list_one_stage_versions(project_id: str, stage: str):
+    """List one stage's version trail (newest first, metadata only)."""
+    if stage not in CodeStage.ALL:
+        return error_response("VALIDATION_ERROR", "未知的环节", 400)
+    project = _get_owned_project(project_id)
+    if not project:
+        return error_response("NOT_FOUND", "项目不存在", 404)
+    versions = list_stage_versions(project, stage)
+    return success_response({"versions": [version.to_dict() for version in versions]})
+
+
+@code_project_bp.route(
+    "/projects/<project_id>/stages/<stage>/versions/<version_id>", methods=["GET"]
+)
+@jwt_required()
+def get_one_stage_version(project_id: str, stage: str, version_id: str):
+    """Return a single version including its full content (for preview/diff)."""
+    if stage not in CodeStage.ALL:
+        return error_response("VALIDATION_ERROR", "未知的环节", 400)
+    project = _get_owned_project(project_id)
+    if not project:
+        return error_response("NOT_FOUND", "项目不存在", 404)
+    version = get_stage_version(project, stage, version_id)
+    if not version:
+        return error_response("NOT_FOUND", "版本不存在", 404)
+    return success_response({"version": version.to_dict(include_content=True)})
+
+
+@code_project_bp.route(
+    "/projects/<project_id>/stages/<stage>/versions/<version_id>/activate", methods=["POST"]
+)
+@jwt_required()
+def activate_one_stage_version(project_id: str, stage: str, version_id: str):
+    """Roll a stage back to a historical version and make it current."""
+    if stage not in CodeStage.ALL:
+        return error_response("VALIDATION_ERROR", "未知的环节", 400)
+    project = _get_owned_project(project_id)
+    if not project:
+        return error_response("NOT_FOUND", "项目不存在", 404)
+    version = get_stage_version(project, stage, version_id)
+    if not version:
+        return error_response("NOT_FOUND", "版本不存在", 404)
+    activate_stage_version(project, stage, version)
+    return success_response(
+        {"project": project.to_dict(), "version": version.to_dict()}, "已恢复到该版本"
+    )
 
 
 def _get_owned_project(project_id: str) -> CodeProject | None:
     user_id = get_jwt_identity()
     return CodeProject.query.filter_by(id=project_id, user_id=user_id).first()
+
+
+def _load_ledger_for_project(project: CodeProject) -> str:
+    """Render the project's latest full-generation context ledger for prompt injection.
+
+    Read-only: a standalone revision route has no AgentRun of its own, so it
+    recovers the established consensus from the most recent ``code_full_generation``
+    run on this resource (mirroring how the frontend-project workflow reloads it).
+    Best-effort — any lookup/parse hiccup yields an empty block (injection no-op).
+    """
+    try:
+        prior = (
+            AgentRun.query.filter_by(resource_id=project.id, workflow="code_full_generation")
+            .order_by(AgentRun.created_at.desc())
+            .first()
+        )
+        ledger = ContextLedger.load(prior.get_context_ledger() if prior else None)
+        return "" if ledger.is_empty() else ledger.render_for_prompt()
+    except Exception:  # noqa: BLE001 — ledger injection is auxiliary, never fatal
+        return ""

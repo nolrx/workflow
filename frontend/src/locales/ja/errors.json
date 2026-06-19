@@ -40,7 +40,8 @@
     "saveDocumentFailed": "文書の保存に失敗しました",
     "generateStyleFailed": "スタイル文書の生成に失敗しました",
     "generatePreviewFailed": "サムネイルの生成に失敗しました",
-    "confirmPreviewFailed": "UI 基準の確定に失敗しました"
+    "confirmPreviewFailed": "UI 基準の確定に失敗しました",
+    "reviseSectionFailed": "部分修正に失敗しました"
   },
   "team": {
     "fetchTeamsFailed": "チーム一覧の取得に失敗しました",

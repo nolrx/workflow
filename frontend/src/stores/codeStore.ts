@@ -3,6 +3,7 @@ import {
   codeApi,
   type CodeDocument,
   type CodeProject,
+  type SectionChange,
   type UIStyle,
 } from "@/api/code"
 import { t } from "@/i18n"
@@ -16,6 +17,29 @@ type CodeAction =
   | "style"
   | "preview"
   | "confirm"
+  | "reviseSection"
+
+/** Arguments for an inline partial revision of a selected document span. */
+export interface ReviseSectionArgs {
+  /** Which stage product the selection belongs to. */
+  stage: "requirements" | "flow" | "style" | "documents"
+  /** Target document id — required when `stage === "documents"`. */
+  documentId?: string
+  /** The exact text the user selected (sent to the model verbatim). */
+  selectedText: string
+  /** The user's free-text adjustment instruction. */
+  instruction: string
+  /** Selection offsets in the current document (used to splice precisely). */
+  selectionStart: number
+  selectionEnd: number
+}
+
+/** Result of a partial revision: success + the changed range (null = no change). */
+export interface ReviseSectionResult {
+  ok: boolean
+  change?: SectionChange | null
+  message?: string
+}
 
 interface CodeState {
   project: CodeProject | null
@@ -37,6 +61,7 @@ interface CodeState {
   splitDocuments: () => Promise<void>
   updateDocument: (documentId: string, data: Partial<CodeDocument>) => Promise<void>
   updateDocumentDraft: (documentId: string, data: Partial<CodeDocument>) => void
+  reviseSection: (args: ReviseSectionArgs) => Promise<ReviseSectionResult>
   toggleStyle: (styleId: string) => void
   generateStylePrompt: () => Promise<void>
   generatePreviews: () => Promise<boolean>
@@ -218,6 +243,65 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
         ),
       },
     })
+  },
+
+  // Apply an AI partial revision to a selected span. Deliberately does NOT touch
+  // the global isLoading/activeAction gate — partial revision is asynchronous and
+  // must not freeze the rest of the workspace (the triggering textarea locks
+  // itself locally while in flight). The backend splices the rewritten span and
+  // returns the updated project/document plus the exact changed range; we apply
+  // the server content (overwriting any unsaved local draft for that stage) and
+  // hand the change range back so the caller can highlight just what moved.
+  reviseSection: async ({
+    stage,
+    documentId,
+    selectedText,
+    instruction,
+    selectionStart,
+    selectionEnd,
+  }) => {
+    const project = get().project
+    if (!project) return { ok: false }
+    try {
+      if (stage === "documents") {
+        if (!documentId) throw new Error("missing documentId")
+        const { document, change } = await codeApi.reviseDocumentSection(
+          project.id,
+          documentId,
+          selectedText,
+          instruction,
+          selectionStart,
+          selectionEnd
+        )
+        // Re-read latest state at write time so a concurrent draft edit to another
+        // document made during the await is not clobbered by this stale snapshot.
+        set((s) =>
+          s.project
+            ? {
+                project: {
+                  ...s.project,
+                  documents: s.project.documents.map((d) =>
+                    d.id === documentId ? document : d
+                  ),
+                },
+              }
+            : {}
+        )
+        return { ok: true, change }
+      }
+      const { project: updated, change } = await codeApi.reviseStageSection(
+        project.id,
+        stage,
+        selectedText,
+        instruction,
+        selectionStart,
+        selectionEnd
+      )
+      set({ project: updated, selectedStyleIds: updated.selected_style_ids })
+      return { ok: true, change }
+    } catch (error) {
+      return { ok: false, message: getErrorMessage(error, t("errors:code.reviseSectionFailed")) }
+    }
   },
 
   toggleStyle: (styleId) => {

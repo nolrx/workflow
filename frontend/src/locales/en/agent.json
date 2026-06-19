@@ -29,7 +29,8 @@
     "failed": "Failed",
     "cancelled": "Cancelled",
     "pending": "Pending",
-    "skipped": "Skipped"
+    "skipped": "Skipped",
+    "paused": "Awaiting review"
   },
   "tabs": {
     "summary": "Summary",
@@ -68,7 +69,10 @@
     "step_completed": "Step completed",
     "run_completed": "Run completed",
     "context_updated": "Context updated",
-    "context_conflict": "Context conflict"
+    "context_conflict": "Context conflict",
+    "step_awaiting_review": "Awaiting review",
+    "user_revision": "User adjustment",
+    "review_resolved": "Confirmed"
   },
   "context": {
     "injected": "Injected snapshot",

@@ -1,0 +1,54 @@
+{system_prefix}
+
+{context_ledger}
+
+---
+
+你是资深产品经理。下面是基于用户原始需求生成的「软件需求文档」。为帮助用户**快速确认关键决策并迭代该文档**，请你从需求中识别出最关键、最影响后续设计的待澄清问题，整理成一份结构化的「需求澄清问卷」。前端会把它渲染成选择弹框，用户逐题确认，未确认的题目将自动采用你给出的默认建议。
+
+用户原始需求：
+{requirement}
+
+当前需求文档：
+{requirements_doc}
+
+出题要求：
+- 只问真正会改变产品方向、功能范围、技术选型、目标用户或验收口径的关键决策；重点参考文档中「边界与待确认问题」章节，以及任何模糊、被你假设补全的地方。
+- 生成 3 到 6 个问题。若需求已足够清晰、没有值得追问的关键决策，直接返回空数组 []。
+- 每题给出 2 到 5 个具体、贴合本产品的选项：单选题（type=single）选项应互斥，多选题（type=multi）选项可叠加。按问题性质选择 single 或 multi。
+- 每题必须基于你的专业判断，在 default 中标出**最合理的默认建议**：single 题给恰好 1 个选项的 value，multi 题给 0 到多个选项的 value。default 里的值必须来自该题 options 的 value。
+- 每题都允许用户补充自定义答案，allow_custom 一律设为 true。
+- 问题、选项 label、rationale 一律用中文，简洁明确，不要套话。
+
+只输出一个 JSON 数组，不要任何解释、前后说明或 Markdown 代码块。数组元素结构如下：
+[
+  {{
+    "id": "platform",
+    "category": "平台与范围",
+    "question": "产品的目标运行平台是？",
+    "type": "single",
+    "options": [
+      {{"value": "web", "label": "Web 端（浏览器）", "description": "通过浏览器访问，免安装"}},
+      {{"value": "mobile", "label": "移动端 App"}},
+      {{"value": "both", "label": "Web + 移动端"}}
+    ],
+    "default": ["web"],
+    "allow_custom": true,
+    "rationale": "影响技术选型与界面适配方式"
+  }},
+  {{
+    "id": "mvp_scope",
+    "category": "功能范围",
+    "question": "首个可用版本（MVP）优先包含哪些能力？",
+    "type": "multi",
+    "options": [
+      {{"value": "core", "label": "核心业务主流程"}},
+      {{"value": "dashboard", "label": "数据看板与统计"}},
+      {{"value": "collab", "label": "多人协作"}},
+      {{"value": "export", "label": "导出与分享"}}
+    ],
+    "default": ["core"],
+    "allow_custom": true,
+    "rationale": "圈定 MVP 边界，避免范围蔓延"
+  }}
+]

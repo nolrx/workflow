@@ -83,5 +83,9 @@
     "saved": "保存しました",
     "deleted": "削除しました",
     "error": "エラーが発生しました"
+  },
+  "a11y": {
+    "notifications": "通知",
+    "profile": "プロフィール"
   }
 }

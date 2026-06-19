@@ -53,6 +53,12 @@ class CodeProject(db.Model):
         cascade="all, delete-orphan",
         order_by="CodeDocument.order_index",
     )
+    stage_versions = db.relationship(
+        "CodeStageVersion",
+        backref="project",
+        lazy="dynamic",
+        cascade="all, delete-orphan",
+    )
 
     def get_selected_style_ids(self) -> list[str]:
         """Return selected UI style ids."""

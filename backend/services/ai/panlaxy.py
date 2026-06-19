@@ -57,9 +57,9 @@ class PanlaxyProvider(AIProvider):
         self._configure()
 
     def _configure(self):
-        """Configure the OpenAI-compatible client pointed at Panlaxy."""
+        """Configure the OpenAI-compatible client (Panlaxy or, for subclasses, OpenAI)."""
         if not self.api_key:
-            logger.warning("Panlaxy API key not configured")
+            logger.warning(f"{self.provider_name} API key not configured")
             return
         try:
             from openai import OpenAI
@@ -71,12 +71,13 @@ class PanlaxyProvider(AIProvider):
                 timeout=self.timeout,
             )
             logger.info(
-                f"Panlaxy provider configured with model: {self.model} at {self.base_url}"
+                f"{self.provider_name} image provider configured with model: "
+                f"{self.model} at {self.base_url}"
             )
         except ImportError:
             logger.error("openai package not installed. Run: pip install openai")
         except Exception as e:
-            logger.error(f"Failed to configure Panlaxy client: {e}")
+            logger.error(f"Failed to configure {self.provider_name} client: {e}")
 
     @property
     def provider_name(self) -> str:

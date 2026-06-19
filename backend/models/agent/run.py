@@ -17,12 +17,19 @@ class AgentRunStatus:
 
     QUEUED = "queued"
     RUNNING = "running"
+    # Paused mid-run awaiting user confirmation of a produced document
+    # (human-in-the-loop step review). Non-terminal: a resume restarts the worker
+    # from the persisted cursor. No DB migration needed — the cursor / review
+    # stage live in the existing progress JSON.
+    PAUSED = "paused"
     COMPLETED = "completed"
     PARTIAL = "partial"
     FAILED = "failed"
     CANCELLED = "cancelled"
 
-    ACTIVE = {QUEUED, RUNNING}
+    # Active = occupies a run slot / may still progress. Paused counts as active
+    # (the session is in-flight, just waiting on the user).
+    ACTIVE = {QUEUED, RUNNING, PAUSED}
     TERMINAL = {COMPLETED, PARTIAL, FAILED, CANCELLED}
 
 

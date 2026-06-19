@@ -31,6 +31,13 @@ class AgentEventType:
     ERROR = "error"
     STEP_COMPLETED = "step_completed"
     RUN_COMPLETED = "run_completed"
+    # Human-in-the-loop review lifecycle (Code-domain step confirmation). A
+    # generator stage produces its document, then the run pauses on
+    # STEP_AWAITING_REVIEW until the user either submits a USER_REVISION
+    # (adjustment instruction → regenerate) or approves (REVIEW_RESOLVED → advance).
+    STEP_AWAITING_REVIEW = "step_awaiting_review"
+    USER_REVISION = "user_revision"
+    REVIEW_RESOLVED = "review_resolved"
 
 
 class AgentEventLevel:

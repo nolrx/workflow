@@ -82,7 +82,7 @@ npm run dev:frontend   # 前端 (localhost:3000，/api 代理到 :5001)
 | `AI_PROVIDER` | AI 提供商 | `gemini` |
 | `AI_API_KEY` | AI API 密钥 (也支持 `GOOGLE_API_KEY`/`GEMINI_API_KEY`) | - |
 | `AI_TEXT_MODEL` | 文本模型名称 | `gemini-3-flash-preview` |
-| `AI_IMAGE_MODEL` | 图像模型名称 | `imagen-3.0-generate-002` |
+| `AI_IMAGE_MODEL` | 图像模型名称（原生 gemini 图像模型；勿用 imagen-*） | `gemini-3.1-flash-image` |
 | `AI_BASE_URL` | 自定义 API 地址 (可选) | - |
 | `STRIPE_SECRET_KEY` | Stripe 密钥 (可选) | - |
 | `STRIPE_WEBHOOK_SECRET` | Stripe Webhook 密钥 (可选) | - |

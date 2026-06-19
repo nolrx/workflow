@@ -44,9 +44,11 @@ class BaseConfig:
     AI_TEXT_MODEL = os.getenv("AI_TEXT_MODEL", "claude-opus-4-8")
     AI_TEXT_MAX_TOKENS = int(os.getenv("AI_TEXT_MAX_TOKENS", "32000"))
 
-    # Image generation (default: Panlaxy)
+    # Image generation. Default model is a NATIVE gemini image model (not imagen-*,
+    # which uses a different predict API). The factory (services/ai/factory.py) is
+    # the authoritative resolver; this mirrors its default for consistency.
     AI_IMAGE_PROVIDER = os.getenv("AI_IMAGE_PROVIDER", AI_PROVIDER)
-    AI_IMAGE_MODEL = os.getenv("AI_IMAGE_MODEL", "imagen-3.0-generate-002")
+    AI_IMAGE_MODEL = os.getenv("AI_IMAGE_MODEL", "gemini-3.1-flash-image")
 
     AI_BASE_URL = os.getenv("AI_BASE_URL")
 

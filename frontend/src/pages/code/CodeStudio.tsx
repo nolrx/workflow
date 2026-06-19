@@ -1,41 +1,53 @@
 import { useEffect, useRef, useState } from "react"
 import { useParams } from "react-router-dom"
 import { useTranslation } from "react-i18next"
-import { Bot, Loader2, Plus, Sparkles } from "lucide-react"
 import { toast } from "sonner"
 import { AgentRunPanel } from "@/components/agent/AgentRunPanel"
-import { CodeAgentTimeline } from "@/components/code/CodeAgentTimeline"
-import { CodePreviewPane } from "@/components/code/CodePreviewPane"
-import { PROGRESS_TAB, isFrontendWorkflow, type PreviewTab } from "@/components/code/previewTabs"
+import { CodeStepper } from "@/components/code/CodeStepper"
+import { ConversationRail } from "@/components/code/ConversationRail"
+import { PreviewThumbnailPanel } from "@/components/code/PreviewThumbnailPanel"
 import { AppLayout } from "@/components/layout/AppLayout"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Textarea } from "@/components/ui/textarea"
+import { Card } from "@/components/ui/card"
 import { useAgentStore } from "@/stores/agentStore"
 import { useCodeStore } from "@/stores/codeStore"
 
+/**
+ * Single-column conversational Code workspace: a stepper header tracks the
+ * stages and the conversation below is the whole surface — the build is driven
+ * through chat, and the live preview is folded into the transcript as inline,
+ * collapsible artifact cards (streaming output, the UI-style picker with
+ * thumbnails, and the app preview). The workflow pauses after each reviewed
+ * document; the user approves or adjusts inline.
+ */
 export function CodeStudio() {
   const { t } = useTranslation("code")
   const { t: ta } = useTranslation("agent")
 
   const project = useCodeStore((state) => state.project)
   const selectedStyleIds = useCodeStore((state) => state.selectedStyleIds)
+  const activeAction = useCodeStore((state) => state.activeAction)
   const error = useCodeStore((state) => state.error)
   const fetchStyles = useCodeStore((state) => state.fetchStyles)
   const loadProject = useCodeStore((state) => state.loadProject)
-  const updateProjectDraft = useCodeStore((state) => state.updateProjectDraft)
   const clearError = useCodeStore((state) => state.clearError)
 
   const startAgentRun = useAgentStore((state) => state.startRun)
+  const resumeRun = useAgentStore((state) => state.resumeRun)
+  const openLatestRunForResource = useAgentStore((state) => state.openLatestRunForResource)
+  const resetAgentRun = useAgentStore((state) => state.reset)
+  const openPanel = useAgentStore((state) => state.openPanel)
   const agentRun = useAgentStore((state) => state.run)
-  const isStreaming = useAgentStore((state) => state.isStreaming)
+  const events = useAgentStore((state) => state.events)
 
   const [requirementInput, setRequirementInput] = useState("")
-  const [manualTab, setManualTab] = useState<PreviewTab | null>(null)
-  const loadedRunProjectRef = useRef<string | null>(null)
 
   const { projectId } = useParams<{ projectId?: string }>()
+  // Which session's agent run is currently bound to the workspace. Keyed by a ref
+  // (not a reactive guard on run.resource_id) because openRun briefly nulls the
+  // run mid-load, which would otherwise re-fire the replay.
+  const boundRunResourceRef = useRef<string | null>(null)
 
   useEffect(() => {
     fetchStyles()
@@ -48,46 +60,50 @@ export function CodeStudio() {
     }
   }, [projectId, project?.id, loadProject])
 
+  // ...and replay that session's latest agent run. The whole transcript (and the
+  // inline document cards rendered inside it) is event-sourced off the run, so
+  // without this a historical session would open to an empty conversation even
+  // though loadProject already fetched its document content. On a blank studio
+  // clear the ref so reopening a session reprocesses it; when already bound to
+  // this session's live run (e.g. just started inline) keep the live run.
+  useEffect(() => {
+    if (!projectId) {
+      boundRunResourceRef.current = null
+      return
+    }
+    if (boundRunResourceRef.current === projectId) return
+    if (agentRun?.resource_id === projectId) {
+      boundRunResourceRef.current = projectId
+      return
+    }
+    boundRunResourceRef.current = projectId
+    void openLatestRunForResource(projectId).then((found) => {
+      // Legacy / run-less project: drop any prior session's run so its transcript
+      // doesn't bleed through onto this one.
+      if (!found && boundRunResourceRef.current === projectId) resetAgentRun()
+    })
+  }, [projectId, agentRun?.resource_id, openLatestRunForResource, resetAgentRun])
+
   useEffect(() => {
     if (!error) return
     toast.error(error)
     clearError()
   }, [error, clearError])
 
-  // While the run streams, the preview follows the active step; once it settles
-  // the user can switch tabs freely. Derived state — no effect/setState needed.
-  const currentStep = agentRun?.progress?.current_step
-  const isFrontendRun = isFrontendWorkflow(agentRun?.workflow)
-  const followTab: PreviewTab = isFrontendRun
-    ? "app"
-    : currentStep && PROGRESS_TAB[currentStep]
-      ? PROGRESS_TAB[currentStep]
-      : "requirements"
-  const activeTab: PreviewTab = isStreaming ? followTab : manualTab ?? followTab
-
-  // When a run finishes and produced a Code project, load it into the editor.
+  // Load the project's editable content into the cards whenever the run produces
+  // or revises a document (a new awaiting-review event arrives) or settles — so
+  // the inline artifacts always reflect the latest generated content.
+  const reviewTick = events.filter((event) => event.event_type === "step_awaiting_review").length
   useEffect(() => {
-    if (
-      agentRun &&
-      agentRun.domain === "code" &&
-      agentRun.resource_id &&
-      (agentRun.status === "completed" || agentRun.status === "partial") &&
-      loadedRunProjectRef.current !== agentRun.resource_id
-    ) {
-      loadedRunProjectRef.current = agentRun.resource_id
-      void loadProject(agentRun.resource_id)
+    const rid = agentRun?.resource_id
+    const status = agentRun?.status
+    if (rid && (status === "paused" || status === "completed" || status === "partial")) {
+      void loadProject(rid)
     }
-  }, [agentRun, loadProject])
+  }, [agentRun?.resource_id, agentRun?.status, reviewTick, loadProject])
 
-  const requirementValue = project?.requirement_input ?? requirementInput
-
-  const handleRequirementChange = (value: string) => {
-    if (project) updateProjectDraft({ requirement_input: value })
-    else setRequirementInput(value)
-  }
-
-  const handleAgentGenerate = async () => {
-    const requirement = requirementValue.trim()
+  const handleStart = async () => {
+    const requirement = requirementInput.trim()
     if (!requirement) {
       toast.error(ta("swarm.requirementRequired"))
       return
@@ -98,13 +114,8 @@ export function CodeStudio() {
         workflow: "code_full_generation",
         resource_type: project ? "code_project" : undefined,
         resource_id: project?.id,
-        config: {
-          requirement,
-          title: project?.title,
-          style_ids: selectedStyleIds,
-        },
+        config: { requirement, title: project?.title, style_ids: selectedStyleIds },
       })
-      toast.success(ta("toast.started"))
     } catch (err) {
       const message =
         (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
@@ -113,100 +124,76 @@ export function CodeStudio() {
     }
   }
 
-  const handleNewProject = () => {
-    loadedRunProjectRef.current = null
-    useCodeStore.setState({ project: null, selectedStyleIds: [] })
-    useAgentStore.setState({
-      run: null,
-      events: [],
-      streamingByStep: {},
-      selectedStepId: null,
-      panelOpen: false,
-    })
-    setRequirementInput("")
-    setManualTab(null)
+  const handleApprove = async () => {
+    try {
+      await resumeRun("approve")
+    } catch {
+      toast.error(ta("toast.startFailed"))
+    }
   }
+
+  const handleRevise = async (instruction: string) => {
+    try {
+      await resumeRun("revise", instruction)
+    } catch {
+      toast.error(ta("toast.startFailed"))
+    }
+  }
+
+  const handleNewProject = () => {
+    useCodeStore.setState({ project: null, selectedStyleIds: [] })
+    boundRunResourceRef.current = null
+    resetAgentRun()
+    setRequirementInput("")
+  }
+
+  // The preview thumbnails live in a right-hand rail that slides in once images
+  // exist (or are being generated) — no longer folded under the conversation.
+  const showThumbnails = (project?.preview_images?.length ?? 0) > 0 || activeAction === "preview"
 
   return (
     <AppLayout title={t("title")}>
       <AgentRunPanel />
-      <div className="grid gap-6 lg:h-[calc(100vh-7.5rem)] lg:grid-cols-[minmax(360px,400px)_minmax(0,1fr)]">
-        {/* Left: requirement input + crewAI execution timeline */}
-        <div className="flex min-h-0 flex-col gap-6 lg:overflow-y-auto">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="flex items-center gap-2 text-base">
-                <Sparkles className="h-4 w-4 text-primary" />
-                {t("input.title")}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <Textarea
-                value={requirementValue}
-                onChange={(event) => handleRequirementChange(event.target.value)}
-                placeholder={t("input.placeholder")}
-                rows={6}
-                className="resize-none text-sm"
-                disabled={isStreaming}
-              />
-              <div className="flex gap-2">
-                <Button
-                  className="flex-1"
-                  onClick={handleAgentGenerate}
-                  disabled={!requirementValue.trim() || isStreaming}
-                >
-                  {isStreaming ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Bot className="mr-2 h-4 w-4" />
-                  )}
-                  {project || agentRun ? ta("swarm.rerun") : ta("swarm.button")}
-                </Button>
-                {(project || agentRun) && (
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onClick={handleNewProject}
-                    disabled={isStreaming}
-                    title={t("workspace.newProject")}
-                  >
-                    <Plus className="h-4 w-4" />
-                  </Button>
-                )}
-              </div>
-              <p className="text-xs text-muted-foreground">{ta("swarm.description")}</p>
-            </CardContent>
-          </Card>
-
-          <Card className="min-h-0">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">{ta("panel.title")}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <CodeAgentTimeline onSelectTab={setManualTab} />
-            </CardContent>
-          </Card>
+      <div
+        className={`mx-auto flex h-[calc(100vh-7.5rem)] min-h-0 w-full flex-col gap-3 transition-[max-width] duration-300 ${
+          showThumbnails ? "max-w-6xl" : "max-w-4xl"
+        }`}
+      >
+        {/* Stage progress header */}
+        <div className="flex items-center gap-3 rounded-xl border bg-card px-3 py-2.5 sm:px-4 sm:py-3">
+          <div className="min-w-0 flex-1">
+            <CodeStepper />
+          </div>
+          {agentRun && (
+            <div className="flex shrink-0 items-center gap-2">
+              <Badge variant={agentRun.status === "paused" ? "default" : "outline"}>
+                {ta(`status.${agentRun.status}`, { defaultValue: agentRun.status })}
+              </Badge>
+              <Button variant="ghost" size="sm" onClick={openPanel}>
+                {ta("panel.viewDetail")}
+              </Button>
+            </div>
+          )}
         </div>
 
-        {/* Right: live preview / editable artifacts */}
-        <Card className="flex min-h-0 flex-col">
-          <CardHeader className="flex flex-row items-center justify-between gap-2 pb-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              {t("workspace.previewTitle")}
-            </CardTitle>
-            <div className="flex items-center gap-2">
-              {project && <Badge variant="secondary">{t(`status.${project.status}`)}</Badge>}
-              {agentRun && !project && (
-                <Badge variant="outline">
-                  {ta(`status.${agentRun.status}`, { defaultValue: agentRun.status })}
-                </Badge>
-              )}
+        {/* Two-column: left conversation, right preview thumbnails (slides in). */}
+        <div className="flex min-h-0 flex-1 flex-col gap-3 lg:flex-row">
+          <Card className="flex min-h-0 flex-1 flex-col overflow-hidden p-0">
+            <ConversationRail
+              requirementDraft={requirementInput}
+              onRequirementChange={setRequirementInput}
+              onStart={handleStart}
+              onApprove={handleApprove}
+              onRevise={handleRevise}
+              onNewProject={handleNewProject}
+            />
+          </Card>
+          {showThumbnails && (
+            <div className="min-h-0 max-h-[45vh] shrink-0 duration-300 animate-in fade-in slide-in-from-right-8 lg:h-full lg:max-h-none lg:w-[22rem]">
+              <PreviewThumbnailPanel />
             </div>
-          </CardHeader>
-          <CardContent className="min-h-0 flex-1">
-            <CodePreviewPane activeTab={activeTab} onTabChange={setManualTab} />
-          </CardContent>
-        </Card>
+          )}
+        </div>
       </div>
     </AppLayout>
   )

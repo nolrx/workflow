@@ -4,7 +4,9 @@ Software creation generation service.
 import base64
 import json
 import logging
+import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -164,6 +166,331 @@ class CodeGenerationService:
         prompt, fallback = self._requirements_context(requirement, context_ledger)
         return self._generate_text_streaming(prompt, fallback, on_delta, on_model_call)
 
+    def _requirements_revision_context(
+        self, current_doc: str, instruction: str, context_ledger: str = ""
+    ) -> tuple[str, str]:
+        """Build the prompt + fallback for an incremental requirements revision."""
+        prompt = self._load_prompt("requirements_revision_prompt.txt").format(
+            system_prefix=compose_recipe_prompt("product_requirement"),
+            context_ledger=context_ledger,
+            current_doc=current_doc,
+            instruction=instruction,
+        )
+        # On failure keep the current document rather than discarding the user's
+        # confirmed work — the revision is best-effort.
+        return prompt, current_doc
+
+    def revise_requirements(
+        self,
+        current_doc: str,
+        instruction: str,
+        on_delta=None,
+        on_model_call=None,
+        context_ledger: str = "",
+    ) -> str:
+        """Stream an incrementally-revised requirements document.
+
+        Applies the user's confirmation-step adjustment to the current document
+        and returns the full revised text. Used by the human-in-the-loop review
+        gate so a manual tweak is reflected in the document the user keeps editing.
+        """
+        prompt, fallback = self._requirements_revision_context(
+            current_doc, instruction, context_ledger
+        )
+        return self._generate_text_streaming(prompt, fallback, on_delta, on_model_call)
+
+    # --- requirements clarification questionnaire ----------------------------
+    # A structured set of "quick-confirm" questions generated alongside the
+    # requirements doc. The front-end renders them as selection dialogs (single /
+    # multi choice + free-text); unanswered questions fall back to the model's
+    # recommended ``default``; the answers are compiled into a revise instruction
+    # that re-iterates the requirements doc. See docs/requirements-clarify-spec.md.
+    _MAX_CLARIFY_QUESTIONS = 6
+    _MAX_CLARIFY_OPTIONS = 5
+
+    def generate_clarifications(
+        self,
+        requirement: str,
+        requirements_doc: str,
+        on_model_call=None,
+        context_ledger: str = "",
+    ) -> list[dict]:
+        """Generate the requirements clarification questionnaire (normalized list).
+
+        Best-effort: parsing is tolerant and always returns a (possibly empty)
+        list of spec-shaped questions, never raises. When the text provider is
+        unavailable the local fallback questionnaire is used instead.
+        """
+        prompt = self._load_prompt("requirements_clarify_prompt.txt").format(
+            system_prefix=compose_recipe_prompt("product_requirement"),
+            context_ledger=context_ledger,
+            requirement=requirement,
+            requirements_doc=requirements_doc,
+        )
+        fallback = json.dumps(self._fallback_clarifications(), ensure_ascii=False)
+        text = self._generate_text(prompt, fallback, on_model_call)
+        return self._normalize_clarifications(text)
+
+    def _normalize_clarifications(self, text: str) -> list[dict]:
+        """Parse the model JSON into normalized clarification questions.
+
+        Drops malformed questions, caps the question/option counts, and guarantees
+        every kept question has at least one option and a coherent ``default``.
+        An empty / unparseable payload yields ``[]`` (a clean "no questions").
+        """
+        items = self._parse_json_array(text)
+        questions: list[dict] = []
+        for index, item in enumerate(items):
+            normalized = self._normalize_clarification(item, index)
+            if normalized:
+                questions.append(normalized)
+            if len(questions) >= self._MAX_CLARIFY_QUESTIONS:
+                break
+        return questions
+
+    def _normalize_clarification(self, question: dict, index: int) -> dict | None:
+        """Normalize one clarification question; return None when unusable."""
+        if not isinstance(question, dict):
+            return None
+
+        # Guard against a non-list ``options`` (e.g. the model emitting a string
+        # like "web,mobile"): iterating that would yield bogus per-character
+        # options. Coerce to [] — mirrors the ``raw_default`` handling below — so
+        # the question drops out via the <2-options check instead of surfacing garbage.
+        raw_options = question.get("options")
+        if not isinstance(raw_options, list):
+            raw_options = []
+
+        options: list[dict] = []
+        for opt_index, raw in enumerate(raw_options):
+            if isinstance(raw, dict):
+                label = str(raw.get("label") or raw.get("value") or "").strip()
+                value = str(raw.get("value") or raw.get("label") or "").strip()
+                description = raw.get("description")
+            else:
+                label = str(raw).strip()
+                value = label
+                description = None
+            if not label:
+                continue
+            option = {"value": (value or f"opt_{opt_index + 1}")[:80], "label": label[:160]}
+            if description:
+                option["description"] = str(description)[:240]
+            options.append(option)
+            if len(options) >= self._MAX_CLARIFY_OPTIONS:
+                break
+
+        prompt_text = str(question.get("question") or question.get("title") or "").strip()
+        if not prompt_text or len(options) < 2:
+            return None
+
+        question_type = str(question.get("type") or "single").strip().lower()
+        if question_type in ("multi", "multiple", "multi_select", "multiselect", "checkbox"):
+            question_type = "multi"
+        else:
+            question_type = "single"
+
+        values = {opt["value"] for opt in options}
+        labels_to_value = {opt["label"]: opt["value"] for opt in options}
+        raw_default = question.get("default")
+        if isinstance(raw_default, str):
+            raw_default = [raw_default]
+        elif not isinstance(raw_default, list):
+            raw_default = []
+        default: list[str] = []
+        for entry in raw_default:
+            text_entry = str(entry).strip()
+            value = text_entry if text_entry in values else labels_to_value.get(text_entry)
+            if value and value not in default:
+                default.append(value)
+        if question_type == "single":
+            # A single-choice question always carries exactly one default suggestion.
+            default = default[:1] or [options[0]["value"]]
+
+        question_id = re.sub(r"[^A-Za-z0-9_\-]", "_", str(question.get("id") or "").strip())[:60]
+        if not question_id:
+            question_id = f"q{index + 1}"
+
+        normalized = {
+            "id": question_id,
+            "question": prompt_text[:300],
+            "type": question_type,
+            "options": options,
+            "default": default,
+            "allow_custom": bool(question.get("allow_custom", True)),
+        }
+        category = str(question.get("category") or "").strip()
+        if category:
+            normalized["category"] = category[:60]
+        rationale = str(question.get("rationale") or question.get("hint") or "").strip()
+        if rationale:
+            normalized["rationale"] = rationale[:300]
+        return normalized
+
+    def _fallback_clarifications(self) -> list[dict]:
+        """Generic, product-agnostic questionnaire used when AI is unavailable."""
+        return [
+            {
+                "id": "platform",
+                "category": "平台与范围",
+                "question": "产品的目标运行平台是？",
+                "type": "single",
+                "allow_custom": True,
+                "rationale": "影响技术选型与界面适配方式",
+                "options": [
+                    {"value": "web", "label": "Web 端（浏览器）"},
+                    {"value": "mobile", "label": "移动端 App"},
+                    {"value": "both", "label": "Web + 移动端"},
+                    {"value": "desktop", "label": "桌面客户端"},
+                ],
+                "default": ["web"],
+            },
+            {
+                "id": "users",
+                "category": "目标用户",
+                "question": "主要面向哪类用户？",
+                "type": "multi",
+                "allow_custom": True,
+                "rationale": "影响功能优先级与权限设计",
+                "options": [
+                    {"value": "individual", "label": "个人用户"},
+                    {"value": "team", "label": "团队 / 企业"},
+                    {"value": "developer", "label": "开发者"},
+                    {"value": "admin", "label": "管理员 / 运营"},
+                ],
+                "default": ["individual"],
+            },
+            {
+                "id": "auth",
+                "category": "权限与账户",
+                "question": "需要怎样的账户与登录体系？",
+                "type": "single",
+                "allow_custom": True,
+                "rationale": "影响数据隔离与安全要求",
+                "options": [
+                    {"value": "none", "label": "无需登录"},
+                    {"value": "email", "label": "邮箱密码登录"},
+                    {"value": "oauth", "label": "第三方登录（微信 / Google 等）"},
+                    {"value": "sso", "label": "企业 SSO"},
+                ],
+                "default": ["email"],
+            },
+            {
+                "id": "mvp_scope",
+                "category": "功能范围",
+                "question": "首个可用版本（MVP）优先包含哪些能力？",
+                "type": "multi",
+                "allow_custom": True,
+                "rationale": "圈定 MVP 边界，避免范围蔓延",
+                "options": [
+                    {"value": "core", "label": "核心业务主流程"},
+                    {"value": "dashboard", "label": "数据看板与统计"},
+                    {"value": "collab", "label": "多人协作"},
+                    {"value": "export", "label": "导出与分享"},
+                ],
+                "default": ["core"],
+            },
+        ]
+
+    def revise_development_flow(
+        self, current_doc, instruction, on_delta=None, on_model_call=None, context_ledger: str = ""
+    ) -> str:
+        """Stream an incrementally-revised development-flow document."""
+        prompt = self._load_prompt("development_flow_revision_prompt.txt").format(
+            system_prefix=compose_recipe_prompt("engineering_implementation"),
+            context_ledger=context_ledger,
+            current_doc=current_doc,
+            instruction=instruction,
+        )
+        return self._generate_text_streaming(prompt, current_doc, on_delta, on_model_call)
+
+    def revise_style_prompt(
+        self, current_doc, instruction, on_delta=None, on_model_call=None, context_ledger: str = ""
+    ) -> str:
+        """Stream an incrementally-revised style document."""
+        prompt = self._load_prompt("style_revision_prompt.txt").format(
+            system_prefix=compose_recipe_prompt("product_requirement"),
+            context_ledger=context_ledger,
+            current_doc=current_doc,
+            instruction=instruction,
+        )
+        return self._generate_text_streaming(prompt, current_doc, on_delta, on_model_call)
+
+    def revise_documents(
+        self,
+        requirements_doc,
+        development_flow,
+        current_documents,
+        instruction,
+        on_delta=None,
+        on_model_call=None,
+        context_ledger: str = "",
+    ) -> list[dict]:
+        """Stream an incrementally-revised document split; returns normalized docs.
+
+        The current document set is fed back in so the model adjusts it in place
+        per the user's instruction rather than re-splitting from scratch.
+        """
+        current_json = json.dumps(current_documents, ensure_ascii=False, indent=2)
+        prompt = self._load_prompt("document_split_revision_prompt.txt").format(
+            system_prefix=compose_recipe_prompt("engineering_implementation"),
+            context_ledger=context_ledger,
+            requirements_doc=requirements_doc,
+            development_flow=development_flow,
+            current_documents=current_json,
+            instruction=instruction,
+        )
+        fallback = json.dumps(current_documents, ensure_ascii=False)
+        text = self._generate_text_streaming(prompt, fallback, on_delta, on_model_call)
+        return self._normalize_split_text(text, requirements_doc, development_flow)
+
+    # --- inline section (partial) revision -----------------------------------
+    # The user selects a span of a confirmed document and asks for a local tweak.
+    # The whole document + project consensus (ledger) are fed in as *context* so
+    # the rewrite stays on-口径, but the model returns ONLY the replacement text for
+    # the selected span (not the whole doc) — cheaper/faster, and the caller splices
+    # it back at the known offsets, yielding an exact changed range to highlight.
+    # ``kind`` -> (prompt template, prompt-library recipe).
+    _SECTION_REVISION_PROMPTS = {
+        "requirements": ("requirements_section_revision_prompt.txt", "product_requirement"),
+        "flow": ("development_flow_section_revision_prompt.txt", "engineering_implementation"),
+        "style": ("style_section_revision_prompt.txt", "product_requirement"),
+        "document": ("document_section_revision_prompt.txt", "engineering_implementation"),
+    }
+
+    def revise_section(
+        self,
+        kind: str,
+        current_doc: str,
+        selected_text: str,
+        instruction: str,
+        on_delta=None,
+        on_model_call=None,
+        context_ledger: str = "",
+    ) -> str:
+        """Rewrite only the selected span; return the replacement text for it.
+
+        ``kind`` is one of ``requirements`` / ``flow`` / ``style`` / ``document``.
+        The full current document and consensus ledger are passed as context so the
+        rewrite stays consistent with the rest of the doc, but the model outputs
+        just the new text that should replace the selected span (the caller splices
+        it in). Best-effort: on any provider/streaming failure the original
+        ``selected_text`` is returned, so a failed revision is a no-op splice that
+        never discards the user's confirmed work.
+        """
+        try:
+            prompt_name, recipe = self._SECTION_REVISION_PROMPTS[kind]
+        except KeyError:
+            raise ValueError(f"unknown section revision kind: {kind}")
+        prompt = self._load_prompt(prompt_name).format(
+            system_prefix=compose_recipe_prompt(recipe),
+            context_ledger=context_ledger,
+            current_doc=current_doc,
+            selected_text=selected_text,
+            instruction=instruction,
+        )
+        return self._generate_text_streaming(prompt, selected_text, on_delta, on_model_call)
+
     def _development_flow_context(
         self, requirements_doc: str, context_ledger: str = ""
     ) -> tuple[str, str]:
@@ -294,15 +621,48 @@ class CodeGenerationService:
         prompt, fallback = self._style_prompt_context(requirement, style_ids, context_ledger)
         return self._generate_text_streaming(prompt, fallback, on_delta, on_model_call)
 
+    # Seconds to wait between two successive thumbnail generations. Gives the
+    # image just produced time to be persisted to disk (via ``on_image``) and
+    # reloaded before the provider is hit again — it spaces out the API calls and
+    # removes the half-written-file race the Agent preview step used to see.
+    # Override with the ``CODE_PREVIEW_SETTLE_SECONDS`` env var.
+    _DEFAULT_PREVIEW_SETTLE_SECONDS = 2.0
+
+    def _resolve_preview_settle_seconds(self) -> float:
+        """Resolve the inter-thumbnail settle delay (env-overridable, clamped)."""
+        raw = os.getenv("CODE_PREVIEW_SETTLE_SECONDS")
+        if raw is None:
+            return self._DEFAULT_PREVIEW_SETTLE_SECONDS
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return self._DEFAULT_PREVIEW_SETTLE_SECONDS
+        # Keep it sane: never negative, never long enough to stall a worker thread.
+        return max(0.0, min(value, 30.0))
+
     def generate_preview_images(
-        self, prompt: str, count: int = 2, on_model_call=None
+        self,
+        prompt: str,
+        count: int = 2,
+        on_model_call=None,
+        on_image=None,
+        settle_seconds: float | None = None,
     ) -> list[dict[str, Any]]:
         """Generate UI preview thumbnails through the configured image provider.
 
         Routes through the AI factory's capability layer (``get_image_provider``)
-        so previews honour ``AI_IMAGE_PROVIDER`` (Gemini by default) instead of
-        hard-wiring a single vendor's HTTP endpoint. Runs inside the Agent Swarm
-        thread pool, so a fresh (non-cached) provider instance is requested.
+        so previews honour ``AI_IMAGE_PROVIDER`` instead of hard-wiring a single
+        vendor's HTTP endpoint. Runs inside the Agent Swarm thread pool, so a
+        fresh (non-cached) provider instance is requested.
+
+        Thumbnails are produced **one at a time**. After each image the optional
+        ``on_image(index, image, image_bytes)`` hook fires so the caller can
+        persist the raw bytes to disk (and confirm they reloaded) *before* the
+        next thumbnail is generated; a settle delay then spaces successive
+        provider calls. This is what lets the Agent preview step store a
+        disk-backed artifact + a short file URL instead of an oversized base64
+        data URL, and never (re)generate the next thumbnail until the current one
+        has safely landed on disk.
         """
         provider = get_image_provider(force_new=True)
         if provider is None or not provider.is_configured():
@@ -310,22 +670,34 @@ class CodeGenerationService:
 
         provider_name = getattr(provider, "provider_name", "image")
         model_name = getattr(provider, "model", None)
+        if settle_seconds is None:
+            settle_seconds = self._resolve_preview_settle_seconds()
 
+        total = max(1, min(count, 4))
         images: list[dict[str, Any]] = []
         last_error: str | None = None
-        for index in range(max(1, min(count, 4))):
+        for index in range(total):
             result = provider.generate_image(prompt)
             if result.success and result.image_data:
                 encoded = base64.b64encode(result.image_data).decode("ascii")
-                images.append(
-                    {
-                        "id": f"preview-{index + 1}",
-                        "url": f"data:image/png;base64,{encoded}",
-                        "prompt": prompt,
-                    }
-                )
+                image = {
+                    "id": f"preview-{index + 1}",
+                    "url": f"data:image/png;base64,{encoded}",
+                    "prompt": prompt,
+                }
+                # Let the caller persist this image to disk and confirm it loaded
+                # before we (re)generate the next thumbnail.
+                if on_image is not None:
+                    on_image(index, image, result.image_data)
+                images.append(image)
             else:
                 last_error = result.error or "图像生成失败"
+
+            # Space out successive generations: wait after every image except the
+            # last, so the next provider call only fires once the current
+            # thumbnail has settled on disk.
+            if index < total - 1 and settle_seconds > 0:
+                time.sleep(settle_seconds)
 
         # All attempts failed: surface the provider error so the caller (the
         # Agent Swarm preview step) can mark the step failed. A partial success

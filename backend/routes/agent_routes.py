@@ -210,6 +210,75 @@ def cancel_run(run_id: str):
     return success_response({"run_id": run_id, "status": "cancelling"}, "已请求取消")
 
 
+@agent_bp.route("/runs/<run_id>/resume", methods=["POST"])
+@jwt_required()
+def resume_run(run_id: str):
+    """Resume a paused run after a human-in-the-loop review checkpoint.
+
+    Body: ``{"action": "approve"|"revise", "stage": <review_stage>, "instruction": str}``
+
+    - ``approve`` advances past the reviewed document into the next stage(s).
+    - ``revise`` regenerates the reviewed document from the user's instruction
+      (which is also folded into the context ledger), then pauses again.
+
+    The directive is stashed on the run config; the worker is relaunched and the
+    workflow rebuilds its state from the persisted cursor / ledger / project.
+    """
+    run = _get_owned_run(run_id)
+    if not run:
+        return error_response("NOT_FOUND", "任务不存在", 404)
+    if run.status != AgentRunStatus.PAUSED:
+        return error_response("INVALID_STATE", "任务当前不在等待确认状态", 400)
+
+    data = request.get_json() or {}
+    action = (data.get("action") or "").strip()
+    if action not in ("approve", "revise"):
+        return error_response("VALIDATION_ERROR", "action 必须为 approve 或 revise", 400)
+
+    progress = run.get_progress()
+    review_stage = progress.get("review_stage")
+    stage = (data.get("stage") or review_stage or "").strip()
+    if review_stage and stage != review_stage:
+        return error_response("VALIDATION_ERROR", "确认环节与当前等待的步骤不一致", 400)
+
+    instruction = (data.get("instruction") or "").strip()
+    if action == "revise" and not instruction:
+        return error_response("VALIDATION_ERROR", "请填写调整意见", 400)
+
+    # Stash the resume directive for the workflow, mark RUNNING to block a
+    # duplicate resume racing in, clear the review flag, then relaunch the worker.
+    config = run.get_config()
+    config["_resume"] = {"action": action, "stage": stage, "instruction": instruction}
+    run.set_config(config)
+    run.status = AgentRunStatus.RUNNING
+    progress["review_stage"] = None
+    run.set_progress(progress)
+    db.session.commit()
+
+    agent_runtime.start(current_app._get_current_object(), run_id)
+    return success_response(
+        {
+            "run_id": run_id,
+            "status": run.status,
+            "stream_url": f"/api/agent/runs/{run_id}/stream",
+        },
+        "已确认，继续生成" if action == "approve" else "已收到调整意见，正在重新生成",
+    )
+
+
+def _is_stream_end(run) -> bool:
+    """A stream segment ends at a terminal status OR a pause (awaiting the user).
+
+    A paused run's worker has exited, so no more live events will arrive until the
+    user resumes — which opens a brand-new stream. Ending the SSE here (with a
+    ``done`` event) lets the client cleanly settle into the awaiting-review UI
+    instead of hanging on keepalives.
+    """
+    return bool(
+        run and (run.status in AgentRunStatus.TERMINAL or run.status == AgentRunStatus.PAUSED)
+    )
+
+
 def _sse(event_dict: dict) -> str:
     return (
         f"id: {event_dict['sequence']}\n"
@@ -242,7 +311,7 @@ def _event_stream(app, run_id: str, last_sequence: int):
             )
             payloads = [event.to_dict() for event in events]
             run = db.session.get(AgentRun, run_id)
-            terminal = bool(run and run.status in AgentRunStatus.TERMINAL)
+            terminal = _is_stream_end(run)
         for payload in payloads:
             cursor = max(cursor, payload["sequence"])
             yield _sse(payload)
@@ -271,7 +340,7 @@ def _event_stream(app, run_id: str, last_sequence: int):
                 yield ": keepalive\n\n"
                 with app.app_context():
                     run = db.session.get(AgentRun, run_id)
-                    terminal = bool(run and run.status in AgentRunStatus.TERMINAL)
+                    terminal = _is_stream_end(run)
                 continue
 
             # Transient token deltas are live-only: forward immediately without
@@ -284,7 +353,13 @@ def _event_stream(app, run_id: str, last_sequence: int):
                 continue
             cursor = max(cursor, event["sequence"])
             yield _sse(event)
-            if event["event_type"] == AgentEventType.RUN_COMPLETED:
+            # run_completed ends the stream; so does a pause checkpoint
+            # (step_awaiting_review) — the worker has exited and won't push again
+            # until the user resumes, which opens a fresh stream.
+            if event["event_type"] in (
+                AgentEventType.RUN_COMPLETED,
+                AgentEventType.STEP_AWAITING_REVIEW,
+            ):
                 terminal = True
     finally:
         event_bus.unsubscribe(run_id, q)

@@ -51,6 +51,32 @@ export interface PreviewImage {
   prompt: string
 }
 
+/** One selectable option in a requirements clarification question. */
+export interface ClarificationOption {
+  value: string
+  label: string
+  description?: string
+}
+
+/**
+ * A requirements clarification question generated alongside the requirements
+ * doc. The front-end renders it as a single/multi selection control (+ optional
+ * free-text) in the confirmation dialog; unanswered questions fall back to
+ * `default`. See docs/requirements-clarify-spec.md.
+ */
+export interface ClarificationQuestion {
+  id: string
+  category?: string
+  question: string
+  type: "single" | "multi"
+  options: ClarificationOption[]
+  /** Recommended option value(s) — used when the user doesn't change the answer. */
+  default: string[]
+  /** Whether to show a free-text "other" input for this question. */
+  allow_custom: boolean
+  rationale?: string
+}
+
 export interface CodeProject {
   id: string
   user_id: string
@@ -69,6 +95,37 @@ export interface CodeProject {
   visibility: string
   created_at: string
   updated_at: string
+}
+
+export type StageVersionSource =
+  | "generated"
+  | "manual_edit"
+  | "partial_revision"
+  | "rollback"
+  | "import"
+
+/** One historical version of a Code project stage product. */
+export interface StageVersion {
+  id: string
+  project_id: string
+  stage: string
+  version_number: number
+  is_current: boolean
+  source: StageVersionSource
+  summary: string | null
+  run_id: string | null
+  step_id: string | null
+  note: string | null
+  created_at: string
+  // Present only on the single-version detail endpoint.
+  content_text?: string | null
+  content_json?: unknown
+}
+
+/** The character range in the (post-revision) document that the model changed. */
+export interface SectionChange {
+  start: number
+  end: number
 }
 
 interface Envelope<T> {
@@ -205,6 +262,75 @@ export const codeApi = {
     const response = await api.post<Envelope<{ project: CodeProject }>>(
       `/code/projects/${projectId}/confirm-preview`,
       { preview_url: previewUrl, ui_baseline_prompt: uiBaselinePrompt }
+    )
+    return response.data.project
+  },
+  // --- inline section (partial) revision ---
+  // Rewrite only the user-selected span of a confirmed document. The model is
+  // fed the whole document as context but returns just the replacement, which the
+  // backend splices at the selection offsets — returning the updated project (or
+  // document) plus the exact changed range to highlight. Runs an LLM call, so use
+  // the long timeout; the UI keeps this off the global loading gate (async).
+  reviseStageSection: async (
+    projectId: string,
+    stage: "requirements" | "flow" | "style",
+    selectedText: string,
+    instruction: string,
+    selectionStart: number,
+    selectionEnd: number
+  ) => {
+    const response = await api.post<
+      Envelope<{ project: CodeProject; version: StageVersion | null; change: SectionChange | null }>
+    >(
+      `/code/projects/${projectId}/stages/${stage}/revise-section`,
+      {
+        selected_text: selectedText,
+        instruction,
+        selection_start: selectionStart,
+        selection_end: selectionEnd,
+      },
+      { timeout: AI_GENERATION_TIMEOUT }
+    )
+    return { project: response.data.project, change: response.data.change }
+  },
+  reviseDocumentSection: async (
+    projectId: string,
+    documentId: string,
+    selectedText: string,
+    instruction: string,
+    selectionStart: number,
+    selectionEnd: number
+  ) => {
+    const response = await api.post<
+      Envelope<{ document: CodeDocument; version: StageVersion | null; change: SectionChange | null }>
+    >(
+      `/code/projects/${projectId}/documents/${documentId}/revise-section`,
+      {
+        selected_text: selectedText,
+        instruction,
+        selection_start: selectionStart,
+        selection_end: selectionEnd,
+      },
+      { timeout: AI_GENERATION_TIMEOUT }
+    )
+    return { document: response.data.document, change: response.data.change }
+  },
+  // --- stage version history ---
+  listStageVersions: async (projectId: string, stage: string) => {
+    const response = await api.get<Envelope<{ versions: StageVersion[] }>>(
+      `/code/projects/${projectId}/stages/${stage}/versions`
+    )
+    return response.data.versions
+  },
+  getStageVersion: async (projectId: string, stage: string, versionId: string) => {
+    const response = await api.get<Envelope<{ version: StageVersion }>>(
+      `/code/projects/${projectId}/stages/${stage}/versions/${versionId}`
+    )
+    return response.data.version
+  },
+  activateStageVersion: async (projectId: string, stage: string, versionId: string) => {
+    const response = await api.post<Envelope<{ project: CodeProject }>>(
+      `/code/projects/${projectId}/stages/${stage}/versions/${versionId}/activate`
     )
     return response.data.project
   },

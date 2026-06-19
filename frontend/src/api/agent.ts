@@ -13,6 +13,7 @@ export const AGENT_API_BASE = import.meta.env.VITE_API_URL || "/api"
 export type AgentRunStatus =
   | "queued"
   | "running"
+  | "paused"
   | "completed"
   | "partial"
   | "failed"
@@ -25,6 +26,10 @@ export interface AgentRunProgress {
   completed_steps: number
   failed_steps: number
   current_step: string | null
+  /** Stage currently awaiting user confirmation (set while the run is paused). */
+  review_stage?: string | null
+  /** Next stage to run when the user approves (resume cursor). */
+  cursor?: string | null
 }
 
 export interface AgentStep {
@@ -161,6 +166,17 @@ export const agentApi = {
   },
   cancelRun: async (runId: string): Promise<void> => {
     await api.post<Envelope<unknown>>(`/agent/runs/${runId}/cancel`)
+  },
+  /** Resume a paused run: approve the reviewed document or revise it. */
+  resumeRun: async (
+    runId: string,
+    body: { action: "approve" | "revise"; stage?: string | null; instruction?: string }
+  ): Promise<CreateRunResult> => {
+    const response = await api.post<Envelope<CreateRunResult>>(
+      `/agent/runs/${runId}/resume`,
+      body
+    )
+    return response.data
   },
   /** Download an artifact's file via the authenticated client (returns a Blob). */
   downloadArtifact: async (artifactId: string): Promise<Blob> => {

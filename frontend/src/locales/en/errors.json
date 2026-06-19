@@ -45,7 +45,8 @@
     "saveDocumentFailed": "Failed to save document",
     "generateStyleFailed": "Failed to generate style doc",
     "generatePreviewFailed": "Failed to generate thumbnails",
-    "confirmPreviewFailed": "Failed to confirm UI baseline"
+    "confirmPreviewFailed": "Failed to confirm UI baseline",
+    "reviseSectionFailed": "Partial revision failed"
   },
   "team": {
     "fetchTeamsFailed": "Failed to fetch teams",

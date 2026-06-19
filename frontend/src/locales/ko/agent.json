@@ -29,7 +29,8 @@
     "failed": "실패",
     "cancelled": "취소됨",
     "pending": "대기",
-    "skipped": "건너뜀"
+    "skipped": "건너뜀",
+    "paused": "확인 대기"
   },
   "tabs": {
     "summary": "요약",
@@ -68,7 +69,10 @@
     "step_completed": "단계 완료",
     "run_completed": "작업 종료",
     "context_updated": "컨텍스트 업데이트",
-    "context_conflict": "컨텍스트 충돌"
+    "context_conflict": "컨텍스트 충돌",
+    "step_awaiting_review": "확인 대기",
+    "user_revision": "사용자 조정",
+    "review_resolved": "확인됨"
   },
   "context": {
     "injected": "주입된 스냅샷",

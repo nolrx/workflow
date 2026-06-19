@@ -50,6 +50,7 @@
     "confirmed": "Confirmed",
     "empty": "Generated thumbnails will appear here after you choose styles.",
     "imageAlt": "App thumbnail",
+    "generating": "Generating thumbnails…",
     "skipped": "Thumbnail service is unavailable — using the style prompt as the UI baseline and moving on to frontend development."
   },
   "baseline": {
@@ -58,6 +59,16 @@
   "toast": {
     "saved": "Project saved",
     "documentSaved": "Document saved"
+  },
+  "partialRevise": {
+    "hint": "{{count}} chars selected · only this part is revised",
+    "placeholder": "How should this part change?",
+    "submit": "Revise",
+    "cancel": "Cancel",
+    "applying": "Revising…",
+    "applied": "Selection updated",
+    "unchanged": "No change needed",
+    "failed": "Partial revision failed"
   },
   "workspace": {
     "previewTitle": "Live preview",
@@ -81,6 +92,70 @@
       "documents": "Dev docs",
       "style": "UI style",
       "app": "App preview"
+    }
+  },
+  "conversation": {
+    "title": "Conversation",
+    "intro": "Describe the product you want to build. I'll draft the requirements first and check with you before each next step.",
+    "generating": "Generating…",
+    "awaitingHint": "Expand this step's output to review it. Approve to continue, or tell me how to adjust it below.",
+    "reviseLabel": "What should change?",
+    "revisePlaceholder": "Tell me how to adjust this step — e.g. change a section, fill a gap, shift direction or wording…",
+    "approve": "Approve & continue",
+    "revise": "Submit adjustment",
+    "start": "Start generating",
+    "running": "Generating, please wait…",
+    "resolved": "Confirmed — moving on",
+    "completedTitle": "Product generated",
+    "completedHint": "Expand any step to view and edit it, or start a new session.",
+    "failed": "Generation failed. Adjust the requirement and retry.",
+    "retry": "Retry",
+    "newSession": "New session",
+    "liveLabel": "Generating live…",
+    "generatingStage": "Generating {{stage}}",
+    "reviewBadge": "Review",
+    "doneBadge": "Done",
+    "cardReviewHint": "Review it, then approve or tell me how to adjust it below",
+    "cardDoneHint": "Done · expand to view and edit",
+    "appCardHint": "Generate a previewable frontend app"
+  },
+  "clarify": {
+    "title": "Quick-confirm requirements",
+    "subtitle": "Confirm the key decisions question by question. Untouched answers keep the suggested default; the requirements doc is re-iterated from your choices.",
+    "empty": "No key questions to confirm.",
+    "openButton": "Quick-confirm requirements ({{count}})",
+    "apply": "Confirm & iterate",
+    "applySuggestions": "Use all suggestions",
+    "suggestedBadge": "Suggested",
+    "customPlaceholder": "Other (custom)…"
+  },
+  "versions": {
+    "button": "History",
+    "styleHistory": "Style history",
+    "previewHistory": "Preview history",
+    "title": "Version history",
+    "current": "Current",
+    "empty": "No history yet",
+    "restore": "Restore this version",
+    "restored": "Restored to this version",
+    "restoreFailed": "Restore failed",
+    "loadFailed": "Failed to load history",
+    "versionLabel": "Version {{n}}",
+    "selectHint": "Select a version on the left to preview",
+    "noContent": "This version has no content",
+    "source": {
+      "generated": "AI generated",
+      "manual_edit": "Manual edit",
+      "partial_revision": "Partial revision",
+      "rollback": "Rollback",
+      "import": "Initial version"
+    },
+    "stage": {
+      "requirements": "Requirements",
+      "flow": "Dev flow",
+      "documents": "Documents",
+      "style": "Style",
+      "preview": "Previews"
     }
   }
 }

@@ -39,6 +39,34 @@ def panlaxy_image_env(monkeypatch):
     reset_providers()
 
 
+@pytest.fixture
+def gemini_image_env(monkeypatch):
+    # Image provider = gemini with NO explicit AI_IMAGE_MODEL. It must fall back to
+    # a NATIVE gemini image model, never a panlaxy id (gpt-image-2): the gemini
+    # provider calls generateContent + response_modalities, so a wrong/text model
+    # returns text only (finish_reason=STOP, no image).
+    monkeypatch.delenv("AI_IMAGE_MODEL", raising=False)
+    monkeypatch.delenv("AI_IMAGE_API_KEY", raising=False)
+    monkeypatch.delenv("AI_IMAGE_BASE_URL", raising=False)
+    monkeypatch.setenv("AI_IMAGE_PROVIDER", "gemini")
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-google-key")
+    reset_providers()
+
+
+@pytest.fixture
+def openai_image_env(monkeypatch):
+    # Image provider = the real OpenAI (ChatGPT) image API. With no overrides it
+    # must resolve to gpt-image-2 at OpenAI's own base URL, using OPENAI_API_KEY.
+    monkeypatch.delenv("AI_IMAGE_MODEL", raising=False)
+    monkeypatch.delenv("AI_IMAGE_API_KEY", raising=False)
+    monkeypatch.delenv("AI_IMAGE_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_IMAGE_MODEL", raising=False)
+    monkeypatch.setenv("AI_IMAGE_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+    reset_providers()
+
+
 def test_text_provider_is_claude(claude_text_env):
     provider = get_text_provider()
     assert provider is not None
@@ -52,6 +80,27 @@ def test_image_provider_is_panlaxy(panlaxy_image_env):
     assert provider.provider_name == "panlaxy"
     assert provider.model == "gpt-image-1"
     assert provider.base_url == "https://api.panlaxy.io/v1"
+
+
+def test_image_provider_is_openai(openai_image_env):
+    """gpt-image-2 routes through the real OpenAI image API (not Panlaxy)."""
+    provider = get_image_provider()
+    assert provider is not None
+    assert provider.provider_name == "openai"
+    assert provider.model == "gpt-image-2"
+    assert provider.base_url == "https://api.openai.com/v1"
+
+
+def test_gemini_image_default_is_a_native_image_model(gemini_image_env):
+    """An unset AI_IMAGE_MODEL on the gemini image provider must resolve to a
+    native gemini image model — never a panlaxy id like gpt-image-2, which makes
+    generateContent return text-only (finish_reason=STOP, no image)."""
+    provider = get_image_provider()
+    assert provider is not None
+    assert provider.provider_name == "gemini"
+    assert provider.model != "gpt-image-2"
+    assert provider.model.startswith("gemini-")
+    assert "image" in provider.model
 
 
 def test_text_and_image_use_different_providers(claude_text_env, panlaxy_image_env):

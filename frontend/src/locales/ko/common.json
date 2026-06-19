@@ -83,5 +83,9 @@
     "saved": "저장되었습니다",
     "deleted": "삭제되었습니다",
     "error": "오류가 발생했습니다"
+  },
+  "a11y": {
+    "notifications": "알림",
+    "profile": "프로필"
   }
 }

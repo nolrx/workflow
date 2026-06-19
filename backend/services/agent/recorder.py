@@ -235,7 +235,16 @@ class RunRecorder:
     def __init__(self, run_id: str, bus=event_bus):
         self.run_id = run_id
         self._bus = bus
-        self._sequence = 0
+        # Resume-safe sequencing: continue past any events already persisted for
+        # this run. A paused run that resumes builds a fresh recorder, and
+        # restarting the counter from 0 would collide with the existing event log
+        # and break the client's sequence-based dedup / ordering.
+        last = (
+            db.session.query(db.func.max(AgentEvent.sequence))
+            .filter(AgentEvent.run_id == run_id)
+            .scalar()
+        )
+        self._sequence = int(last or 0)
         self._lock = threading.Lock()
 
     def _next_sequence(self) -> int:

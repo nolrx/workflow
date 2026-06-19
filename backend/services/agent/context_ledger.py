@@ -29,11 +29,6 @@ logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 
-# Default tech-stack口径 — mirrors the frontend workflow's single-file HTML
-# delivery and the development-flow fallback's Flask backend assumption.
-DEFAULT_FRONTEND_STACK = "Single-file HTML + inline CSS + browser-native JavaScript"
-DEFAULT_BACKEND_STACK = "Flask (Python)"
-
 
 def _now_iso() -> str:
     return datetime.utcnow().isoformat() + "Z"
@@ -248,6 +243,40 @@ class ContextLedger:
                 index[did] = entry
                 self._data["decisions"].append(entry)
 
+    def record_user_revision(self, stage: str, instruction: str) -> "ContextLedger":
+        """Fold a user's confirmation-step adjustment into the ledger.
+
+        The user's free-text instruction becomes a high-priority decision (plus a
+        provenance entry attributed to ``user``) so every downstream prompt that
+        renders the ledger carries the adjustment forward — this is how a manual
+        tweak at a review gate persists into later生成 instead of being lost. Each
+        call appends a new decision (ids are sequenced per stage) so repeated
+        adjustments accumulate rather than overwrite.
+        """
+        text = _clean_str(instruction)
+        if not text:
+            return self
+        seq = (
+            len([d for d in self._data["decisions"] if str(d.get("id", "")).startswith(f"user-{stage}-")])
+            + 1
+        )
+        self.merge(
+            decisions_add=[
+                {
+                    "id": f"user-{stage}-{seq}",
+                    "statement": f"用户在「{stage}」确认环节要求：{text}",
+                    "rationale": "用户人工确认时提出的调整，后续产物必须体现",
+                    "source_step": f"{stage}_revision",
+                }
+            ],
+            provenance_entry={
+                "step": f"{stage}_revision",
+                "agent_key": "user",
+                "fields_touched": ["decisions"],
+            },
+        )
+        return self
+
     # ---- rendering -----------------------------------------------------------
     def render_for_prompt(self, *, max_chars: int = 1800) -> str:
         """Render the compact consensus block prepended to downstream prompts.
@@ -335,7 +364,14 @@ class ContextLedger:
 
 
 def seed_from_inputs(requirement: str, title: str, style_ids: Optional[list] = None) -> ContextLedger:
-    """Build the initial ledger at the planner step from the run inputs."""
+    """Build the initial ledger at the planner step from the run inputs.
+
+    The tech-stack口径 is deliberately left blank here: the technical architecture
+    is *derived from the actual requirement* by the requirements step (and refined
+    by the development-flow step), not pre-stamped with a one-size-fits-all stack.
+    Seeding a fixed stack used to anchor every project to a single-HTML + Flask
+    architecture regardless of what the project actually needed.
+    """
     ledger = ContextLedger.empty()
     requirement = _clean_str(requirement)
     ledger.merge(
@@ -343,14 +379,10 @@ def seed_from_inputs(requirement: str, title: str, style_ids: Optional[list] = N
             "title": _clean_str(title),
             "one_liner": requirement[:200],
         },
-        tech_stack={
-            "frontend": DEFAULT_FRONTEND_STACK,
-            "backend": DEFAULT_BACKEND_STACK,
-        },
         provenance_entry={
             "step": "planner",
             "agent_key": "planner",
-            "fields_touched": ["project.title", "project.one_liner", "tech_stack"],
+            "fields_touched": ["project.title", "project.one_liner"],
         },
     )
     if style_ids:

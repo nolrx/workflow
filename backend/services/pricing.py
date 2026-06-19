@@ -55,6 +55,14 @@ CODE_FRONTEND_GENERATION = _credits("PRICE_CODE_FRONTEND", 0)
 # above, so priced higher; metered against the CLI's reported token usage.
 CODE_FRONTEND_PROJECT_GENERATION = _credits("PRICE_CODE_FRONTEND_PROJECT", 0)
 
+# Inline section (partial) revision of a confirmed Code document — the user
+# selects a span of one stage product (requirements / flow / style / a single
+# split document) and asks the model to rewrite just that span while keeping the
+# rest byte-identical. A single synchronous text generation; priced 0 like the
+# rest of the Code domain but routed through charge()/refund_credits() so it can
+# be metered via PRICE_CODE_SECTION_REVISE without code changes.
+CODE_SECTION_REVISION = _credits("PRICE_CODE_SECTION_REVISE", 0)
+
 
 # Operation label -> (resource_type, unit_cost). Used when writing CreditTransaction
 # records so the audit log carries a stable operation/resource vocabulary.
@@ -68,4 +76,5 @@ OPERATION = {
     "agent_run": ("agent_run", CODE_FULL_GENERATION_TOTAL),
     "code_context_verify": ("agent_run", CODE_CONTEXT_VERIFY),
     "code_frontend_project": ("agent_run", CODE_FRONTEND_PROJECT_GENERATION),
+    "code_section_revise": ("code_project", CODE_SECTION_REVISION),
 }

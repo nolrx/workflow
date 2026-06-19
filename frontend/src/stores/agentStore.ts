@@ -54,10 +54,13 @@ interface AgentState {
   listRuns: (params?: { domain?: string; resourceId?: string; limit?: number }) => Promise<AgentRun[]>
   openLatestRunForResource: (resourceId: string) => Promise<boolean>
   cancelRun: () => Promise<void>
+  resumeRun: (action: "approve" | "revise", instruction?: string) => Promise<void>
   selectStep: (stepId: string | null) => void
   setDebugMode: (value: boolean) => void
   openPanel: () => void
   closePanel: () => void
+  /** Tear down the current run workspace (stream + state) for a fresh session. */
+  reset: () => void
 }
 
 export const useAgentStore = create<AgentState>()((set, get) => {
@@ -109,8 +112,15 @@ export const useAgentStore = create<AgentState>()((set, get) => {
     set({ isStreaming: true })
 
     const token = tokenManager.getAccessToken()
+    // Resume the stream from the last event we already hold so reconnects (and
+    // the re-subscribe after a resume) pull only the delta instead of replaying
+    // the whole log. The server continues the sequence past existing events.
+    const lastSeq = get().events.reduce((max, event) => Math.max(max, event.sequence), 0)
+    const streamUrl = `${AGENT_API_BASE}/agent/runs/${runId}/stream${
+      lastSeq ? `?last_sequence=${lastSeq}` : ""
+    }`
     try {
-      const response = await fetch(`${AGENT_API_BASE}/agent/runs/${runId}/stream`, {
+      const response = await fetch(streamUrl, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         signal: streamAbort.signal,
       })
@@ -251,6 +261,20 @@ export const useAgentStore = create<AgentState>()((set, get) => {
       await refresh(run.id)
     },
 
+    // Human-in-the-loop review: approve the produced document (advance to the
+    // next stage) or revise it (regenerate from the instruction). Either way the
+    // backend relaunches the worker, so we re-subscribe to the live stream — the
+    // re-subscribe pulls only events past what we already have.
+    resumeRun: async (action, instruction) => {
+      const run = get().run
+      if (!run || run.status !== "paused") return
+      const stage = run.progress?.review_stage ?? undefined
+      activeRunId = run.id
+      await agentApi.resumeRun(run.id, { action, stage, instruction })
+      await refresh(run.id)
+      void stream(run.id)
+    },
+
     selectStep: (stepId) => set({ selectedStepId: stepId }),
     setDebugMode: (value) => set({ debugMode: value }),
 
@@ -259,6 +283,26 @@ export const useAgentStore = create<AgentState>()((set, get) => {
     // tears down the live run/stream.
     openPanel: () => set({ panelOpen: true }),
     closePanel: () => set({ panelOpen: false }),
+
+    // Tear down the live run + workspace so a new session starts clean. Unlike a
+    // bare setState this also aborts the stream and clears the module-level
+    // run-tracking state — otherwise a still-open stream could write back into
+    // the freshly-reset store via a late refresh.
+    reset: () => {
+      activeRunId = null
+      creditRefreshedRunId = null
+      streamAbort?.abort()
+      streamAbort = null
+      clearRefreshTimer()
+      set({
+        run: null,
+        events: [],
+        streamingByStep: {},
+        selectedStepId: null,
+        isStreaming: false,
+        panelOpen: false,
+      })
+    },
   }
 })
 
@@ -268,4 +312,83 @@ export const selectCurrentStep = (state: {
 }): AgentStep | null => {
   if (!state.run?.steps) return null
   return state.run.steps.find((step) => step.id === state.selectedStepId) || null
+}
+
+/** A single bubble in the conversational workspace transcript. */
+export interface ConversationMessage {
+  id: string
+  role: "user" | "assistant" | "system"
+  kind: "requirement" | "revision" | "awaiting_review" | "resolved" | "completed" | "error"
+  stage?: string | null
+  text: string
+  sequence: number
+}
+
+/**
+ * Derive the chat transcript from the run's opening requirement + its ordered
+ * event log. Everything is event-sourced, so a paused or finished run replays
+ * into the same conversation — the live "generating" bubble is layered on top by
+ * the component from streamingByStep.
+ */
+export function deriveConversation(
+  run: AgentRun | null,
+  events: AgentEvent[]
+): ConversationMessage[] {
+  if (!run) return []
+  const messages: ConversationMessage[] = []
+  const cfg = (run.config || {}) as { requirement?: string }
+  const snap = ((run.input_snapshot?.config as { requirement?: string }) || {})
+  const requirement = cfg.requirement || snap.requirement
+  if (requirement) {
+    messages.push({ id: "req-0", role: "user", kind: "requirement", text: requirement, sequence: 0 })
+  }
+  for (const event of [...events].sort((a, b) => a.sequence - b.sequence)) {
+    const payload = event.payload || {}
+    const stage = (payload.stage as string | undefined) ?? null
+    if (event.event_type === "user_revision") {
+      messages.push({
+        id: event.id,
+        role: "user",
+        kind: "revision",
+        stage,
+        text: (payload.instruction as string) || event.message || "",
+        sequence: event.sequence,
+      })
+    } else if (event.event_type === "step_awaiting_review") {
+      messages.push({
+        id: event.id,
+        role: "assistant",
+        kind: "awaiting_review",
+        stage,
+        text: event.message || "",
+        sequence: event.sequence,
+      })
+    } else if (event.event_type === "review_resolved") {
+      messages.push({
+        id: event.id,
+        role: "system",
+        kind: "resolved",
+        stage,
+        text: event.message || "",
+        sequence: event.sequence,
+      })
+    } else if (event.event_type === "run_completed") {
+      messages.push({
+        id: event.id,
+        role: "system",
+        kind: "completed",
+        text: event.message || "",
+        sequence: event.sequence,
+      })
+    } else if (event.event_type === "error") {
+      messages.push({
+        id: event.id,
+        role: "system",
+        kind: "error",
+        text: event.message || "",
+        sequence: event.sequence,
+      })
+    }
+  }
+  return messages
 }

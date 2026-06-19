@@ -84,14 +84,21 @@ class AgentRuntime:
                     logger.error("AgentRun %s not found", run_id)
                     return
 
+                # First launch vs. resume (a paused run restarting). Only stamp
+                # started_at + emit RUN_STARTED on the first launch; on resume the
+                # workflow itself emits the user_revision / step events, and a
+                # second RUN_STARTED would confuse the client timeline.
+                first_start = run.started_at is None
                 run.status = AgentRunStatus.RUNNING
-                run.started_at = datetime.utcnow()
+                if first_start:
+                    run.started_at = datetime.utcnow()
                 db.session.commit()
-                recorder.emit(
-                    AgentEventType.RUN_STARTED,
-                    message="工作流启动",
-                    payload={"workflow": run.workflow, "domain": run.domain},
-                )
+                if first_start:
+                    recorder.emit(
+                        AgentEventType.RUN_STARTED,
+                        message="工作流启动",
+                        payload={"workflow": run.workflow, "domain": run.domain},
+                    )
 
                 workflow_fn = get_workflow(run.workflow)
                 if not workflow_fn:
@@ -118,19 +125,29 @@ class AgentRuntime:
                 # boundary; a cancel that arrives *after* the workflow finished is
                 # intentionally a no-op (the work was completed), so we do not
                 # relabel a finished run as cancelled here.
-                run.status = result.get("status", AgentRunStatus.COMPLETED)
+                status = result.get("status", AgentRunStatus.COMPLETED)
+                run.status = status
                 if result.get("resource_id"):
                     run.resource_id = result["resource_id"]
                 # Up-front reservation + any per-call context-verify gate charges
                 # the workflow reported (charged as they fired, never refunded).
                 run.credit_used = run.credit_reserved + int(result.get("extra_credits", 0) or 0)
-                run.completed_at = datetime.utcnow()
-                db.session.commit()
-                recorder.emit(
-                    AgentEventType.RUN_COMPLETED,
-                    message="工作流结束",
-                    payload={"status": run.status, "resource_id": run.resource_id},
-                )
+                if status == AgentRunStatus.PAUSED:
+                    # Human-in-the-loop checkpoint: the workflow produced a document
+                    # and is waiting for the user to confirm / adjust. Leave the run
+                    # non-terminal — no completed_at, no RUN_COMPLETED, no refund.
+                    # The worker exits here; a resume rebuilds state and continues.
+                    # The workflow already emitted step_awaiting_review, which ends
+                    # the SSE segment.
+                    db.session.commit()
+                else:
+                    run.completed_at = datetime.utcnow()
+                    db.session.commit()
+                    recorder.emit(
+                        AgentEventType.RUN_COMPLETED,
+                        message="工作流结束",
+                        payload={"status": run.status, "resource_id": run.resource_id},
+                    )
             except Exception as exc:  # noqa: BLE001 - persist failure, never crash the worker
                 logger.error("Agent run %s failed: %s", run_id, exc, exc_info=True)
                 db.session.rollback()

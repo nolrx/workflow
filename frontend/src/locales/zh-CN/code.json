@@ -50,6 +50,7 @@
     "confirmed": "已确认",
     "empty": "选择风格并生成缩略图后会显示在这里。",
     "imageAlt": "应用缩略图",
+    "generating": "正在生成缩略图…",
     "skipped": "缩略图服务暂不可用，已用风格提示词作为 UI 基调，直接进入前端开发。"
   },
   "baseline": {
@@ -58,6 +59,16 @@
   "toast": {
     "saved": "项目已保存",
     "documentSaved": "文档已保存"
+  },
+  "partialRevise": {
+    "hint": "已选中 {{count}} 字 · 仅修订这一段",
+    "placeholder": "这一段想怎么改？",
+    "submit": "修订",
+    "cancel": "取消",
+    "applying": "正在修订…",
+    "applied": "已更新选中部分",
+    "unchanged": "内容未发生变化",
+    "failed": "局部修订失败"
   },
   "workspace": {
     "previewTitle": "实时预览",
@@ -81,6 +92,70 @@
       "documents": "开发文档",
       "style": "UI 风格",
       "app": "应用预览"
+    }
+  },
+  "conversation": {
+    "title": "对话",
+    "intro": "描述你想做的产品，我会先生成需求文档，每一步都交你确认后再继续。",
+    "generating": "正在生成…",
+    "awaitingHint": "可展开本步生成的内容查看。满意就点「确认」进入下一步，或在下方告诉我需要怎么调整。",
+    "reviseLabel": "需要调整什么？",
+    "revisePlaceholder": "告诉我这一步要怎么调整，例如：改某个部分、补充遗漏、调整方向或措辞……",
+    "approve": "确认，进入下一步",
+    "revise": "提交调整",
+    "start": "开始生成",
+    "running": "正在生成，请稍候…",
+    "resolved": "已确认，继续下一步",
+    "completedTitle": "产品已生成完成",
+    "completedHint": "可展开各步内容查看与编辑，或开始一个新的会话。",
+    "failed": "生成失败，请调整需求后重试。",
+    "retry": "重试",
+    "newSession": "新建会话",
+    "liveLabel": "正在实时生成…",
+    "generatingStage": "正在生成 {{stage}}",
+    "reviewBadge": "待确认",
+    "doneBadge": "已完成",
+    "cardReviewHint": "请审阅，确认或在下方告诉我如何调整",
+    "cardDoneHint": "已完成 · 点击展开查看与编辑",
+    "appCardHint": "生成可在线预览的前端应用"
+  },
+  "clarify": {
+    "title": "需求快速确认",
+    "subtitle": "逐题确认关键决策，未改动的题目将采用建议；确认后会据此重新迭代需求文档。",
+    "empty": "暂无需要确认的关键问题。",
+    "openButton": "快速确认需求（{{count}} 项）",
+    "apply": "确认并迭代需求",
+    "applySuggestions": "全部采用建议",
+    "suggestedBadge": "建议",
+    "customPlaceholder": "其他（自定义）…"
+  },
+  "versions": {
+    "button": "历史版本",
+    "styleHistory": "风格历史",
+    "previewHistory": "预览图历史",
+    "title": "历史版本",
+    "current": "当前",
+    "empty": "暂无历史版本",
+    "restore": "恢复此版本",
+    "restored": "已恢复到该版本",
+    "restoreFailed": "恢复失败",
+    "loadFailed": "加载历史版本失败",
+    "versionLabel": "版本 {{n}}",
+    "selectHint": "选择左侧版本查看内容",
+    "noContent": "该版本无内容",
+    "source": {
+      "generated": "AI 生成",
+      "manual_edit": "手动编辑",
+      "partial_revision": "局部修订",
+      "rollback": "回退",
+      "import": "初始版本"
+    },
+    "stage": {
+      "requirements": "需求文档",
+      "flow": "开发流程",
+      "documents": "开发文档",
+      "style": "风格文档",
+      "preview": "预览图"
     }
   }
 }

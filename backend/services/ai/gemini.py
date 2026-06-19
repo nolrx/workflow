@@ -200,22 +200,43 @@ class GeminiProvider(AIProvider):
             # instead so the failure is actionable.
             candidate = response.candidates[0] if response.candidates else None
             parts = getattr(getattr(candidate, "content", None), "parts", None) if candidate else None
+            text_parts: list[str] = []
             if parts:
                 for part in parts:
                     if part.inline_data and part.inline_data.data:
                         image_data = part.inline_data.data
                         logger.debug(f"Gemini image generation successful, size: {len(image_data)} bytes")
                         return ImageGenerationResult(image_data=image_data, success=True)
+                    part_text = getattr(part, "text", None)
+                    if part_text:
+                        text_parts.append(part_text)
 
             finish_reason = getattr(candidate, "finish_reason", None) if candidate else None
             reason_note = f" (finish_reason={finish_reason})" if finish_reason else ""
-            logger.warning(f"No image data in Gemini response{reason_note}")
+            # Text but no image on a normal STOP almost always means the configured
+            # model is NOT a native image model (a text model ignores the IMAGE
+            # modality and just answers in text). Make that diagnosable instead of a
+            # generic "declined".
+            returned_text = " ".join(t.strip() for t in text_parts if t).strip()
+            model_hint = (
+                f" The model '{self.model}' returned text instead of an image — it is "
+                "likely not a native Gemini image model. Set AI_IMAGE_MODEL to one "
+                "(e.g. gemini-3.1-flash-image or gemini-2.5-flash-image)."
+                if returned_text
+                else ""
+            )
+            logger.warning(
+                "No image data in Gemini response%s using model '%s'%s",
+                reason_note,
+                self.model,
+                f"; text head: {returned_text[:160]}" if returned_text else "",
+            )
             return ImageGenerationResult(
                 image_data=None,
                 success=False,
                 error=(
                     "No image generated in response. The model declined or returned "
-                    f"no image{reason_note}. Try a different prompt or image model."
+                    f"no image{reason_note}.{model_hint or ' Try a different prompt or image model.'}"
                 ),
             )
 

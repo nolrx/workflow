@@ -83,5 +83,9 @@
     "saved": "保存成功",
     "deleted": "删除成功",
     "error": "发生错误"
+  },
+  "a11y": {
+    "notifications": "通知",
+    "profile": "个人资料"
   }
 }

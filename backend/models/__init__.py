@@ -12,7 +12,14 @@ from backend.models.agent import (
     AgentStep,
     AgentStepStatus,
 )
-from backend.models.code import CodeDocument, CodeProject, CodeProjectStatus
+from backend.models.code import (
+    CodeDocument,
+    CodeProject,
+    CodeProjectStatus,
+    CodeStage,
+    CodeStageVersion,
+    CodeStageVersionSource,
+)
 from backend.models.credit import CreditBalance, CreditTransaction, TeamCreditBalance
 from backend.models.ppt import (
     PPTMaterial,
@@ -65,6 +72,9 @@ __all__ = [
     "CodeProject",
     "CodeProjectStatus",
     "CodeDocument",
+    "CodeStage",
+    "CodeStageVersion",
+    "CodeStageVersionSource",
     # Agent Swarm
     "AgentRun",
     "AgentRunStatus",

@@ -77,14 +77,15 @@ uv run pytest path/to/test_x.py::test_name -v       # 跑单个测试
   | provider | 文本 | 图像 | SDK | 默认模型 |
   |----------|------|------|-----|----------|
   | `claude` (`claude.py`)   | ✅（流式 + thinking） | ❌ | `anthropic` | `claude-opus-4-8`（`max_tokens` 默认 16000） |
-  | `gemini` (`gemini.py`)   | ✅ | ✅ | `google-genai`（新版 SDK，非 `google-generativeai`） | `gemini-3-flash-preview` / `imagen-3.0-generate-002` |
+  | `gemini` (`gemini.py`)   | ✅ | ✅ | `google-genai`（新版 SDK，非 `google-generativeai`） | `gemini-3-flash-preview` / `gemini-3.1-flash-image`（原生图像模型；勿用 imagen-*，其走不同的 predict API） |
+  | `openai` (`openai_image.py`) | ❌ | ✅（`images.generate` / `images.edit`，真正的 OpenAI/ChatGPT API） | `openai`（`PanlaxyProvider` 子类，指向 `api.openai.com`） | `gpt-image-2`（实测可用；另有 gpt-image-1 / 1.5） |
   | `panlaxy` (`panlaxy.py`) | ❌ | ✅（`images.generate` / `images.edit`，OpenAI 兼容） | `openai`（指向 Panlaxy base url） | `gpt-image-2` |
 
-- **默认接线（见 `.env.example`）**：文本 → Claude，图像 → Panlaxy，`AI_PROVIDER=gemini` 作为两者的回退。
+- **默认接线（见 `.env.example`）**：文本 → Claude，图像 → **OpenAI（`gpt-image-2`）**，`AI_PROVIDER=gemini` 作为两者的回退。Gemini 原生图像、Panlaxy 仅作可选备选。
 - 环境变量（capability 优先，未设则回退到 provider 专属 key）：
   - 通用：`AI_PROVIDER`(回退)、`AI_API_KEY`、`AI_BASE_URL`。
   - 文本：`AI_TEXT_PROVIDER`、`AI_TEXT_MODEL`、`AI_TEXT_API_KEY`、`AI_TEXT_BASE_URL`、`AI_TEXT_MAX_TOKENS`；Claude 专属 `ANTHROPIC_API_KEY`/`CLAUDE_API_KEY`(可加 `ANTHROPIC_BASE_URL`)。
-  - 图像：`AI_IMAGE_PROVIDER`、`AI_IMAGE_MODEL`、`AI_IMAGE_API_KEY`、`AI_IMAGE_BASE_URL`；Panlaxy 专属 `PANLAXY_API_KEY`、`PANLAXY_BASE_URL`、`PANLAXY_IMAGE_MODEL`、`PANLAXY_IMAGE_QUALITY`、`PANLAXY_IMAGE_SIZE`、`PANLAXY_TIMEOUT`、`PANLAXY_MAX_RETRIES`。
+  - 图像：`AI_IMAGE_PROVIDER`、`AI_IMAGE_MODEL`、`AI_IMAGE_API_KEY`、`AI_IMAGE_BASE_URL`；OpenAI 专属 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_IMAGE_MODEL`、`OPENAI_IMAGE_QUALITY`、`OPENAI_IMAGE_SIZE`、`OPENAI_TIMEOUT`、`OPENAI_MAX_RETRIES`；Panlaxy 专属 `PANLAXY_API_KEY`、`PANLAXY_BASE_URL`、`PANLAXY_IMAGE_MODEL`、`PANLAXY_IMAGE_QUALITY`、`PANLAXY_IMAGE_SIZE`、`PANLAXY_TIMEOUT`、`PANLAXY_MAX_RETRIES`。
 
 **后台任务——多种模式，按场景选用：**
 - **Agent Swarm（Code 域）用进程级 ThreadPoolExecutor**，见下一节。这是当前版本的重点。

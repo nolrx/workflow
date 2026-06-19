@@ -28,12 +28,15 @@ def test_array_with_inner_code_fence_parses():
     assert "```json" in parsed[0]["content"]  # inner fence preserved, not stripped
 
 
-def test_object_with_inner_code_fence_parses():
+def test_bare_object_salvaged_with_inner_code_fence():
+    """A single bare {...} object (no array framing) is salvaged into a
+    one-element list, with inner ``` fences in its values left intact."""
     obj = {"content": "代码：\n```ts\nconst x = 1;\n```", "prompt_expert": "改进建议"}
     raw = json.dumps(obj, ensure_ascii=False)
-    parsed = svc._parse_json_object(raw)
-    assert parsed["content"].startswith("代码")
-    assert "```ts" in parsed["content"]
+    parsed = svc._parse_json_array(raw)
+    assert len(parsed) == 1
+    assert parsed[0]["content"].startswith("代码")
+    assert "```ts" in parsed[0]["content"]  # inner fence preserved, not stripped
 
 
 def test_outer_fenced_array_still_parses():
@@ -59,7 +62,6 @@ def test_raw_control_chars_tolerated():
 
 def test_unparseable_returns_empty():
     assert svc._parse_json_array("not json at all") == []
-    assert svc._parse_json_object("not json at all") == {}
 
 
 def test_strip_code_fence_only_unwraps_outer():

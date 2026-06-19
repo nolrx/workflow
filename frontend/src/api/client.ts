@@ -2,7 +2,11 @@
  * API Client with Axios
  * Handles authentication, request/response interceptors, and token refresh
  */
-import axios, { type AxiosError, type InternalAxiosRequestConfig } from "axios"
+import axios, {
+  type AxiosError,
+  type AxiosRequestConfig,
+  type InternalAxiosRequestConfig,
+} from "axios"
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "/api"
 
@@ -133,16 +137,20 @@ export interface ApiError {
   message?: string
 }
 
-// Generic API request helpers
+// Generic API request helpers. An optional per-request `config` lets callers
+// override defaults such as `timeout` for slow AI-generation endpoints, without
+// raising the global timeout for ordinary CRUD calls.
 export const api = {
-  get: <T>(url: string) => apiClient.get<T>(url).then((res) => res.data),
-  post: <T>(url: string, data?: unknown) =>
-    apiClient.post<T>(url, data).then((res) => res.data),
-  put: <T>(url: string, data?: unknown) =>
-    apiClient.put<T>(url, data).then((res) => res.data),
-  patch: <T>(url: string, data?: unknown) =>
-    apiClient.patch<T>(url, data).then((res) => res.data),
-  delete: <T>(url: string) => apiClient.delete<T>(url).then((res) => res.data),
+  get: <T>(url: string, config?: AxiosRequestConfig) =>
+    apiClient.get<T>(url, config).then((res) => res.data),
+  post: <T>(url: string, data?: unknown, config?: AxiosRequestConfig) =>
+    apiClient.post<T>(url, data, config).then((res) => res.data),
+  put: <T>(url: string, data?: unknown, config?: AxiosRequestConfig) =>
+    apiClient.put<T>(url, data, config).then((res) => res.data),
+  patch: <T>(url: string, data?: unknown, config?: AxiosRequestConfig) =>
+    apiClient.patch<T>(url, data, config).then((res) => res.data),
+  delete: <T>(url: string, config?: AxiosRequestConfig) =>
+    apiClient.delete<T>(url, config).then((res) => res.data),
 }
 
 export default apiClient

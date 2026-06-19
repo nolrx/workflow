@@ -1,5 +1,12 @@
 import { api } from "@/api/client"
 
+// AI generation routes run a full synchronous LLM/image call server-side
+// (Claude's read timeout is 120s). The global 30s axios timeout aborts these
+// long requests even though the backend keeps running and persists the result —
+// which surfaced as "generation failed" while the document only appeared after a
+// manual page refresh. Give these endpoints a generous per-request timeout.
+const AI_GENERATION_TIMEOUT = 180000
+
 export interface UIStyle {
   id: string
   name: string
@@ -122,9 +129,11 @@ export const codeApi = {
     return response.data
   },
   createProject: async (requirement: string) => {
-    const response = await api.post<Envelope<{ project: CodeProject }>>("/code/projects", {
-      requirement,
-    })
+    const response = await api.post<Envelope<{ project: CodeProject }>>(
+      "/code/projects",
+      { requirement },
+      { timeout: AI_GENERATION_TIMEOUT }
+    )
     return response.data.project
   },
   getProject: async (projectId: string) => {
@@ -142,13 +151,17 @@ export const codeApi = {
   },
   generateFlow: async (projectId: string) => {
     const response = await api.post<Envelope<{ project: CodeProject }>>(
-      `/code/projects/${projectId}/flow`
+      `/code/projects/${projectId}/flow`,
+      undefined,
+      { timeout: AI_GENERATION_TIMEOUT }
     )
     return response.data.project
   },
   splitDocuments: async (projectId: string) => {
     const response = await api.post<Envelope<{ project: CodeProject }>>(
-      `/code/projects/${projectId}/documents`
+      `/code/projects/${projectId}/documents`,
+      undefined,
+      { timeout: AI_GENERATION_TIMEOUT }
     )
     return response.data.project
   },
@@ -166,14 +179,19 @@ export const codeApi = {
   generateStylePrompt: async (projectId: string, styleIds: string[]) => {
     const response = await api.post<Envelope<{ project: CodeProject }>>(
       `/code/projects/${projectId}/style-prompt`,
-      { style_ids: styleIds }
+      { style_ids: styleIds },
+      { timeout: AI_GENERATION_TIMEOUT }
     )
     return response.data.project
   },
   generatePreviews: async (projectId: string, prompt?: string) => {
     const response = await api.post<
       Envelope<{ project: CodeProject; preview_skipped?: boolean }>
-    >(`/code/projects/${projectId}/previews`, { prompt, count: 2 })
+    >(
+      `/code/projects/${projectId}/previews`,
+      { prompt, count: 2 },
+      { timeout: AI_GENERATION_TIMEOUT }
+    )
     return {
       project: response.data.project,
       previewSkipped: response.data.preview_skipped ?? false,

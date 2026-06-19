@@ -132,25 +132,29 @@ def create_run():
     db.session.commit()
 
     # Reserve credits up-front (this is the first real caller of deduct_credits).
-    try:
-        deduct_credits(
-            user_id=user_id,
-            amount=cost,
-            operation="agent_run",
-            resource_type="agent_run",
-            resource_id=run.id,
-            description=f"Agent run: {workflow}",
-            team_id=team_id,
-        )
-    except InsufficientCreditsError:
-        db.session.delete(run)
-        db.session.commit()
-        return error_response("INSUFFICIENT_CREDITS", "积分不足，无法启动任务", 402)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Credit reservation failed for run: %s", exc, exc_info=True)
-        db.session.delete(run)
-        db.session.commit()
-        return error_response("SERVER_ERROR", "扣费失败，任务未启动", 500)
+    # When the workflow is priced free (cost <= 0, e.g. Code-domain metering is
+    # disabled) skip the deduction entirely — deduct_credits rejects a zero/negative
+    # amount, and there is nothing to reserve or block on.
+    if cost > 0:
+        try:
+            deduct_credits(
+                user_id=user_id,
+                amount=cost,
+                operation="agent_run",
+                resource_type="agent_run",
+                resource_id=run.id,
+                description=f"Agent run: {workflow}",
+                team_id=team_id,
+            )
+        except InsufficientCreditsError:
+            db.session.delete(run)
+            db.session.commit()
+            return error_response("INSUFFICIENT_CREDITS", "积分不足，无法启动任务", 402)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Credit reservation failed for run: %s", exc, exc_info=True)
+            db.session.delete(run)
+            db.session.commit()
+            return error_response("SERVER_ERROR", "扣费失败，任务未启动", 500)
 
     agent_runtime.start(current_app._get_current_object(), run.id)
 

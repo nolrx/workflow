@@ -33,8 +33,12 @@ REDBOOK_CONTENT = _credits("PRICE_RB_CONTENT", 1)
 REDBOOK_IMAGE_PAGE = _credits("PRICE_RB_IMAGE_PAGE", 2)     # per generated image
 
 # --- Code (agent) domain ------------------------------------------------------
-CODE_FULL_GENERATION = _credits("PRICE_CODE_FULL", 6)       # base workflow cost
-CODE_CONTEXT_VERIFY = _credits("PRICE_CODE_CONTEXT_VERIFY", 1)  # per AI context-consistency gate
+# NOTE: Code-domain pricing is currently disabled (defaults 0) — the active
+# version runs Code workflows free of charge / without a credit gate. The
+# central charge()/refund_credits()/deduct-skip logic all treat 0 as a no-op,
+# so set the PRICE_CODE_* env vars to re-enable metering without code changes.
+CODE_FULL_GENERATION = _credits("PRICE_CODE_FULL", 0)       # base workflow cost
+CODE_CONTEXT_VERIFY = _credits("PRICE_CODE_CONTEXT_VERIFY", 0)  # per AI context-consistency gate
 
 # Up-front reservation for the full code workflow (requirements -> flow ->
 # document split -> style -> previews -> publish). Context-verify gates are
@@ -43,13 +47,13 @@ CODE_CONTEXT_VERIFY = _credits("PRICE_CODE_CONTEXT_VERIFY", 1)  # per AI context
 CODE_FULL_GENERATION_TOTAL = CODE_FULL_GENERATION
 
 # Frontend project generation + adversarial review (+ one repair pass) — heavier.
-CODE_FRONTEND_GENERATION = _credits("PRICE_CODE_FRONTEND", 10)
+CODE_FRONTEND_GENERATION = _credits("PRICE_CODE_FRONTEND", 0)
 
 # Agentic frontend PROJECT generation: an autonomous coding CLI in a sandboxed
 # container produces a real multi-file React/Vite/TS project it builds itself
 # (~$1 / run in PoC measurements). Much heavier than the single-file HTML path
 # above, so priced higher; metered against the CLI's reported token usage.
-CODE_FRONTEND_PROJECT_GENERATION = _credits("PRICE_CODE_FRONTEND_PROJECT", 30)
+CODE_FRONTEND_PROJECT_GENERATION = _credits("PRICE_CODE_FRONTEND_PROJECT", 0)
 
 
 # Operation label -> (resource_type, unit_cost). Used when writing CreditTransaction

@@ -47,6 +47,12 @@ export interface PluginNode {
   textAlignHorizontal?: string
   lineHeight?: number // pixels
   letterSpacing?: number // pixels
+  // Auto-layout hints (FRAME only). Applied by the plugin only when visually
+  // safe (single-axis, non-overlapping, ~uniform gaps); otherwise children keep
+  // their absolute x/y. See maybeApplyAutoLayout in code.ts.
+  layoutMode?: "HORIZONTAL" | "VERTICAL"
+  itemSpacing?: number
+  padding?: { top: number; right: number; bottom: number; left: number }
   children?: PluginNode[]
 }
 

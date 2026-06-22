@@ -52,14 +52,92 @@ async function buildFrame(
   // Image-filled container (preview-image export) -> set the image as the fill.
   applyImageFill(frame, node, images)
 
+  const built: { scene: SceneNode; ir: PluginNode }[] = []
   for (const child of node.children || []) {
     const childNode = await buildNode(child, images)
     frame.appendChild(childNode)
-    // Payload coordinates are already parent-relative.
+    // Absolute fallback (parent-relative coords). Overridden iff auto-layout is
+    // applied below — Figma then owns child positions.
     childNode.x = Math.round(child.x)
     childNode.y = Math.round(child.y)
+    built.push({ scene: childNode, ir: child })
   }
+
+  maybeApplyAutoLayout(frame, node, built)
   return frame
+}
+
+/**
+ * Turn a frame into native Figma auto-layout ONLY when it won't disturb the
+ * visual: children must lie along the declared single axis, not overlap, and be
+ * ~uniformly spaced. Otherwise the absolute positions set in buildFrame stand.
+ * This keeps high-fidelity slices intact (cards / overlapping layers stay
+ * absolute) while giving real, editable auto-layout to lists, button rows,
+ * toolbars, stacked sections, etc.
+ */
+function maybeApplyAutoLayout(
+  frame: FrameNode,
+  node: PluginNode,
+  built: { scene: SceneNode; ir: PluginNode }[]
+): void {
+  const mode = node.layoutMode
+  if ((mode !== "HORIZONTAL" && mode !== "VERTICAL") || built.length < 2) return
+
+  const horiz = mode === "HORIZONTAL"
+  const mainStart = (c: PluginNode) => (horiz ? c.x : c.y)
+  const mainSize = (c: PluginNode) => (horiz ? c.width : c.height)
+  const crossStart = (c: PluginNode) => (horiz ? c.y : c.x)
+  const crossSize = (c: PluginNode) => (horiz ? c.height : c.width)
+
+  const sorted = [...built].sort((a, b) => mainStart(a.ir) - mainStart(b.ir))
+
+  // 1) reject overlap on the main axis; collect inter-item gaps.
+  const gaps: number[] = []
+  for (let i = 1; i < sorted.length; i++) {
+    const prevEnd = mainStart(sorted[i - 1].ir) + mainSize(sorted[i - 1].ir)
+    const gap = mainStart(sorted[i].ir) - prevEnd
+    if (gap < -2) return // overlapping children -> unsafe, keep absolute
+    gaps.push(Math.max(0, gap))
+  }
+
+  // 2) gaps must be ~uniform (auto-layout collapses them to one itemSpacing).
+  const avgGap = gaps.reduce((s, g) => s + g, 0) / gaps.length
+  const uniform = gaps.every((g) => Math.abs(g - avgGap) <= Math.max(8, avgGap * 0.5))
+  if (!uniform) return
+
+  // 3) reorder children into main-axis order (z-order no longer matters: no overlap).
+  for (const item of sorted) frame.appendChild(item.scene)
+
+  // 4) infer cross-axis alignment (center vs leading).
+  const frameCross = horiz ? frame.height : frame.width
+  const nearCenter = sorted.every(
+    (c) => Math.abs(crossStart(c.ir) + crossSize(c.ir) / 2 - frameCross / 2) <= 8
+  )
+  const crossMin = Math.max(0, Math.min(...sorted.map((c) => crossStart(c.ir))))
+
+  // 5) apply — keep the frame's measured size (FIXED), spacing/padding from IR
+  //    when given, else measured from the children.
+  frame.layoutMode = mode
+  frame.primaryAxisSizingMode = "FIXED"
+  frame.counterAxisSizingMode = "FIXED"
+  frame.primaryAxisAlignItems = "MIN"
+  frame.counterAxisAlignItems = nearCenter ? "CENTER" : "MIN"
+  frame.itemSpacing = Math.round(node.itemSpacing ?? avgGap)
+
+  const pad = node.padding
+  const mainPad = Math.round(mainStart(sorted[0].ir))
+  const crossPad = nearCenter ? 0 : crossMin
+  if (horiz) {
+    frame.paddingLeft = Math.round(pad?.left ?? mainPad)
+    frame.paddingRight = Math.round(pad?.right ?? 0)
+    frame.paddingTop = Math.round(pad?.top ?? crossPad)
+    frame.paddingBottom = Math.round(pad?.bottom ?? 0)
+  } else {
+    frame.paddingTop = Math.round(pad?.top ?? mainPad)
+    frame.paddingBottom = Math.round(pad?.bottom ?? 0)
+    frame.paddingLeft = Math.round(pad?.left ?? crossPad)
+    frame.paddingRight = Math.round(pad?.right ?? 0)
+  }
 }
 
 function buildRect(node: PluginNode, images: Record<string, Uint8Array>): RectangleNode {

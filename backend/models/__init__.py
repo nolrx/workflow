@@ -19,25 +19,13 @@ from backend.models.code import (
     CodeStage,
     CodeStageVersion,
     CodeStageVersionSource,
+    FigmaCredential,
+    FigmaExportPackage,
+    GitHubPushLog,
+    GitHubPushStatus,
+    GitHubRepoLink,
 )
 from backend.models.credit import CreditBalance, CreditTransaction, TeamCreditBalance
-from backend.models.ppt import (
-    PPTMaterial,
-    PPTPage,
-    PPTPageImageVersion,
-    PPTProject,
-    PPTReferenceFile,
-    PPTTask,
-    PPTUserTemplate,
-)
-from backend.models.redbook import (
-    RedBookImage,
-    RedBookImageStatus,
-    RedBookPage,
-    RedBookPageType,
-    RedBookTask,
-    RedBookTaskStatus,
-)
 from backend.models.team import Team, TeamInvitation, TeamMember
 from backend.models.user import Plan, User
 
@@ -53,21 +41,6 @@ __all__ = [
     "CreditBalance",
     "CreditTransaction",
     "TeamCreditBalance",
-    # PPT Studio
-    "PPTProject",
-    "PPTPage",
-    "PPTPageImageVersion",
-    "PPTTask",
-    "PPTMaterial",
-    "PPTReferenceFile",
-    "PPTUserTemplate",
-    # RedBook Studio
-    "RedBookTask",
-    "RedBookTaskStatus",
-    "RedBookPage",
-    "RedBookPageType",
-    "RedBookImage",
-    "RedBookImageStatus",
     # Code Studio
     "CodeProject",
     "CodeProjectStatus",
@@ -75,6 +48,11 @@ __all__ = [
     "CodeStage",
     "CodeStageVersion",
     "CodeStageVersionSource",
+    "FigmaCredential",
+    "FigmaExportPackage",
+    "GitHubRepoLink",
+    "GitHubPushLog",
+    "GitHubPushStatus",
     # Agent Swarm
     "AgentRun",
     "AgentRunStatus",

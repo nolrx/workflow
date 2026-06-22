@@ -1,8 +1,8 @@
 /**
  * Agent Swarm store.
  *
- * Drives the live run workspace. SSE (fetch + ReadableStream, mirroring the
- * RedBook streaming approach so the bearer token can be sent) updates the event
+ * Drives the live run workspace. SSE (fetch + ReadableStream, so the bearer
+ * token can be sent) updates the event
  * timeline in real time; structural events trigger a debounced snapshot refresh
  * so steps/artifacts stay authoritative. fetchRun also serves as the reconnect
  * path after a page reload.
@@ -55,6 +55,8 @@ interface AgentState {
   openLatestRunForResource: (resourceId: string) => Promise<boolean>
   cancelRun: () => Promise<void>
   resumeRun: (action: "approve" | "revise", instruction?: string) => Promise<void>
+  /** Submit a UI-style selection at the style_select gate (resumes the run). */
+  selectStyle: (styleIds: string[]) => Promise<void>
   selectStep: (stepId: string | null) => void
   setDebugMode: (value: boolean) => void
   openPanel: () => void
@@ -271,6 +273,19 @@ export const useAgentStore = create<AgentState>()((set, get) => {
       const stage = run.progress?.review_stage ?? undefined
       activeRunId = run.id
       await agentApi.resumeRun(run.id, { action, stage, instruction })
+      await refresh(run.id)
+      void stream(run.id)
+    },
+
+    // Style-selection gate: persist the user's UI style picks and resume the run,
+    // which generates the style document from that choice (same relaunch + re-
+    // subscribe path as resumeRun).
+    selectStyle: async (styleIds) => {
+      const run = get().run
+      if (!run || run.status !== "paused") return
+      const stage = run.progress?.review_stage ?? "style_select"
+      activeRunId = run.id
+      await agentApi.resumeRun(run.id, { action: "select_style", stage, style_ids: styleIds })
       await refresh(run.id)
       void stream(run.id)
     },

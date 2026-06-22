@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 from backend.services.ai import get_text_provider
+from backend.services.prompts import prompt_store
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +31,9 @@ class FrontendBuildService:
     """Generate, critique and repair a runnable single-file HTML app."""
 
     def _load_prompt(self, name: str) -> str:
-        with open(PROMPT_DIR / name, "r", encoding="utf-8") as handle:
-            return handle.read()
+        # Mongo-backed (admin-editable); falls back to the bundled default under
+        # PROMPT_DIR when Mongo is unavailable.
+        return prompt_store.get(f"code/{name}")
 
     @staticmethod
     def _fill(template: str, **values: str) -> str:
@@ -40,8 +42,15 @@ class FrontendBuildService:
             result = result.replace(f"[[{key}]]", value if value is not None else "")
         return result
 
-    def _call_model(self, prompt: str, on_model_call=None) -> tuple[Optional[str], bool, Optional[str]]:
-        """Return (text, success, error). Never raises on model failure."""
+    def _call_model(
+        self, prompt: str, on_model_call=None, images: Optional[list] = None
+    ) -> tuple[Optional[str], bool, Optional[str]]:
+        """Return (text, success, error). Never raises on model failure.
+
+        ``images`` (list of raw image bytes) is forwarded as vision input when the
+        provider supports it (e.g. Claude); the build layer is responsible for
+        only passing images to a vision-capable provider.
+        """
         provider = get_text_provider()
         provider_name = getattr(provider, "provider_name", None)
         model_name = getattr(provider, "model", None)
@@ -52,7 +61,7 @@ class FrontendBuildService:
                     error="AI text provider not configured", provider=provider_name, model=model_name,
                 )
             return None, False, "AI text provider not configured"
-        result = provider.generate_text(prompt)
+        result = provider.generate_text(prompt, images=images)
         if on_model_call:
             on_model_call(
                 prompt=prompt,
@@ -153,6 +162,56 @@ class FrontendBuildService:
             "summary": payload.get("summary") or "",
             "used_fallback": False,
         }
+
+    def build_from_figma(
+        self,
+        *,
+        requirement: str,
+        ir_text: str,
+        render_png: Optional[bytes] = None,
+        style_prompt: str = "",
+        context_ledger: str = "",
+        on_model_call=None,
+    ) -> dict:
+        """Restore a single-file HTML app from a Figma design.
+
+        The Figma node-tree IR is always injected as text. The rendered PNG is
+        attached as a vision reference ONLY when the active text provider is
+        Claude (the one wired for vision here); otherwise we degrade to a
+        node-tree-only restore. Returns {html, summary, used_vision}.
+        """
+        prompt = self._fill(
+            self._load_prompt("frontend_from_figma_prompt.txt"),
+            CONTEXT_LEDGER=context_ledger or "",
+            REQUIREMENT=requirement or "",
+            FIGMA_IR=ir_text or "",
+            STYLE_PROMPT=style_prompt or "",
+        )
+        images = None
+        if render_png and self._vision_capable():
+            images = [render_png]
+        text, success, error = self._call_model(prompt, on_model_call, images=images)
+        if not success:
+            raise RuntimeError(f"Figma 还原失败：{error or '模型不可用'}")
+        payload = self._extract_html_payload(text or "")
+        if not payload:
+            raise RuntimeError("Figma 还原失败：模型没有返回完整的 index.html")
+        return {
+            "html": payload["html"],
+            "summary": payload.get("summary") or "",
+            "used_vision": bool(images),
+        }
+
+    @staticmethod
+    def _vision_capable() -> bool:
+        """True if the active text provider can take image (vision) input.
+
+        Only Claude is wired for vision in this codebase; the image-as-block
+        content is built in ClaudeProvider. Other text providers ignore images,
+        so we avoid sending bytes they cannot use.
+        """
+        provider = get_text_provider()
+        return getattr(provider, "provider_name", None) == "claude" and provider.is_configured()
 
     def critique_app(self, html: str, on_model_call=None) -> dict:
         """Return {passed, issues:[{file,problem,severity}], summary}."""

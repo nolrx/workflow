@@ -39,7 +39,7 @@ def deduct_credits(
         user_id: The user performing the operation
         amount: Number of credits to deduct (positive number)
         operation: Type of operation (e.g., "generate_outline", "generate_image")
-        resource_type: Type of resource (e.g., "redbook_task", "ppt_project")
+        resource_type: Type of resource (e.g., "agent_run", "code_project")
         resource_id: ID of the associated resource
         description: Human-readable description
         team_id: If provided, deduct from team balance instead of user balance

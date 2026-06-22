@@ -67,7 +67,7 @@ class CreditTransaction(db.Model):
 
     # Usage details
     operation = db.Column(db.String(50))  # generate_outline, generate_image, export
-    resource_type = db.Column(db.String(50))  # ppt_project, redink_task
+    resource_type = db.Column(db.String(50))  # agent_run, code_project
     resource_id = db.Column(db.String(36))
 
     # Metadata

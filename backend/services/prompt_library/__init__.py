@@ -15,6 +15,8 @@ from backend.services.prompt_library.internet_roles import (
     compose_system_prompt,
     get_prefix,
     list_prefixes,
+    resolve_prefix_text,
+    resolve_special,
     route_prefixes,
 )
 
@@ -32,5 +34,7 @@ __all__ = [
     "compose_system_prompt",
     "get_prefix",
     "list_prefixes",
+    "resolve_prefix_text",
+    "resolve_special",
     "route_prefixes",
 ]

@@ -1,9 +1,9 @@
 """
 Agent Swarm run model.
 
-An AgentRun is a single orchestrated multi-agent execution for one of the
-product domains (code / ppt / redbook). It owns the steps, events and artifacts
-produced while the workflow runs in a background thread.
+An AgentRun is a single orchestrated multi-agent execution for the Code
+product domain. It owns the steps, events and artifacts produced while the
+workflow runs in a background thread.
 """
 import json
 import uuid
@@ -42,7 +42,7 @@ class AgentRun(db.Model):
     user_id = db.Column(db.String(36), db.ForeignKey("users.id"), nullable=False, index=True)
     team_id = db.Column(db.String(36), db.ForeignKey("teams.id"), nullable=True, index=True)
 
-    domain = db.Column(db.String(20), nullable=False)  # code | ppt | redbook
+    domain = db.Column(db.String(20), nullable=False)  # code
     workflow = db.Column(db.String(60), nullable=False)  # e.g. code_full_generation
     resource_type = db.Column(db.String(40), nullable=True)  # e.g. code_project
     resource_id = db.Column(db.String(36), nullable=True, index=True)

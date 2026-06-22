@@ -1,0 +1,32 @@
+{
+  "nav": {
+    "prompts": "Prompts"
+  },
+  "title": "Prompt Management",
+  "subtitle": "View and tune the built-in system prompts online. Changes take effect on the next generation.",
+  "mongoUnavailable": "MongoDB is currently unavailable, so bundled default prompts are shown read-only. Start MongoDB and refresh to enable online editing.",
+  "searchPlaceholder": "Search prompts…",
+  "loading": "Loading…",
+  "empty": "No matching prompts",
+  "selectPrompt": "Select a prompt on the left to edit",
+  "groups": {
+    "code": "Code Templates",
+    "prefix": "Role Prefixes",
+    "special": "Shared Blocks",
+    "custom": "Custom"
+  },
+  "badge": {
+    "overridden": "Edited",
+    "default": "Default"
+  },
+  "save": "Save",
+  "reset": "Reset to default",
+  "saved": "Prompt saved",
+  "resetDone": "Restored to default",
+  "errors": {
+    "loadList": "Failed to load prompt list",
+    "loadDetail": "Failed to load prompt detail",
+    "save": "Failed to save prompt",
+    "reset": "Failed to reset prompt"
+  }
+}

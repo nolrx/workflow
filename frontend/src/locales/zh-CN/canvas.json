@@ -1,0 +1,25 @@
+{
+  "entry": "画布模式",
+  "title": "混编画布",
+  "back": "返回",
+  "node": {
+    "agent": "Agent",
+    "merge": "合并",
+    "branch": "条件分支",
+    "source": "来源文档"
+  },
+  "toolbar": {
+    "addAgent": "Agent",
+    "addMerge": "合并",
+    "addBranch": "分支",
+    "run": "执行画布",
+    "running": "执行中…"
+  },
+  "status": {
+    "saving": "保存中…",
+    "saved": "已保存",
+    "loading": "加载中…",
+    "loadFailed": "加载失败"
+  },
+  "runFailed": "画布执行失败"
+}

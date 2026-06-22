@@ -1,0 +1,32 @@
+{
+  "nav": {
+    "prompts": "프롬프트 관리"
+  },
+  "title": "프롬프트 관리",
+  "subtitle": "내장 시스템 프롬프트를 온라인으로 확인하고 조정합니다. 저장하면 다음 생성부터 적용됩니다.",
+  "mongoUnavailable": "현재 MongoDB를 사용할 수 없어 내장 기본 프롬프트를 읽기 전용으로 표시합니다. MongoDB를 시작한 후 새로고침하면 편집할 수 있습니다.",
+  "searchPlaceholder": "프롬프트 검색…",
+  "loading": "불러오는 중…",
+  "empty": "일치하는 프롬프트가 없습니다",
+  "selectPrompt": "왼쪽에서 프롬프트를 선택하여 편집하세요",
+  "groups": {
+    "code": "Code 템플릿",
+    "prefix": "역할 프리픽스",
+    "special": "공통 블록",
+    "custom": "사용자 정의"
+  },
+  "badge": {
+    "overridden": "수정됨",
+    "default": "기본값"
+  },
+  "save": "저장",
+  "reset": "기본값으로 복원",
+  "saved": "프롬프트를 저장했습니다",
+  "resetDone": "기본값으로 복원했습니다",
+  "errors": {
+    "loadList": "프롬프트 목록을 불러오지 못했습니다",
+    "loadDetail": "프롬프트 상세를 불러오지 못했습니다",
+    "save": "프롬프트 저장에 실패했습니다",
+    "reset": "기본값 복원에 실패했습니다"
+  }
+}

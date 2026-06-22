@@ -2,39 +2,19 @@ import { useEffect } from "react"
 import { Link, useLocation, useNavigate } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 import {
-  FileCode2,
-  Presentation,
-  BookImage,
   Plus,
-  History,
   Settings,
   Users,
   CreditCard,
   ChevronDown,
+  ScrollText,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { useAgentStore } from "@/stores/agentStore"
 import { useCodeStore } from "@/stores/codeStore"
-import { usePPTStore } from "@/stores/pptStore"
-import { useRedBookStore } from "@/stores/redbookStore"
 import { useCreditStore } from "@/stores/creditStore"
-
-type DomainKey = "code" | "ppt" | "redbook"
-
-interface DomainTab {
-  key: DomainKey
-  labelKey: string
-  icon: React.ComponentType<{ className?: string }>
-  home: string
-  historyHref?: string
-}
-
-const DOMAIN_TABS: DomainTab[] = [
-  { key: "code", labelKey: "sidebar.domains.code", icon: FileCode2, home: "/code" },
-  { key: "ppt", labelKey: "sidebar.domains.ppt", icon: Presentation, home: "/ppt", historyHref: "/ppt/history" },
-  { key: "redbook", labelKey: "sidebar.domains.redbook", icon: BookImage, home: "/redbook", historyHref: "/redbook/history" },
-]
+import { useAuthStore } from "@/stores/authStore"
 
 const settingsNavItems = [
   { titleKey: "nav.settings", href: "/settings", icon: Settings },
@@ -48,72 +28,40 @@ interface SessionItem {
   href: string
 }
 
-function activeDomainFromPath(pathname: string): DomainKey {
-  if (pathname.startsWith("/ppt")) return "ppt"
-  if (pathname.startsWith("/redbook")) return "redbook"
-  return "code"
-}
-
 export function Sidebar() {
   const location = useLocation()
   const navigate = useNavigate()
   const { t } = useTranslation()
 
-  const activeDomain = activeDomainFromPath(location.pathname)
-  const activeTab = DOMAIN_TABS.find((tab) => tab.key === activeDomain) ?? DOMAIN_TABS[0]
-
-  // Per-domain session lists (the "creation" entities double as sessions).
+  // Code-domain sessions (the "creation" entities double as sessions).
   const codeProjects = useCodeStore((s) => s.projects)
   const fetchCodeProjects = useCodeStore((s) => s.fetchProjects)
-  const pptProjects = usePPTStore((s) => s.projects)
-  const fetchPptProjects = usePPTStore((s) => s.fetchProjects)
-  const tasks = useRedBookStore((s) => s.tasks)
-  const fetchTasks = useRedBookStore((s) => s.fetchTasks)
 
   const balance = useCreditStore((s) => s.balance)
   const fetchBalance = useCreditStore((s) => s.fetchBalance)
+  const isAdmin = useAuthStore((s) => s.user?.role === "admin")
 
-  // Refresh the active domain's recent sessions when the domain changes.
   useEffect(() => {
-    if (activeDomain === "code") void fetchCodeProjects(15, 0)
-    else if (activeDomain === "ppt") void fetchPptProjects(15, 0)
-    else void fetchTasks(15, 0)
-  }, [activeDomain, fetchCodeProjects, fetchPptProjects, fetchTasks])
+    void fetchCodeProjects(15, 0)
+  }, [fetchCodeProjects])
 
   useEffect(() => {
     void fetchBalance()
   }, [fetchBalance])
 
   const untitled = t("sidebar.untitled")
-  let sessions: SessionItem[] = []
-  if (activeDomain === "code") {
-    sessions = codeProjects.map((p) => ({
-      id: p.id,
-      label: p.title || p.requirement_input?.slice(0, 40) || untitled,
-      href: `/code/${p.id}`,
-    }))
-  } else if (activeDomain === "ppt") {
-    sessions = pptProjects.map((p) => ({
-      id: p.id,
-      label: p.idea_prompt?.slice(0, 40) || untitled,
-      href: `/ppt/project/${p.id}`,
-    }))
-  } else {
-    sessions = tasks.map((tk) => ({
-      id: tk.id,
-      label: tk.title || untitled,
-      href: `/redbook/task/${tk.id}`,
-    }))
-  }
+  const sessions: SessionItem[] = codeProjects.map((p) => ({
+    id: p.id,
+    label: p.title || p.requirement_input?.slice(0, 40) || untitled,
+    href: `/code/${p.id}`,
+  }))
 
   const handleNewSession = () => {
-    // For Code, clear the in-memory project AND tear down any replayed agent run
-    // so the studio opens to a blank conversation (not the previous session's).
-    if (activeDomain === "code") {
-      useCodeStore.getState().setCurrentProject(null)
-      useAgentStore.getState().reset()
-    }
-    navigate(activeTab.home)
+    // Clear the in-memory project AND tear down any replayed agent run so the
+    // studio opens to a blank conversation (not the previous session's).
+    useCodeStore.getState().setCurrentProject(null)
+    useAgentStore.getState().reset()
+    navigate("/code")
   }
 
   return (
@@ -135,28 +83,6 @@ export function Sidebar() {
             <span className="truncate">{t("sidebar.personal")}</span>
             <ChevronDown className="h-4 w-4 shrink-0" />
           </Button>
-        </div>
-
-        {/* Domain tabs */}
-        <div className="grid grid-cols-3 gap-1 border-b p-2">
-          {DOMAIN_TABS.map((tab) => {
-            const isActive = tab.key === activeDomain
-            return (
-              <Link
-                key={tab.key}
-                to={tab.home}
-                className={cn(
-                  "flex flex-col items-center gap-1 rounded-md px-1 py-2 text-xs font-medium transition-colors",
-                  isActive
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                )}
-              >
-                <tab.icon className="h-4 w-4" />
-                {t(tab.labelKey)}
-              </Link>
-            )
-          })}
         </div>
 
         {/* New session + session list */}
@@ -195,16 +121,6 @@ export function Sidebar() {
             )}
           </nav>
 
-          {activeTab.historyHref && (
-            <Link
-              to={activeTab.historyHref}
-              className="mt-2 flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-            >
-              <History className="h-4 w-4" />
-              {t("sidebar.viewAll")}
-            </Link>
-          )}
-
           {/* Settings nav */}
           <div className="mt-2 space-y-1 border-t pt-2">
             {settingsNavItems.map((item) => {
@@ -225,6 +141,20 @@ export function Sidebar() {
                 </Link>
               )
             })}
+            {isAdmin && (
+              <Link
+                to="/admin/prompts"
+                className={cn(
+                  "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                  location.pathname.startsWith("/admin")
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                )}
+              >
+                <ScrollText className="h-4 w-4" />
+                {t("admin:nav.prompts")}
+              </Link>
+            )}
           </div>
         </div>
 

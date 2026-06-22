@@ -59,6 +59,19 @@ class CodeProject(db.Model):
         lazy="dynamic",
         cascade="all, delete-orphan",
     )
+    canvases = db.relationship(
+        "CodeCanvas",
+        backref="project",
+        lazy="dynamic",
+        cascade="all, delete-orphan",
+        order_by="CodeCanvas.created_at",
+    )
+    figma_design = db.relationship(
+        "CodeFigmaDesign",
+        backref="project",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
     def get_selected_style_ids(self) -> list[str]:
         """Return selected UI style ids."""

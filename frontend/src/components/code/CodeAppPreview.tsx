@@ -21,6 +21,7 @@ import { toast } from "sonner"
 
 import { AGENT_API_BASE, agentApi, type AgentRun } from "@/api/agent"
 import { tokenManager } from "@/api/client"
+import { figmaApi } from "@/api/figma"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useAgentStore } from "@/stores/agentStore"
@@ -81,6 +82,7 @@ function downloadBlob(blob: Blob, filename: string) {
 
 export function CodeAppPreview() {
   const { t } = useTranslation("codeapp")
+  const { t: tf } = useTranslation("code")
 
   const project = useCodeStore((state) => state.project)
   const run = useAgentStore((state) => state.run)
@@ -90,6 +92,20 @@ export function CodeAppPreview() {
   const [historyProject, setHistoryProject] = useState<FrontendProject | null>(null)
   const [loadingHistory, setLoadingHistory] = useState(false)
   const [downloading, setDownloading] = useState(false)
+  // Attached Figma design (if any) — generation will follow it.
+  const [figmaFrameCount, setFigmaFrameCount] = useState(0)
+
+  useEffect(() => {
+    if (!project?.id) return
+    let cancelled = false
+    void figmaApi
+      .getDesign(project.id)
+      .then((d) => !cancelled && setFigmaFrameCount(d?.count ?? 0))
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [project?.id])
 
   // Live project from the run currently in the store (right after generation).
   const liveProject = useMemo(() => projectFromRun(run), [run])
@@ -182,6 +198,9 @@ export function CodeAppPreview() {
           )}
           {builtProject?.costUsd != null && builtProject.costUsd > 0 && (
             <Badge variant="outline">{t("cost", { cost: builtProject.costUsd.toFixed(2) })}</Badge>
+          )}
+          {figmaFrameCount > 0 && (
+            <Badge variant="secondary">{tf("figma.attached", { count: figmaFrameCount })}</Badge>
           )}
         </div>
         <div className="flex items-center gap-2">

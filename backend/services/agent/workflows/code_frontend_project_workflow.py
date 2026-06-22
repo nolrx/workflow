@@ -27,9 +27,10 @@ from backend.models.agent import (
     AgentRun,
     AgentRunStatus,
 )
-from backend.models.code import CodeProject, CodeProjectStatus
+from backend.models.code import CodeFigmaDesign, CodeProject, CodeProjectStatus
 from backend.services.agent.context_ledger import ContextLedger, seed_from_inputs
 from backend.services.agent.files import agent_run_dir
+from backend.services.code.figma import storage as figma_storage
 from backend.services.code.frontend_project_service import get_frontend_project_service
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,32 @@ def _documents_digest(project: CodeProject) -> str:
         body = (document.content or "")[:_MAX_DOC_CHARS]
         parts.append(f"## {document.title} ({document.document_type})\n{body}")
     return "\n\n".join(parts)[:_MAX_DIGEST_CHARS]
+
+
+def _load_figma_frames(project_id: str) -> list[dict]:
+    """Frames of the project's attached Figma design for the build (name/ir/render).
+
+    Returns ``[{name, ir_text, render_path}]`` (render_path = absolute path to the
+    stored PNG), or ``[]`` when no design is attached.
+    """
+    design = CodeFigmaDesign.query.filter_by(project_id=project_id).first()
+    if not design:
+        return []
+    frames: list[dict] = []
+    for frame in design.get_frames():
+        render_filename = frame.get("render_filename")
+        frames.append(
+            {
+                "name": frame.get("name"),
+                "ir_text": frame.get("ir_text") or "",
+                "render_path": (
+                    str(figma_storage.render_path(project_id, render_filename))
+                    if render_filename
+                    else None
+                ),
+            }
+        )
+    return frames
 
 
 def run_code_frontend_project_workflow(ctx, recorder) -> dict:
@@ -201,6 +228,17 @@ def run_code_frontend_project_workflow(ctx, recorder) -> dict:
                     payload={"phase": phase},
                 )
 
+        # If a Figma design is attached to this project, feed it (render images +
+        # IR) into the build so the generated React project matches the design.
+        figma_frames = _load_figma_frames(project_id)
+        if figma_frames:
+            recorder.emit(
+                AgentEventType.PROGRESS,
+                step_id=step.id,
+                message=f"按关联的 Figma 设计生成({len(figma_frames)} 个画板)",
+                payload={"figma_frames": len(figma_frames)},
+            )
+
         result = service.build_project(
             requirement=project.requirement_input,
             requirements_doc=project.requirements_doc,
@@ -209,6 +247,7 @@ def run_code_frontend_project_workflow(ctx, recorder) -> dict:
             style_prompt=project.style_prompt or "",
             ui_baseline_prompt=project.ui_baseline_prompt or "",
             context_ledger=injected,
+            figma_frames=figma_frames,
             on_event=on_event,
             is_cancelled=ctx.is_cancelled,
         )

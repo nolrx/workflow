@@ -56,6 +56,10 @@ DEFAULT_TEXT_MODEL = "claude-opus-4-8"
 # .env.example. (Was wrongly "gpt-image-2", a Panlaxy model id.)
 DEFAULT_GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image"
 DEFAULT_CLAUDE_TEXT_MODEL = "claude-opus-4-8"
+DEFAULT_GEMINI_TEXT_MODEL = "gemini-3-flash-preview"
+# Only these providers can generate text — openai/panlaxy are image-only, so a
+# per-node text model selection must be restricted to this set.
+TEXT_PROVIDERS = ("claude", "gemini")
 # OpenAI (ChatGPT) image API — verified: gpt-image-2 works via images.generate.
 DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-2"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
@@ -243,7 +247,7 @@ def get_text_provider(force_new: bool = False) -> Optional[AIProvider]:
 
     Args:
         force_new: Force creating a new instance instead of using cache
-                   (use in background threads — see PPTTaskManager).
+                   (use in background threads — see the agent runtime).
 
     Returns:
         AIProvider instance for text generation, or None if unconfigured.
@@ -275,7 +279,7 @@ def get_image_provider(force_new: bool = False) -> Optional[AIProvider]:
 
     Args:
         force_new: Force creating a new instance instead of using cache
-                   (use in background threads — see PPTTaskManager).
+                   (use in background threads — see the agent runtime).
 
     Returns:
         AIProvider instance for image generation, or None if unconfigured.
@@ -299,6 +303,63 @@ def get_image_provider(force_new: bool = False) -> Optional[AIProvider]:
             _image_provider = provider
         logger.info(f"Image provider initialized: {cfg.provider_type} with model {cfg.model}")
         return provider
+
+
+def _resolve_key_for(provider: str) -> Optional[str]:
+    """Resolve the env API key for a text provider (used when a per-node model
+    selection switches provider away from the configured default)."""
+    if (provider or "").lower() == "claude":
+        return _first(
+            os.getenv("AI_TEXT_API_KEY"),
+            os.getenv("ANTHROPIC_API_KEY"),
+            os.getenv("CLAUDE_API_KEY"),
+            os.getenv("AI_API_KEY"),
+        )
+    # gemini (and any other non-claude text provider) shares the gemini/AI chain.
+    return _first(
+        os.getenv("AI_TEXT_API_KEY"),
+        os.getenv("AI_API_KEY"),
+        os.getenv("GOOGLE_API_KEY"),
+        os.getenv("GEMINI_API_KEY"),
+    )
+
+
+def _default_text_model_for(provider: str) -> str:
+    return DEFAULT_CLAUDE_TEXT_MODEL if provider == "claude" else DEFAULT_GEMINI_TEXT_MODEL
+
+
+def build_text_provider(
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    base_url: Optional[str] = None,
+) -> Optional[AIProvider]:
+    """Build a one-off TEXT provider with per-call overrides (NOT cached).
+
+    Used by the remix canvas so each agent node can pick its own model/provider.
+    Image-only providers fall back to gemini. The API key is always resolved
+    server-side from the environment — it is never accepted from the caller.
+    Returns None when no key is configured for the resolved provider.
+    """
+    base = _resolve_text_config()
+    provider_type = (provider or base.provider_type).lower()
+    if provider_type not in TEXT_PROVIDERS:
+        provider_type = "gemini"
+    same_as_default = provider_type == base.provider_type
+
+    api_key = base.api_key if same_as_default else (_resolve_key_for(provider_type) or base.api_key)
+    resolved_model = model or (base.model if same_as_default else _default_text_model_for(provider_type))
+    resolved_base = base_url or (base.base_url if same_as_default else None)
+
+    cfg = ResolvedProviderConfig(
+        provider_type=provider_type,
+        api_key=api_key,
+        model=resolved_model,
+        base_url=resolved_base,
+    )
+    if not cfg.api_key:
+        logger.warning("No API key for per-node text provider: %s", provider_type)
+        return None
+    return _create_provider(cfg)
 
 
 def reset_providers():

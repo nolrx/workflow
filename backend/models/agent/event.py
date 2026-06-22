@@ -38,6 +38,9 @@ class AgentEventType:
     STEP_AWAITING_REVIEW = "step_awaiting_review"
     USER_REVISION = "user_revision"
     REVIEW_RESOLVED = "review_resolved"
+    # GitHub auto-sync lifecycle (emitted at the tail of a completed code run).
+    # payload.status is one of pending | success | failed.
+    GITHUB_SYNC = "github_sync"
 
 
 class AgentEventLevel:

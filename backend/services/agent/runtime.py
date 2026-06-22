@@ -1,10 +1,9 @@
 """
 Agent runtime — background execution of workflows.
 
-Mirrors the PPT task manager pattern (a process-wide ThreadPoolExecutor, no
-Celery). Each run executes in a worker thread inside ``app.app_context()``. The
-runtime owns the cancel registry and the workflow registry; the actual step
-logic lives in ``workflows/``.
+A process-wide ThreadPoolExecutor (no Celery). Each run executes in a worker
+thread inside ``app.app_context()``. The runtime owns the cancel registry and
+the workflow registry; the actual step logic lives in ``workflows/``.
 """
 import logging
 import threading
@@ -143,6 +142,25 @@ class AgentRuntime:
                 else:
                     run.completed_at = datetime.utcnow()
                     db.session.commit()
+                    # Auto-sync the Code session's deliverables to GitHub before the
+                    # terminal event so the GITHUB_SYNC events stream live and replay
+                    # in order. Non-fatal: failures are recorded by the sync service
+                    # and never affect the run's COMPLETED status.
+                    if (
+                        run.domain == "code"
+                        and run.status == AgentRunStatus.COMPLETED
+                        and run.resource_id
+                    ):
+                        try:
+                            from backend.services.code.github.sync_service import (
+                                autosync_after_run,
+                            )
+
+                            autosync_after_run(recorder, run)
+                        except Exception:  # noqa: BLE001
+                            logger.error(
+                                "GitHub autosync failed for run %s", run_id, exc_info=True
+                            )
                     recorder.emit(
                         AgentEventType.RUN_COMPLETED,
                         message="工作流结束",
@@ -209,6 +227,12 @@ agent_runtime = AgentRuntime(max_workers=4)
 
 
 def _register_builtin_workflows() -> None:
+    from backend.services.agent.workflows.code_canvas_workflow import (
+        run_code_canvas_generation,
+    )
+    from backend.services.agent.workflows.code_figma_slice_workflow import (
+        run_code_figma_slice_workflow,
+    )
     from backend.services.agent.workflows.code_frontend_project_workflow import (
         run_code_frontend_project_workflow,
     )
@@ -220,6 +244,10 @@ def _register_builtin_workflows() -> None:
     register_workflow("code_full_generation", run_code_workflow)
     register_workflow("code_frontend_generation", run_code_frontend_workflow)
     register_workflow("code_frontend_project_generation", run_code_frontend_project_workflow)
+    register_workflow("code_canvas_generation", run_code_canvas_generation)
+    register_workflow("code_figma_slice_generation", run_code_figma_slice_workflow)
+    # Note: the single-file `code_figma_restore` workflow is retired — Figma now
+    # feeds the multi-file project generation (see figma_attach_service).
 
 
 _register_builtin_workflows()

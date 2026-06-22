@@ -14,7 +14,4 @@ export type {
 export { useTeamStore } from "./teamStore"
 export type { Team, TeamMember, TeamInvitation } from "./teamStore"
 
-export { usePPTStore } from "./pptStore"
-export type { PPTProject, PPTPage, PPTTask } from "./pptStore"
-
 export { useCodeStore } from "./codeStore"

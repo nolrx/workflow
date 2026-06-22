@@ -1,20 +1,14 @@
 {
   "welcome": {
     "title": "Welcome back!",
-    "subtitle": "Create stunning AI-powered content with PPT Studio and RedInk Studio."
+    "subtitle": "Turn your ideas into previewable frontend projects with Code Studio."
   },
   "cards": {
-    "ppt": {
-      "title": "PPT Studio",
-      "subtitle": "Create AI-powered presentations",
-      "description": "Generate beautiful PowerPoint presentations from ideas, outlines, or descriptions.",
-      "button": "Create PPT"
-    },
-    "redbook": {
-      "title": "RedInk Studio",
-      "subtitle": "Create social media content",
-      "description": "Generate Xiaohongshu-style images and copywriting from your topics.",
-      "button": "Create Content"
+    "code": {
+      "title": "Code Studio",
+      "subtitle": "AI-powered software creation",
+      "description": "Go from a requirements doc to development flow, style and frontend code — a previewable frontend project in one flow.",
+      "button": "Open Code Studio"
     }
   },
   "recentProjects": {

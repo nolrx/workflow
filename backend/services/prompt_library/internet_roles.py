@@ -1184,9 +1184,41 @@ PROMPT_RECIPE_EXAMPLES: dict[str, dict[str, list[str]]] = {
 }
 
 
+def _store_get(key: str, default: str) -> str:
+    """Resolve ``key`` from the Mongo-backed prompt store (admin-editable).
+
+    Falls back to ``default`` (the bundled constant) on any error so prompt
+    assembly never breaks — and, when Mongo is unavailable, the store itself
+    already returns the same bundled default, so output is byte-identical.
+    """
+    try:
+        from backend.services.prompts import prompt_store
+
+        return prompt_store.get(key)
+    except Exception:  # noqa: BLE001 — never let prompt assembly fail
+        return default
+
+
+def resolve_special(name: str, default: str) -> str:
+    """Return the current text for a special block (base prefix / contract / …)."""
+    return _store_get(f"special/{name}", default)
+
+
+def resolve_prefix_text(prefix_id: str) -> str:
+    """Return the current text for one role prefix (override or default)."""
+    default = PROMPT_PREFIXES[prefix_id].text if prefix_id in PROMPT_PREFIXES else ""
+    return _store_get(f"prefix/{prefix_id}", default)
+
+
 def list_prefixes(include_text: bool = False) -> list[dict]:
-    """Return all available role prefixes."""
-    return [prefix.to_dict(include_text=include_text) for prefix in PROMPT_PREFIXES.values()]
+    """Return all available role prefixes (text resolved from the store)."""
+    out: list[dict] = []
+    for prefix in PROMPT_PREFIXES.values():
+        data = prefix.to_dict(include_text=include_text)
+        if include_text:
+            data["text"] = resolve_prefix_text(prefix.id)
+        out.append(data)
+    return out
 
 
 def get_prefix(prefix_id: str) -> PromptPrefix:
@@ -1207,12 +1239,12 @@ def compose_system_prompt(
     role_ids = _dedupe([primary_role, *(secondary_roles or [])])
     parts: list[str] = []
     if include_base:
-        parts.append(_section("BASE_SYSTEM_PREFIX", BASE_SYSTEM_PREFIX))
+        parts.append(_section("BASE_SYSTEM_PREFIX", resolve_special("BASE_SYSTEM_PREFIX", BASE_SYSTEM_PREFIX)))
     for role_id in role_ids:
-        prefix = get_prefix(role_id)
-        parts.append(_section(f"PREFIX_{role_id.upper()}", prefix.text))
+        get_prefix(role_id)  # validate the id (raises ValueError for unknown)
+        parts.append(_section(f"PREFIX_{role_id.upper()}", resolve_prefix_text(role_id)))
     if include_output_contract:
-        parts.append(_section("OUTPUT_CONTRACT", OUTPUT_CONTRACT))
+        parts.append(_section("OUTPUT_CONTRACT", resolve_special("OUTPUT_CONTRACT", OUTPUT_CONTRACT)))
     return "\n\n".join(parts)
 
 

@@ -7,6 +7,7 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 from backend.extensions import db
 from backend.models.agent.run import AgentRun
 from backend.models.code import (
+    CodeCanvas,
     CodeDocument,
     CodeProject,
     CodeProjectStatus,
@@ -31,6 +32,7 @@ from backend.services.prompt_library import (
     compose_system_prompt,
     get_prefix,
     list_prefixes,
+    resolve_prefix_text,
     route_prefixes,
 )
 from backend.utils.response import error_response, success_response
@@ -68,7 +70,9 @@ def get_prompt_prefix(prefix_id: str):
         prefix = get_prefix(prefix_id)
     except ValueError:
         return error_response("NOT_FOUND", "提示词前缀不存在", 404)
-    return success_response({"prefix": prefix.to_dict(include_text=True)})
+    data = prefix.to_dict(include_text=True)
+    data["text"] = resolve_prefix_text(prefix_id)  # overlay admin edits
+    return success_response({"prefix": data})
 
 
 @code_project_bp.route("/prompt-prefixes/route", methods=["POST"])
@@ -633,6 +637,95 @@ def activate_one_stage_version(project_id: str, stage: str, version_id: str):
     return success_response(
         {"project": project.to_dict(), "version": version.to_dict()}, "已恢复到该版本"
     )
+
+
+# ---------------------------------------------------------------------------
+# Remix canvas (n8n-style node graph) CRUD
+# ---------------------------------------------------------------------------
+
+
+@code_project_bp.route("/projects/<project_id>/canvases", methods=["GET"])
+@jwt_required()
+def list_canvases(project_id: str):
+    """List the project's remix canvases (metadata only)."""
+    project = _get_owned_project(project_id)
+    if not project:
+        return error_response("NOT_FOUND", "项目不存在", 404)
+    canvases = project.canvases.order_by(CodeCanvas.created_at.desc()).all()
+    return success_response(
+        {"canvases": [canvas.to_dict(include_graph=False) for canvas in canvases]}
+    )
+
+
+@code_project_bp.route("/projects/<project_id>/canvases", methods=["POST"])
+@jwt_required()
+def create_canvas(project_id: str):
+    """Create a remix canvas, optionally seeded with an initial graph."""
+    project = _get_owned_project(project_id)
+    if not project:
+        return error_response("NOT_FOUND", "项目不存在", 404)
+    data = request.get_json() or {}
+    canvas = CodeCanvas(
+        project_id=project.id,
+        user_id=project.user_id,
+        team_id=project.team_id,
+        name=(data.get("name") or "未命名画布").strip()[:200],
+    )
+    canvas.set_nodes(data.get("nodes") or [])
+    canvas.set_edges(data.get("edges") or [])
+    canvas.set_viewport(data.get("viewport"))
+    db.session.add(canvas)
+    db.session.commit()
+    return success_response({"canvas": canvas.to_dict()}, "画布已创建", 201)
+
+
+@code_project_bp.route("/projects/<project_id>/canvases/<canvas_id>", methods=["GET"])
+@jwt_required()
+def get_canvas(project_id: str, canvas_id: str):
+    """Return a canvas's full node/edge graph."""
+    canvas = _get_owned_canvas(project_id, canvas_id)
+    if not canvas:
+        return error_response("NOT_FOUND", "画布不存在", 404)
+    return success_response({"canvas": canvas.to_dict()})
+
+
+@code_project_bp.route("/projects/<project_id>/canvases/<canvas_id>", methods=["PUT"])
+@jwt_required()
+def update_canvas(project_id: str, canvas_id: str):
+    """Replace a canvas's graph (frontend debounce-saves the whole graph)."""
+    canvas = _get_owned_canvas(project_id, canvas_id)
+    if not canvas:
+        return error_response("NOT_FOUND", "画布不存在", 404)
+    data = request.get_json() or {}
+    if "name" in data:
+        canvas.name = (data.get("name") or "未命名画布").strip()[:200]
+    if "nodes" in data:
+        canvas.set_nodes(data.get("nodes") or [])
+    if "edges" in data:
+        canvas.set_edges(data.get("edges") or [])
+    if "viewport" in data:
+        canvas.set_viewport(data.get("viewport"))
+    db.session.commit()
+    return success_response({"canvas": canvas.to_dict()}, "画布已保存")
+
+
+@code_project_bp.route("/projects/<project_id>/canvases/<canvas_id>", methods=["DELETE"])
+@jwt_required()
+def delete_canvas(project_id: str, canvas_id: str):
+    """Delete a canvas."""
+    canvas = _get_owned_canvas(project_id, canvas_id)
+    if not canvas:
+        return error_response("NOT_FOUND", "画布不存在", 404)
+    db.session.delete(canvas)
+    db.session.commit()
+    return success_response({"deleted": canvas_id}, "画布已删除")
+
+
+def _get_owned_canvas(project_id: str, canvas_id: str) -> CodeCanvas | None:
+    project = _get_owned_project(project_id)
+    if not project:
+        return None
+    return CodeCanvas.query.filter_by(id=canvas_id, project_id=project.id).first()
 
 
 def _get_owned_project(project_id: str) -> CodeProject | None:

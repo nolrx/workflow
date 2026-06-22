@@ -11,6 +11,7 @@ const STAGE_INDEX: Record<string, number> = {
   requirements: 0,
   flow: 1,
   documents: 2,
+  style_select: 3,
   style: 3,
   preview: 3,
   publish: 4,

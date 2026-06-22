@@ -20,10 +20,15 @@ single ``generate_text`` call. Token usage is reported back via the CLI's termin
 import json
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Callable, Optional
+
+from werkzeug.utils import secure_filename
+
+from backend.services.prompts import prompt_store
 
 logger = logging.getLogger(__name__)
 
@@ -315,8 +320,9 @@ class FrontendProjectService:
 
     # --- prompt assembly -----------------------------------------------------
     def _load_prompt(self, name: str) -> str:
-        with open(PROMPT_DIR / name, "r", encoding="utf-8") as fh:
-            return fh.read()
+        # Mongo-backed (admin-editable); falls back to the bundled default under
+        # PROMPT_DIR when Mongo is unavailable.
+        return prompt_store.get(f"code/{name}")
 
     @staticmethod
     def _fill(template: str, **values: str) -> str:
@@ -329,6 +335,53 @@ class FrontendProjectService:
         return bool(os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY"))
 
     # --- public API ----------------------------------------------------------
+    # Total budget for the Figma design block injected into the prompt. Visual
+    # detail comes from the rendered images (the agent Reads them on demand), so
+    # the prompt only carries a compact per-frame IR summary — keeping it bounded
+    # even when a whole file has many frames.
+    _FIGMA_BLOCK_BUDGET = 18_000
+
+    def _figma_design_block(
+        self, frames: Optional[list]
+    ) -> tuple[str, list[tuple[str, str]]]:
+        """Build the [[FIGMA_DESIGN]] prompt text + the (dest, src) render copies.
+
+        ``frames`` items: ``{name, ir_text, render_path}``. Each frame becomes one
+        page/route; its render is referenced as ``design/<dest>.png`` (mounted at
+        ``/out/design/<dest>.png`` in the container) for the agent to ``Read``.
+        """
+        if not frames:
+            return "", []
+        head = [
+            "# Figma 设计稿(视觉真值 — 优先级高于上面的文字风格 / UI 基调)",
+            f"本产品有 {len(frames)} 个画板,每个画板对应一个页面/路由。",
+            "实现每个页面前,先用 Read 工具读取它的设计图(在 design/ 目录下)作为视觉真值,"
+            "精确还原布局、配色、字号、间距与层级;下方 IR 给出精确数值(hex/字号/间距)。",
+            "设计稿与文字风格/UI 基调冲突时,以设计稿为准。",
+        ]
+        sections: list[str] = []
+        copies: list[tuple[str, str]] = []
+        used = 0
+        for index, frame in enumerate(frames):
+            name = frame.get("name") or f"frame{index + 1}"
+            safe = secure_filename(name) or f"frame{index + 1}"
+            dest = f"{index + 1:02d}-{safe}.png"
+            src = frame.get("render_path")
+            has_img = bool(src and Path(src).exists())
+            if has_img:
+                copies.append((dest, str(src)))
+            ir = (frame.get("ir_text") or "").strip()
+            ir = ir[: max(0, self._FIGMA_BLOCK_BUDGET - used)]
+            used += len(ir)
+            part = [f"\n## 画板 {index + 1}:{name}"]
+            part.append(
+                f"设计图: design/{dest}(用 Read 工具查看)" if has_img else "(无渲染图,仅依据下方 IR)"
+            )
+            if ir:
+                part.append(f"设计 IR:\n{ir}")
+            sections.append("\n".join(part))
+        return "\n".join(head) + "\n" + "\n".join(sections), copies
+
     def build_project(
         self,
         *,
@@ -339,6 +392,7 @@ class FrontendProjectService:
         style_prompt: str = "",
         ui_baseline_prompt: str = "",
         context_ledger: str = "",
+        figma_frames: Optional[list] = None,
         on_event: Optional[Callable[[dict], None]] = None,
         is_cancelled: Optional[Callable[[], bool]] = None,
     ) -> dict:
@@ -355,6 +409,7 @@ class FrontendProjectService:
         if not self.is_configured():
             return self._empty("ANTHROPIC_API_KEY not configured")
 
+        figma_block, figma_copies = self._figma_design_block(figma_frames)
         prompt = self._fill(
             self._load_prompt("frontend_project_prompt.txt"),
             CONTEXT_LEDGER=context_ledger or "",
@@ -364,6 +419,7 @@ class FrontendProjectService:
             DOCUMENTS=documents_digest or "",
             STYLE_PROMPT=style_prompt or "",
             UI_BASELINE=ui_baseline_prompt or "",
+            FIGMA_DESIGN=figma_block,
         )
 
         workdir = Path(tempfile.mkdtemp(prefix="fe-agent-"))
@@ -378,6 +434,19 @@ class FrontendProjectService:
         (workdir / "repair_prompt.txt").write_text(
             self._load_prompt("frontend_project_repair_prompt.txt"), encoding="utf-8"
         )
+        # Drop the Figma render images where the container agent can Read them
+        # (/out/design/*.png). World-readable so the non-root `node` uid can open
+        # them on real Linux (Docker Desktop for Mac is permissive).
+        if figma_copies:
+            design_dir = workdir / "design"
+            design_dir.mkdir(parents=True, exist_ok=True)
+            os.chmod(design_dir, 0o777)
+            for dest, src in figma_copies:
+                try:
+                    shutil.copyfile(src, design_dir / dest)
+                    os.chmod(design_dir / dest, 0o644)
+                except OSError:
+                    logger.warning("failed to stage figma render %s", src)
         api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
 
         cmd = [

@@ -1,0 +1,32 @@
+{
+  "nav": {
+    "prompts": "提示词管理"
+  },
+  "title": "提示词管理",
+  "subtitle": "在线查看与调整系统内置提示词,保存后对后续生成立即生效。",
+  "mongoUnavailable": "MongoDB 当前不可用,正在使用内置默认提示词(只读)。请启动 MongoDB 后刷新以启用在线编辑。",
+  "searchPlaceholder": "搜索提示词…",
+  "loading": "加载中…",
+  "empty": "没有匹配的提示词",
+  "selectPrompt": "从左侧选择一个提示词进行编辑",
+  "groups": {
+    "code": "Code 模板",
+    "prefix": "角色前缀",
+    "special": "通用模块",
+    "custom": "自定义"
+  },
+  "badge": {
+    "overridden": "已改写",
+    "default": "默认"
+  },
+  "save": "保存",
+  "reset": "恢复默认",
+  "saved": "提示词已保存",
+  "resetDone": "已恢复默认",
+  "errors": {
+    "loadList": "加载提示词列表失败",
+    "loadDetail": "加载提示词详情失败",
+    "save": "保存提示词失败",
+    "reset": "恢复默认失败"
+  }
+}

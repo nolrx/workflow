@@ -1,20 +1,14 @@
 {
   "welcome": {
     "title": "欢迎回来！",
-    "subtitle": "使用 PPT 工作室和小红书工作室创建精彩的 AI 内容。"
+    "subtitle": "使用代码工作室,把你的想法变成可预览的前端项目。"
   },
   "cards": {
-    "ppt": {
-      "title": "PPT 工作室",
-      "subtitle": "AI 驱动的演示文稿创作",
-      "description": "从创意、大纲或描述生成精美的 PowerPoint 演示文稿。",
-      "button": "创建 PPT"
-    },
-    "redbook": {
-      "title": "小红书工作室",
-      "subtitle": "创建社交媒体内容",
-      "description": "根据您的主题生成小红书风格的图片和文案。",
-      "button": "创建内容"
+    "code": {
+      "title": "代码工作室",
+      "subtitle": "AI 驱动的软件创作",
+      "description": "从需求文档到开发流程、风格与前端代码,一站式生成可预览的前端项目。",
+      "button": "进入代码工作室"
     }
   },
   "recentProjects": {

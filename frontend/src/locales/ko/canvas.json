@@ -1,0 +1,25 @@
+{
+  "entry": "캔버스 모드",
+  "title": "리믹스 캔버스",
+  "back": "뒤로",
+  "node": {
+    "agent": "에이전트",
+    "merge": "병합",
+    "branch": "분기",
+    "source": "소스"
+  },
+  "toolbar": {
+    "addAgent": "에이전트",
+    "addMerge": "병합",
+    "addBranch": "분기",
+    "run": "캔버스 실행",
+    "running": "실행 중…"
+  },
+  "status": {
+    "saving": "저장 중…",
+    "saved": "저장됨",
+    "loading": "불러오는 중…",
+    "loadFailed": "불러오기 실패"
+  },
+  "runFailed": "캔버스 실행 실패"
+}

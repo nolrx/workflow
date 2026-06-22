@@ -70,8 +70,33 @@ class BaseConfig:
     STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
     STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 
+    # GitHub integration (org-level GitHub App). When unset, the integration is
+    # disabled and the auto-sync hook is a silent no-op. The App must be granted
+    # "Administration: write" (to create repos) + "Contents: write" (to push).
+    # The auth/sync layers read these from os.getenv directly so they work inside
+    # background workflow threads; mirrored here for visibility.
+    GITHUB_APP_ID = os.getenv("GITHUB_APP_ID")
+    # PEM private key, either inline (literal "\n" escapes are normalised) or via path.
+    GITHUB_APP_PRIVATE_KEY = os.getenv("GITHUB_APP_PRIVATE_KEY")
+    GITHUB_APP_PRIVATE_KEY_PATH = os.getenv("GITHUB_APP_PRIVATE_KEY_PATH")
+    # Optional: pin the installation; otherwise resolved from GET /app/installations.
+    GITHUB_APP_INSTALLATION_ID = os.getenv("GITHUB_APP_INSTALLATION_ID")
+    # Target org/user to create repos under; defaults to the installation account.
+    GITHUB_REPO_OWNER = os.getenv("GITHUB_REPO_OWNER")
+    GITHUB_API_BASE = os.getenv("GITHUB_API_BASE", "https://api.github.com")
+    GITHUB_REPO_VISIBILITY = os.getenv("GITHUB_REPO_VISIBILITY", "private")
+    GITHUB_REPO_PREFIX = os.getenv("GITHUB_REPO_PREFIX", "")
+    GITHUB_PUSH_DIST = os.getenv("GITHUB_PUSH_DIST", "true").lower() in ("1", "true", "yes")
+
     # Redis Configuration
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+    # MongoDB Configuration (stores editable system prompts). The accessor in
+    # backend.services.mongo reads these from os.getenv directly so it works in
+    # background threads; mirrored here for visibility. Optional — the app falls
+    # back to bundled default prompts when Mongo is unreachable.
+    MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
+    MONGODB_DB = os.getenv("MONGODB_DB", "ai_creative_studio")
 
 
 class DevelopmentConfig(BaseConfig):

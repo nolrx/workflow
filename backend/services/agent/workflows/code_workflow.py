@@ -49,6 +49,7 @@ from backend.services.agent.context_verifier import (
 )
 from backend.services.agent.files import artifact_abs_path
 from backend.services.code import get_code_generation_service
+from backend.services.code.styles import get_styles
 from backend.services.code.version_service import safe_record_stage_version
 from backend.services.credit_service import charge
 
@@ -64,6 +65,9 @@ _STAGE_AFTER = {
     "requirements": "flow",
     "flow": "documents",
     "documents": "style",
+    # ``style_select`` is a user-input gate (no agent step): on resume it advances
+    # into the ``style`` generation stage with the just-picked styles.
+    "style_select": "style",
     "style": "preview",
     "preview": "publisher",
     "publisher": None,
@@ -80,6 +84,9 @@ _PAUSE_MESSAGE = {
     "requirements": "需求文档已生成，请确认或提出调整意见",
     "flow": "开发流程已生成，请确认或提出调整意见",
     "documents": "开发文档已拆分，请确认或提出调整意见",
+    # style_select is a selection gate (no document produced yet): the user picks
+    # UI styles, then confirming generates the style document.
+    "style_select": "请选择 UI 风格，确认后生成风格文档",
     "style": "风格文档已生成，请确认或提出调整意见",
 }
 
@@ -676,8 +683,10 @@ def run_code_workflow(ctx, recorder) -> dict:
         with recorder.step("style", label, "generator", 5, input_summary=input_summary) as step:
             step.step.attempt = _attempt_for("style")
             db.session.commit()
-            chosen_styles = style_ids or ["minimal-saas"]
             proj = db.session.get(CodeProject, project_id)
+            # Prefer the styles the user picked at the style_select gate (persisted
+            # on the project); fall back to the run-start config / default.
+            chosen_styles = proj.get_selected_style_ids() or style_ids or ["minimal-saas"]
             injected = ledger.render_for_prompt()
             if revise:
                 style_doc = service.revise_style_prompt(
@@ -759,10 +768,36 @@ def run_code_workflow(ctx, recorder) -> dict:
         ) as step:
             proj = db.session.get(CodeProject, project_id)
             prompt = (proj.style_prompt or "").strip()
+            # Reuse existing thumbnails when the selected styles are unchanged: each
+            # thumbnail is stamped with the style_ids it was generated for, so we
+            # only re-spend an image-API call when the user actually picked a
+            # different style. (No stamp / different ids / no thumbnails → regenerate.)
+            existing_previews = proj.get_preview_images()
+            current_style_ids = set(proj.get_selected_style_ids())
+            existing_style_ids = (
+                set(existing_previews[0].get("style_ids", [])) if existing_previews else set()
+            )
+            previews_reusable = bool(
+                existing_previews and current_style_ids and existing_style_ids == current_style_ids
+            )
             if not want_previews:
                 step.mark_skipped("配置未开启预览图生成")
             elif not prompt:
                 step.mark_skipped("缺少风格提示词，跳过预览图")
+            elif previews_reusable:
+                # Style unchanged + thumbnails already exist → reuse as-is. Do NOT
+                # regenerate, record a new stage version, or reset status (keeps any
+                # prior ui_confirmed so the user goes straight to project generation).
+                recorder.emit(
+                    AgentEventType.MODEL_RESPONSE,
+                    step_id=step.id,
+                    message=f"风格未变更，复用已有 {len(existing_previews)} 张 UI 预览缩略图",
+                    payload={"count": len(existing_previews), "reused": True},
+                )
+                step.set_output(
+                    output_summary=f"风格未变更，复用现有 {len(existing_previews)} 张 UI 预览缩略图。",
+                    next_action="在 Code 工作台选择并确认 UI 基调。",
+                )
             else:
                 recorder.emit(
                     AgentEventType.MODEL_REQUEST,
@@ -805,6 +840,11 @@ def run_code_workflow(ctx, recorder) -> dict:
                     step.mark_failed(str(error))
                 else:
                     proj = db.session.get(CodeProject, project_id)
+                    # Stamp each thumbnail with the styles it was generated for so a
+                    # later run can reuse them when the style selection is unchanged.
+                    stamp_ids = proj.get_selected_style_ids()
+                    for image in images:
+                        image["style_ids"] = stamp_ids
                     # The project keeps the inline base64 data URLs so the Code
                     # workspace <img> previews render without an auth round-trip;
                     # the disk-backed artifacts (above) are what the run timeline
@@ -927,13 +967,51 @@ def run_code_workflow(ctx, recorder) -> dict:
         return pause_at(stage)
 
     # APPROVE: advance from the persisted cursor through the remaining stages.
+    # The resume route clears progress.review_stage before relaunch, so the stage
+    # being approved is read from the resume directive, not prev_progress.
     if resume and resume.get("action") == "approve":
+        approved_stage = resume.get("stage") or prev_progress.get("review_stage")
         recorder.emit(
             AgentEventType.REVIEW_RESOLVED,
             message="已确认，继续后续生成",
-            payload={"stage": prev_progress.get("review_stage")},
+            payload={"stage": approved_stage},
         )
+        # After the split documents are approved, pause for UI-style selection
+        # instead of auto-generating the style document: the user picks styles,
+        # and confirming (select_style) generates the style doc from that choice.
+        if approved_stage == "documents":
+            return pause_at("style_select")
         return _run_from(cursor or "flow")
+
+    # SELECT_STYLE: the user picked UI styles at the style_select gate. Persist the
+    # choice, generate the style document from it, then pause at the style review.
+    if resume and resume.get("action") == "select_style":
+        chosen = [style.id for style in get_styles(resume.get("style_ids") or [])]
+        proj = db.session.get(CodeProject, project_id)
+        proj.set_selected_style_ids(chosen)
+        db.session.commit()
+        recorder.emit(
+            AgentEventType.REVIEW_RESOLVED,
+            message=f"已选择 UI 风格：{chosen or '默认 minimal-saas'}",
+            payload={"stage": "style_select", "style_ids": chosen},
+        )
+        ledger.merge(
+            constraints_add=[
+                f"UI 风格(用户选定): {', '.join(chosen) if chosen else 'minimal-saas'}"
+            ],
+            provenance_entry={
+                "step": "style_select",
+                "agent_key": "style",
+                "fields_touched": ["constraints"],
+            },
+        )
+        persist_ledger()
+        _do_style(revise=False)
+        # Count the style step here (it runs outside _run_from), mirroring the old
+        # documents-approve path so progress reaches 7/7 on completion, not 6/7.
+        completed += 1
+        persist_ledger()
+        return pause_at("style")
 
     # FRESH: planner + requirements, then pause for the first review.
     _do_planner()

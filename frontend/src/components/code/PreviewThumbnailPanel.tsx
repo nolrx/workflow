@@ -3,6 +3,8 @@ import { CheckCircle2, ImageIcon, Loader2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { FigmaExportDialog } from "@/components/code/FigmaExportDialog"
+import { FigmaSliceExportButton } from "@/components/code/FigmaSliceExportButton"
 import { StageHistoryDialog } from "@/components/code/StageHistoryDialog"
 import { useCodeStore } from "@/stores/codeStore"
 
@@ -67,23 +69,35 @@ export function PreviewThumbnailPanel() {
                   loading="lazy"
                   className="aspect-square w-full object-cover"
                 />
-                <div className="p-2">
-                  <Button
-                    className="w-full"
-                    size="sm"
-                    variant={confirmed ? "secondary" : "default"}
-                    onClick={() => void confirmPreview(image.url)}
-                    disabled={isLoading}
-                  >
-                    {confirmed ? (
-                      <>
-                        <CheckCircle2 className="mr-1.5 h-4 w-4" />
-                        {t("preview.confirmed")}
-                      </>
-                    ) : (
-                      t("preview.confirm")
+                <div className="flex flex-col gap-2 p-2">
+                  <div className="flex gap-2">
+                    <Button
+                      className="flex-1"
+                      size="sm"
+                      variant={confirmed ? "secondary" : "default"}
+                      onClick={() => void confirmPreview(image.url)}
+                      disabled={isLoading}
+                    >
+                      {confirmed ? (
+                        <>
+                          <CheckCircle2 className="mr-1.5 h-4 w-4" />
+                          {t("preview.confirmed")}
+                        </>
+                      ) : (
+                        t("preview.confirm")
+                      )}
+                    </Button>
+                    {project && (
+                      <FigmaExportDialog
+                        projectId={project.id}
+                        source="preview_image"
+                        previewId={image.id}
+                      />
                     )}
-                  </Button>
+                  </div>
+                  {project && (
+                    <FigmaSliceExportButton projectId={project.id} previewId={image.id} />
+                  )}
                 </div>
               </div>
             )

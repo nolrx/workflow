@@ -135,6 +135,22 @@ React 19 + TypeScript + Vite。`@/` 是 `frontend/src/` 的别名。
 - **UI**：shadcn 风格组件（Radix 原语 + Tailwind v4）在 `src/components/ui/`；业务组件分目录在 `src/components/{code,agent,ppt,common,layout}/`。
 - **国际化（i18n）**：i18next，按命名空间组织的 JSON 位于 `src/locales/{en,ja,ko,zh-CN}/`（`common`、`auth`、`ppt`、`redbook`、`code`、`agent`、`team`、`errors` 等）。新增 key 要同时加到**四种语言**、放进正确的命名空间；不要硬编码面向用户的文案。
 
+## 插件（`plugin/`）
+
+仓库里所有**独立插件**——在外部宿主（如 Figma 桌面端）里运行、独立构建、不属于 `backend`/`frontend` 主应用——都放在顶层 `plugin/<name>/` 下，**一个子目录一个插件**，各自带独立的 `package.json` / 构建脚本 / `README.md` / `.gitignore`。
+
+- **约定**：新增插件时新建 `plugin/<name>/` 目录，不要散落在根目录、也不要塞进 `frontend`。插件**不参与**根目录 `npm run dev`/`npm run build`/`npm run lint` 的编排（根 `package.json` 不引用 `plugin/*`），各插件在自己目录里用自己的脚本构建。插件与平台的耦合只通过 **HTTP API**（`/api/...`）和**共享数据契约**完成，不直接 import 后端/前端代码。
+
+**当前插件：`plugin/figma`（AI Creative Studio Importer）。** 一个 Figma 桌面插件，把平台导出的设计（Code 域 UI 预览 / 生成的前端）在 Figma 里重建为原生图层。
+
+- **构成**：`manifest.json`（插件清单，`main=code.js`、`ui=ui.html`）、`src/code.ts`（主线程，重建图层）、`src/ir.ts`（Design IR 的插件侧镜像）、`ui.html`（插件 UI）。用 **esbuild** 把 `src/code.ts` 打包成 `code.js`（`code.js` 与 `node_modules` 都在 `.gitignore` 内，需本地构建）。
+- **构建 / 加载**：`cd plugin/figma && npm install && npm run build`（`npm run watch` 监听、`npm run typecheck` 跑 `tsc --noEmit`）；然后在 Figma 桌面端 **Plugins → Development → Import plugin from manifest…** 选择 `plugin/figma/manifest.json`，改完 `src/` 后重新 `build`。
+- **调用流程（运行时）**：① 平台里打开项目点 **导出到 Figma**，拿到 8 位**一次性配对码**（5 分钟有效）；② 在 Figma 运行本插件，填入后端 URL + 配对码；③ 插件 UI 从**免鉴权**的 `GET /api/code/figma/pull?code=…` 拉取导出包（**配对码即凭证**），解码内联图片，主线程把 Design IR 重建为 frames / rectangles / text / image fills。后端侧的导出/拉取/导入逻辑在 `backend/routes/code/figma_routes.py` 与 `backend/services/code/figma/*`。
+- **Design IR 契约**：双向桥接的中间表示，权威定义在 `backend/services/code/figma/ir.py`，插件侧镜像 `plugin/figma/src/ir.ts`，规范见 `docs/figma-ir-spec.md`——三者要保持一致。
+- **生产注意**：`manifest.json` 的 `networkAccess.allowedDomains` 开发期是 `"*"`，发布前必须收紧到确切的后端域名（如 `["https://studio.example.com"]`）。
+
+> 注：Figma 在产品里是**收进 Code 域 UI 生成阶段**的能力（导出仅在 UI 完成后可用）；这里的 `plugin/figma` 只是其中跑在 Figma 里的那一端。
+
 ## 值得遵循的约定
 
 - 代码注释：**PPT/核心模块用英文，RedBook 模块用中文**——与所在文件保持一致。

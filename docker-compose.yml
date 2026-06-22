@@ -4,6 +4,7 @@
 #   backend  : Flask API via gunicorn
 #   postgres : primary datastore (middleware)
 #   redis    : cache / queue (middleware)
+#   mongo    : editable system-prompt store (middleware)
 # All config comes from .env (see .env.example).
 # ==============================================================================
 
@@ -46,6 +47,23 @@ services:
     networks:
       - app-net
 
+  # --- Middleware: MongoDB (editable system prompts) -------------------------
+  mongo:
+    image: mongo:7
+    container_name: ai-creative-studio-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-net
+
   # --- Backend: Flask API (gunicorn) -----------------------------------------
   backend:
     build:
@@ -61,11 +79,16 @@ services:
       # at localhost (correct for bare-metal), which is wrong inside the container;
       # this override stays in sync with the POSTGRES_* vars the postgres service uses.
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      # Docker-out-of-Docker lane for the code_frontend_project_generation
-      # workflow. TMPDIR must resolve to an IDENTICAL path on host and in the
-      # container so the sibling fe-agent container's `-v {workdir}:/out` bind
-      # mount points at real host files.
+      # Reach Mongo by its compose service name (the .env value targets localhost
+      # for bare-metal). Stores editable system prompts.
+      MONGODB_URI: mongodb://mongo:27017
+      # Docker-out-of-Docker lane for the code_frontend_project_generation and
+      # code_figma_slice_generation workflows. TMPDIR must resolve to an IDENTICAL
+      # path on host and in the container so the sibling agent container's
+      # `-v {workdir}:/out` bind mount points at real host files. Both workflows'
+      # mkdtemp() land here (distinct prefixes: fe-agent- / slicer-agent-).
       FE_AGENT_IMAGE: fe-agent:latest
+      SLICER_AGENT_IMAGE: slicer-agent:latest
       TMPDIR: /data/workflow/.fe-agent-work
     ports:
       - "5001:5001"
@@ -79,6 +102,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      mongo:
         condition: service_healthy
     networks:
       - app-net
@@ -112,9 +137,23 @@ services:
     command: ["true"]
     restart: "no"
 
+  # --- Build-only: slicer-agent sandbox image --------------------------------
+  # Produces `slicer-agent:latest` (OpenAI Codex CLI + Pillow) for the backend's
+  # code_figma_slice_generation workflow to `docker run`. Same `setup` profile as
+  # fe-agent — build both with:
+  #   docker compose --profile setup build
+  slicer-agent:
+    image: slicer-agent:latest
+    build:
+      context: ./backend/docker/slicer-agent
+    profiles: ["setup"]
+    command: ["true"]
+    restart: "no"
+
 volumes:
   postgres_data:
   redis_data:
+  mongo_data:
   backend_uploads:
 
 networks:

@@ -49,8 +49,10 @@ WORKFLOW_COSTS = {
     "code_full_generation": pricing.CODE_FULL_GENERATION_TOTAL,
     "code_frontend_generation": pricing.CODE_FRONTEND_GENERATION,
     "code_frontend_project_generation": pricing.CODE_FRONTEND_PROJECT_GENERATION,
+    "code_canvas_generation": pricing.CODE_CANVAS_RUN,
+    "code_figma_slice_generation": pricing.CODE_FIGMA_SLICE_TOTAL,
 }
-VALID_DOMAINS = {"code", "ppt", "redbook"}
+VALID_DOMAINS = {"code"}
 MAX_CONCURRENT_RUNS = 2
 
 
@@ -87,12 +89,23 @@ def create_run():
         return error_response(
             "VALIDATION_ERROR", "前端生成需要一个已确认的 Code 项目（resource_id）", 400
         )
+    if workflow == "code_figma_slice_generation" and not resource_id:
+        return error_response(
+            "VALIDATION_ERROR", "切片导出需要一个已有的 Code 项目（resource_id）", 400
+        )
     if workflow == "code_full_generation":
         has_requirement = bool((config.get("requirement") or "").strip())
         if not has_requirement and not resource_id:
             return error_response(
                 "VALIDATION_ERROR", "请提供 requirement 或已有的 resource_id", 400
             )
+    if workflow == "code_canvas_generation":
+        if not resource_id:
+            return error_response(
+                "VALIDATION_ERROR", "画布执行需要一个 Code 项目（resource_id）", 400
+            )
+        if not (config.get("canvas_id") or "").strip():
+            return error_response("VALIDATION_ERROR", "请提供要执行的画布（canvas_id）", 400)
 
     # Per-user concurrency cap on active runs.
     active = AgentRun.query.filter(
@@ -232,8 +245,10 @@ def resume_run(run_id: str):
 
     data = request.get_json() or {}
     action = (data.get("action") or "").strip()
-    if action not in ("approve", "revise"):
-        return error_response("VALIDATION_ERROR", "action 必须为 approve 或 revise", 400)
+    if action not in ("approve", "revise", "select_style"):
+        return error_response(
+            "VALIDATION_ERROR", "action 必须为 approve、revise 或 select_style", 400
+        )
 
     progress = run.get_progress()
     review_stage = progress.get("review_stage")
@@ -245,10 +260,20 @@ def resume_run(run_id: str):
     if action == "revise" and not instruction:
         return error_response("VALIDATION_ERROR", "请填写调整意见", 400)
 
+    # select_style carries the user's UI style picks; at least one is required.
+    style_ids = data.get("style_ids") or []
+    if action == "select_style" and (not isinstance(style_ids, list) or not style_ids):
+        return error_response("VALIDATION_ERROR", "请至少选择一个 UI 风格", 400)
+
     # Stash the resume directive for the workflow, mark RUNNING to block a
     # duplicate resume racing in, clear the review flag, then relaunch the worker.
     config = run.get_config()
-    config["_resume"] = {"action": action, "stage": stage, "instruction": instruction}
+    config["_resume"] = {
+        "action": action,
+        "stage": stage,
+        "instruction": instruction,
+        "style_ids": style_ids,
+    }
     run.set_config(config)
     run.status = AgentRunStatus.RUNNING
     progress["review_stage"] = None
@@ -256,13 +281,18 @@ def resume_run(run_id: str):
     db.session.commit()
 
     agent_runtime.start(current_app._get_current_object(), run_id)
+    resume_message = {
+        "approve": "已确认，继续生成",
+        "revise": "已收到调整意见，正在重新生成",
+        "select_style": "已选择风格，正在生成风格文档",
+    }.get(action, "已继续生成")
     return success_response(
         {
             "run_id": run_id,
             "status": run.status,
             "stream_url": f"/api/agent/runs/{run_id}/stream",
         },
-        "已确认，继续生成" if action == "approve" else "已收到调整意见，正在重新生成",
+        resume_message,
     )
 
 

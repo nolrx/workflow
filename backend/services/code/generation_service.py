@@ -13,6 +13,7 @@ from typing import Any
 from backend.services.ai import get_image_provider, get_text_provider
 from backend.services.code.styles import get_styles
 from backend.services.prompt_library import compose_recipe_prompt
+from backend.services.prompts import prompt_store
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +29,9 @@ class CodeGenerationService:
     """Generate editable software creation artifacts."""
 
     def _load_prompt(self, name: str) -> str:
-        prompt_path = PROMPT_DIR / name
-        with open(prompt_path, "r", encoding="utf-8") as prompt_file:
-            return prompt_file.read()
+        # Resolve from the Mongo-backed prompt store (admin-editable); falls back
+        # to the bundled default under PROMPT_DIR when Mongo is unavailable.
+        return prompt_store.get(f"code/{name}")
 
     def _generate_text(self, prompt: str, fallback: str, on_model_call=None) -> str:
         provider = get_text_provider()

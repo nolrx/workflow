@@ -1,0 +1,12 @@
+{
+  "name": "AI Creative Studio Importer",
+  "id": "ai-creative-studio-importer",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figma"],
+  "networkAccess": {
+    "allowedDomains": ["*"],
+    "reasoning": "Fetches design export packages from the user-configured AI Creative Studio backend. In production, replace \"*\" with your exact backend origin (e.g. https://studio.example.com)."
+  }
+}

@@ -7,6 +7,7 @@ import { LiveStageCard } from "@/components/code/LiveStageCard"
 import { selectRequirementsQuestions } from "@/components/code/clarify"
 import { RequirementsClarifyDialog } from "@/components/code/RequirementsClarifyDialog"
 import { StageArtifactCard, type ArtifactStage } from "@/components/code/StageArtifactCard"
+import { StyleSelectGate } from "@/components/code/StyleSelectGate"
 import { useStickToBottom } from "@/hooks/use-stick-to-bottom"
 import {
   deriveConversation,
@@ -178,16 +179,26 @@ export function ConversationRail({
     }
   }
 
+  // Stages that surface as an editable artifact card. The style_select gate is
+  // NOT one of them (no document is produced yet) — its prompt renders as a plain
+  // note and the picker lives in the composer below.
+  const ARTIFACT_STAGES: ArtifactStage[] = ["requirements", "flow", "documents", "style", "app"]
+
   const renderItem = (message: ConversationMessage) => {
     if (message.role === "assistant" && message.kind === "awaiting_review") {
-      const stage = message.stage as ArtifactStage | null
-      if (stage && latestAwaitingId[stage] === message.id) {
+      const stage = message.stage ?? null
+      if (
+        stage &&
+        ARTIFACT_STAGES.includes(stage as ArtifactStage) &&
+        latestAwaitingId[stage] === message.id
+      ) {
+        const artifactStage = stage as ArtifactStage
         const state = isPaused && reviewStage === stage ? "review" : "done"
         const open = openStages[stage] ?? state === "review"
         return (
           <StageArtifactCard
             key={message.id}
-            stage={stage}
+            stage={artifactStage}
             state={state}
             open={open}
             onToggle={() => setOpenStages((prev) => ({ ...prev, [stage]: !open }))}
@@ -272,6 +283,8 @@ export function ConversationRail({
             <Loader2 className="h-4 w-4 animate-spin" />
             {t("conversation.running")}
           </div>
+        ) : isPaused && reviewStage === "style_select" ? (
+          <StyleSelectGate />
         ) : isPaused ? (
           <div className="space-y-2">
             {showClarify && (

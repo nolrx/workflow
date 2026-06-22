@@ -11,15 +11,9 @@ import { Profile } from "@/pages/settings/Profile"
 import { Billing } from "@/pages/settings/Billing"
 import { Dashboard } from "@/pages/dashboard/Dashboard"
 import { CodeStudio } from "@/pages/code/CodeStudio"
-import PPTHome from "@/pages/ppt/Home"
-import PPTHistory from "@/pages/ppt/History"
-import PPTEditor from "@/pages/ppt/Editor"
-import OutlineEditor from "@/pages/ppt/OutlineEditor"
-import DetailEditor from "@/pages/ppt/DetailEditor"
-import SlidePreview from "@/pages/ppt/SlidePreview"
-import RedBookHome from "@/pages/redbook/Home"
-import RedBookHistory from "@/pages/redbook/History"
-import TaskDetail from "@/pages/redbook/TaskDetail"
+import { CodeCanvas } from "@/pages/code/CodeCanvas"
+import { PromptAdmin } from "@/pages/admin/PromptAdmin"
+import { AdminRoute } from "@/components/common/AdminRoute"
 
 /** Wrap a page element in the auth guard (keeps the route list readable). */
 function guarded(element: React.ReactNode) {
@@ -40,22 +34,20 @@ function App() {
             <Route path="/" element={guarded(<CodeStudio />)} />
             <Route path="/code" element={guarded(<CodeStudio />)} />
             <Route path="/code/:projectId" element={guarded(<CodeStudio />)} />
+            <Route path="/code/:projectId/canvas" element={guarded(<CodeCanvas />)} />
 
             {/* Dashboard */}
             <Route path="/dashboard" element={guarded(<Dashboard />)} />
 
-            {/* PPT domain */}
-            <Route path="/ppt" element={guarded(<PPTHome />)} />
-            <Route path="/ppt/history" element={guarded(<PPTHistory />)} />
-            <Route path="/ppt/project/:projectId" element={guarded(<PPTEditor />)} />
-            <Route path="/ppt/project/:projectId/outline" element={guarded(<OutlineEditor />)} />
-            <Route path="/ppt/project/:projectId/detail" element={guarded(<DetailEditor />)} />
-            <Route path="/ppt/project/:projectId/preview" element={guarded(<SlidePreview />)} />
-
-            {/* RedBook domain */}
-            <Route path="/redbook" element={guarded(<RedBookHome />)} />
-            <Route path="/redbook/history" element={guarded(<RedBookHistory />)} />
-            <Route path="/redbook/task/:id" element={guarded(<TaskDetail />)} />
+            {/* Admin: prompt management (admin role only) */}
+            <Route
+              path="/admin/prompts"
+              element={
+                <AdminRoute>
+                  <PromptAdmin />
+                </AdminRoute>
+              }
+            />
 
             {/* Team routes */}
             <Route path="/team" element={guarded(<TeamList />)} />

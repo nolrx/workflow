@@ -1,9 +1,8 @@
 """
 Artifact file storage for agent runs.
 
-Mirrors the existing PPT/RedBook file conventions: files live under the shared
-``UPLOAD_FOLDER`` and are addressed by a path relative to it (so the DB stores
-portable relative paths). Layout:
+Files live under the shared ``UPLOAD_FOLDER`` and are addressed by a path
+relative to it (so the DB stores portable relative paths). Layout:
 
     uploads/agent_runs/{run_id}/{step_id}/{filename}
 """

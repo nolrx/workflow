@@ -1,0 +1,16 @@
+{
+  "name": "ai-creative-studio-figma-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Figma plugin that rebuilds AI Creative Studio designs (exported as a Design IR) as native Figma layers.",
+  "scripts": {
+    "build": "esbuild src/code.ts --bundle --target=es2017 --outfile=code.js",
+    "watch": "esbuild src/code.ts --bundle --target=es2017 --outfile=code.js --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.100.0",
+    "esbuild": "^0.21.0",
+    "typescript": "^5.4.0"
+  }
+}

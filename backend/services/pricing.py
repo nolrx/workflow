@@ -22,16 +22,6 @@ def _credits(env_var: str, default: int) -> int:
     return max(0, value)
 
 
-# --- PPT domain ---------------------------------------------------------------
-PPT_OUTLINE = _credits("PRICE_PPT_OUTLINE", 1)              # per generate/outline call
-PPT_DESCRIPTION_PAGE = _credits("PRICE_PPT_DESC_PAGE", 1)   # per page description
-PPT_IMAGE_PAGE = _credits("PRICE_PPT_IMAGE_PAGE", 2)        # per page image
-
-# --- RedBook domain -----------------------------------------------------------
-REDBOOK_OUTLINE = _credits("PRICE_RB_OUTLINE", 1)
-REDBOOK_CONTENT = _credits("PRICE_RB_CONTENT", 1)
-REDBOOK_IMAGE_PAGE = _credits("PRICE_RB_IMAGE_PAGE", 2)     # per generated image
-
 # --- Code (agent) domain ------------------------------------------------------
 # NOTE: Code-domain pricing is currently disabled (defaults 0) — the active
 # version runs Code workflows free of charge / without a credit gate. The
@@ -63,18 +53,43 @@ CODE_FRONTEND_PROJECT_GENERATION = _credits("PRICE_CODE_FRONTEND_PROJECT", 0)
 # be metered via PRICE_CODE_SECTION_REVISE without code changes.
 CODE_SECTION_REVISION = _credits("PRICE_CODE_SECTION_REVISE", 0)
 
+# Figma restore: pull a Figma file (node tree + rendered image) and reconstruct a
+# single-file HTML app from it — one heavier (vision) text generation + review.
+CODE_FIGMA_RESTORE = _credits("PRICE_CODE_FIGMA_RESTORE", 0)
+
+# Figma export of a generated HTML app: one model call that converts the HTML
+# into a Design IR (node tree) for the companion plugin to rebuild as layers.
+# The preview-image export path is deterministic (no model) and is never charged.
+CODE_FIGMA_EXPORT = _credits("PRICE_CODE_FIGMA_EXPORT", 0)
+
+# Figma SLICE export: an OpenAI Codex CLI runs headless in a sandboxed container
+# to analyse a preview thumbnail into an EDITABLE Design IR (text/vector/sliced
+# image), so Figma gets adjustable layers instead of one flat image. An
+# agent-execution lane like the frontend PROJECT path; reserved up-front and
+# auto-refunded only when the run produces nothing. Defaults 0 like the rest of
+# the Code domain — set PRICE_CODE_FIGMA_SLICE to meter. NOTE for future metering:
+# a fallback (degraded == single flat image) delivers the legacy preview_image
+# result, so it should be discounted/refunded rather than charged in full.
+CODE_FIGMA_SLICE = _credits("PRICE_CODE_FIGMA_SLICE", 0)
+CODE_FIGMA_SLICE_TOTAL = CODE_FIGMA_SLICE
+
+# Remix canvas (n8n-style): an up-front reservation per canvas run, plus a
+# per-agent-node charge folded into the run's reported extra credits. Both default
+# 0 (free) like the rest of the Code domain; set PRICE_CODE_CANVAS_* to meter.
+CODE_CANVAS_RUN = _credits("PRICE_CODE_CANVAS_RUN", 0)
+CODE_CANVAS_NODE = _credits("PRICE_CODE_CANVAS_NODE", 0)
+
 
 # Operation label -> (resource_type, unit_cost). Used when writing CreditTransaction
 # records so the audit log carries a stable operation/resource vocabulary.
 OPERATION = {
-    "ppt_outline": ("ppt_project", PPT_OUTLINE),
-    "ppt_description": ("ppt_project", PPT_DESCRIPTION_PAGE),
-    "ppt_image": ("ppt_project", PPT_IMAGE_PAGE),
-    "redbook_outline": ("redbook_task", REDBOOK_OUTLINE),
-    "redbook_content": ("redbook_task", REDBOOK_CONTENT),
-    "redbook_image": ("redbook_task", REDBOOK_IMAGE_PAGE),
     "agent_run": ("agent_run", CODE_FULL_GENERATION_TOTAL),
     "code_context_verify": ("agent_run", CODE_CONTEXT_VERIFY),
     "code_frontend_project": ("agent_run", CODE_FRONTEND_PROJECT_GENERATION),
     "code_section_revise": ("code_project", CODE_SECTION_REVISION),
+    "code_figma_restore": ("agent_run", CODE_FIGMA_RESTORE),
+    "code_figma_export": ("code_project", CODE_FIGMA_EXPORT),
+    "code_figma_slice": ("agent_run", CODE_FIGMA_SLICE_TOTAL),
+    "code_canvas_run": ("agent_run", CODE_CANVAS_RUN),
+    "code_canvas_node": ("agent_run", CODE_CANVAS_NODE),
 }

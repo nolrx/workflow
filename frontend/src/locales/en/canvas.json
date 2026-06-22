@@ -1,0 +1,25 @@
+{
+  "entry": "Canvas mode",
+  "title": "Remix canvas",
+  "back": "Back",
+  "node": {
+    "agent": "Agent",
+    "merge": "Merge",
+    "branch": "Branch",
+    "source": "Source"
+  },
+  "toolbar": {
+    "addAgent": "Agent",
+    "addMerge": "Merge",
+    "addBranch": "Branch",
+    "run": "Run canvas",
+    "running": "Running…"
+  },
+  "status": {
+    "saving": "Saving…",
+    "saved": "Saved",
+    "loading": "Loading…",
+    "loadFailed": "Load failed"
+  },
+  "runFailed": "Canvas run failed"
+}

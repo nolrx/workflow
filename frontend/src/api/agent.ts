@@ -167,10 +167,16 @@ export const agentApi = {
   cancelRun: async (runId: string): Promise<void> => {
     await api.post<Envelope<unknown>>(`/agent/runs/${runId}/cancel`)
   },
-  /** Resume a paused run: approve the reviewed document or revise it. */
+  /** Resume a paused run: approve / revise the reviewed document, or submit a
+   *  UI-style selection (select_style) at the style_select gate. */
   resumeRun: async (
     runId: string,
-    body: { action: "approve" | "revise"; stage?: string | null; instruction?: string }
+    body: {
+      action: "approve" | "revise" | "select_style"
+      stage?: string | null
+      instruction?: string
+      style_ids?: string[]
+    }
   ): Promise<CreateRunResult> => {
     const response = await api.post<Envelope<CreateRunResult>>(
       `/agent/runs/${runId}/resume`,

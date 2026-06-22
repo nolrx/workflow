@@ -1,5 +1,5 @@
 """
-Agent Swarm models — shared across the PPT / RedBook / Code product domains.
+Agent Swarm models for the Code product domain.
 """
 from backend.models.agent.artifact import AgentArtifact, AgentArtifactType
 from backend.models.agent.event import AgentEvent, AgentEventLevel, AgentEventType

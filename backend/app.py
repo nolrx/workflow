@@ -38,26 +38,11 @@ def create_app(config_name: str = None) -> Flask:
     setup_request_logging(app)
 
     # Register blueprints
+    from backend.routes.admin_routes import admin_bp
     from backend.routes.agent_routes import agent_bp
     from backend.routes.auth_routes import auth_bp
-    from backend.routes.code import code_project_bp
+    from backend.routes.code import code_project_bp, figma_bp, github_bp
     from backend.routes.credit_routes import credit_bp
-    from backend.routes.ppt import (
-        ppt_export_bp,
-        ppt_file_bp,
-        ppt_material_bp,
-        ppt_page_bp,
-        ppt_project_bp,
-        ppt_reference_file_bp,
-        ppt_settings_bp,
-        ppt_template_bp,
-    )
-    from backend.routes.redbook import (
-        redbook_content_bp,
-        redbook_image_bp,
-        redbook_outline_bp,
-        redbook_task_bp,
-    )
     from backend.routes.team_routes import team_bp
     from backend.routes.user_routes import user_bp
 
@@ -67,20 +52,9 @@ def create_app(config_name: str = None) -> Flask:
     app.register_blueprint(credit_bp, url_prefix="/api/credits")
     app.register_blueprint(agent_bp, url_prefix="/api/agent")
     app.register_blueprint(code_project_bp, url_prefix="/api/code")
-    # PPT routes
-    app.register_blueprint(ppt_project_bp, url_prefix="/api/ppt/projects")
-    app.register_blueprint(ppt_page_bp, url_prefix="/api/ppt/projects")
-    app.register_blueprint(ppt_file_bp, url_prefix="/api/ppt/files")
-    app.register_blueprint(ppt_export_bp, url_prefix="/api/ppt/projects")
-    app.register_blueprint(ppt_material_bp, url_prefix="/api/ppt")
-    app.register_blueprint(ppt_reference_file_bp, url_prefix="/api/ppt")
-    app.register_blueprint(ppt_template_bp, url_prefix="/api/ppt")
-    app.register_blueprint(ppt_settings_bp, url_prefix="/api/ppt")
-    # RedBook routes
-    app.register_blueprint(redbook_task_bp, url_prefix="/api/redbook/tasks")
-    app.register_blueprint(redbook_outline_bp, url_prefix="/api/redbook")
-    app.register_blueprint(redbook_image_bp, url_prefix="/api/redbook")
-    app.register_blueprint(redbook_content_bp, url_prefix="/api/redbook")
+    app.register_blueprint(figma_bp, url_prefix="/api/code/figma")
+    app.register_blueprint(github_bp, url_prefix="/api/code/github")
+    app.register_blueprint(admin_bp, url_prefix="/api/admin")
 
     # Health check endpoint
     @app.route("/health")
@@ -100,8 +74,7 @@ def create_app(config_name: str = None) -> Flask:
                     "credits": "/api/credits",
                     "agent": "/api/agent",
                     "code": "/api/code",
-                    "ppt": "/api/ppt",
-                    "redbook": "/api/redbook",
+                    "admin": "/api/admin",
                 },
             }
         )
@@ -151,6 +124,16 @@ def create_app(config_name: str = None) -> Flask:
     # Create database tables
     with app.app_context():
         db.create_all()
+
+    # Seed editable system prompts into MongoDB (idempotent; only inserts
+    # missing keys). Fails soft — if Mongo is unreachable the app still runs off
+    # the bundled default prompts.
+    try:
+        from backend.services.prompts import prompt_store
+
+        prompt_store.seed_defaults()
+    except Exception as error:  # noqa: BLE001 — never block startup on prompt seeding
+        logger.warning("Prompt seeding skipped: %s", error)
 
     return app
 

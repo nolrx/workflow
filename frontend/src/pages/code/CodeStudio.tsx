@@ -5,6 +5,9 @@ import { toast } from "sonner"
 import { AgentRunPanel } from "@/components/agent/AgentRunPanel"
 import { CodeStepper } from "@/components/code/CodeStepper"
 import { ConversationRail } from "@/components/code/ConversationRail"
+import { FigmaExportDialog } from "@/components/code/FigmaExportDialog"
+import { FigmaImportDialog } from "@/components/code/FigmaImportDialog"
+import { GitHubRepoCard } from "@/components/code/GitHubRepoCard"
 import { PreviewThumbnailPanel } from "@/components/code/PreviewThumbnailPanel"
 import { AppLayout } from "@/components/layout/AppLayout"
 import { Badge } from "@/components/ui/badge"
@@ -151,6 +154,12 @@ export function CodeStudio() {
   // exist (or are being generated) — no longer folded under the conversation.
   const showThumbnails = (project?.preview_images?.length ?? 0) > 0 || activeAction === "preview"
 
+  // Figma belongs to the UI-generation stage: only surface it once the project
+  // has reached the preview / UI-baseline stage, so it never clutters or
+  // interrupts the document stages (requirements / flow / documents / style).
+  const inUiStage =
+    !!project && ["preview_ready", "ui_confirmed"].includes(project.status)
+
   return (
     <AppLayout title={t("title")}>
       <AgentRunPanel />
@@ -164,16 +173,32 @@ export function CodeStudio() {
           <div className="min-w-0 flex-1">
             <CodeStepper />
           </div>
-          {agentRun && (
-            <div className="flex shrink-0 items-center gap-2">
-              <Badge variant={agentRun.status === "paused" ? "default" : "outline"}>
-                {ta(`status.${agentRun.status}`, { defaultValue: agentRun.status })}
-              </Badge>
-              <Button variant="ghost" size="sm" onClick={openPanel}>
-                {ta("panel.viewDetail")}
-              </Button>
-            </div>
-          )}
+          <div className="flex shrink-0 items-center gap-2">
+            {/* GitHub auto-sync status (read-only): repo link + latest push. Renders
+                nothing until the session has a repo or a sync event. */}
+            {project && <GitHubRepoCard projectId={project.id} />}
+            {/* Figma belongs to the UI stage: attach a whole design to drive the
+                multi-file project generation. Hidden during the document stages. */}
+            {inUiStage && <FigmaImportDialog projectId={project!.id} />}
+            {/* Figma export: push the generated HTML into Figma as editable layers. */}
+            {inUiStage && (
+              <FigmaExportDialog
+                projectId={project!.id}
+                source="html"
+                triggerLabel={t("figma.exportHtml")}
+              />
+            )}
+            {agentRun && (
+              <>
+                <Badge variant={agentRun.status === "paused" ? "default" : "outline"}>
+                  {ta(`status.${agentRun.status}`, { defaultValue: agentRun.status })}
+                </Badge>
+                <Button variant="ghost" size="sm" onClick={openPanel}>
+                  {ta("panel.viewDetail")}
+                </Button>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Two-column: left conversation, right preview thumbnails (slides in). */}

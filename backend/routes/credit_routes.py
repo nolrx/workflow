@@ -11,7 +11,7 @@ credit_bp = Blueprint("credits", __name__)
 
 
 def _is_team_member(team_id: str, user_id: str) -> bool:
-    """Return True if the user belongs to the team (mirrors the PPT ownership check)."""
+    """Return True if the user belongs to the team."""
     from backend.models.team import TeamMember
     return (
         TeamMember.query.filter_by(team_id=team_id, user_id=user_id).first()

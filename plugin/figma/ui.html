@@ -1,0 +1,126 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        font-family: Inter, -apple-system, system-ui, sans-serif;
+        font-size: 12px;
+        margin: 0;
+        padding: 16px;
+        color: #1a1a1a;
+      }
+      h3 { margin: 0 0 4px; font-size: 13px; }
+      p.hint { margin: 0 0 12px; color: #777; line-height: 1.4; }
+      label { display: block; margin: 10px 0 4px; font-weight: 600; }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 8px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        font-size: 12px;
+      }
+      .code-input { letter-spacing: 4px; text-transform: uppercase; font-weight: 600; }
+      .row { display: flex; gap: 8px; margin-top: 14px; }
+      button {
+        flex: 1;
+        padding: 9px;
+        border: none;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button.primary { background: #0d99ff; color: #fff; }
+      button.secondary { background: #f0f0f0; color: #333; }
+      button:disabled { opacity: 0.5; cursor: default; }
+      .status { margin-top: 12px; min-height: 16px; color: #777; }
+      .status.error { color: #d8000c; }
+    </style>
+  </head>
+  <body>
+    <h3>从 AI Creative Studio 导入</h3>
+    <p class="hint">在平台点「导出到 Figma」获取配对码，连同后端地址填入下方，即可把设计还原为 Figma 图层。</p>
+
+    <label for="api">后端地址</label>
+    <input id="api" value="http://localhost:5001/api" />
+
+    <label for="code">配对码</label>
+    <input id="code" class="code-input" maxlength="8" placeholder="XXXXXXXX" />
+
+    <div class="row">
+      <button class="secondary" id="cancel">关闭</button>
+      <button class="primary" id="import">导入</button>
+    </div>
+    <div class="status" id="status"></div>
+
+    <script>
+      const $ = (id) => document.getElementById(id)
+      const statusEl = $("status")
+
+      function setStatus(text, isError) {
+        statusEl.textContent = text || ""
+        statusEl.className = "status" + (isError ? " error" : "")
+      }
+
+      function dataUrlToBytes(dataUrl) {
+        const comma = dataUrl.indexOf(",")
+        const b64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl
+        const bin = atob(b64)
+        const bytes = new Uint8Array(bin.length)
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+        return bytes
+      }
+
+      $("import").onclick = async () => {
+        const apiBase = $("api").value.trim().replace(/\/$/, "")
+        const code = $("code").value.trim().toUpperCase()
+        if (!apiBase || !code) {
+          setStatus("请填写后端地址和配对码", true)
+          return
+        }
+        setStatus("正在拉取设计…")
+        $("import").disabled = true
+        try {
+          const res = await fetch(apiBase + "/code/figma/pull?code=" + encodeURIComponent(code))
+          const body = await res.json()
+          if (!res.ok || body.success === false) {
+            throw new Error((body && body.message) || "拉取失败")
+          }
+          const payload = body.data || body
+          // Decode inline images to bytes in the iframe (atob lives here).
+          const imageBytes = {}
+          const images = payload.images || {}
+          for (const ref of Object.keys(images)) {
+            imageBytes[ref] = dataUrlToBytes(images[ref])
+          }
+          setStatus("正在构建图层…")
+          parent.postMessage(
+            { pluginMessage: { type: "build", payload: payload, imageBytes: imageBytes } },
+            "*"
+          )
+        } catch (err) {
+          setStatus(err.message || String(err), true)
+          $("import").disabled = false
+        }
+      }
+
+      $("cancel").onclick = () => {
+        parent.postMessage({ pluginMessage: { type: "cancel" } }, "*")
+      }
+
+      onmessage = (event) => {
+        const msg = event.data.pluginMessage
+        if (!msg) return
+        if (msg.type === "done") {
+          setStatus("导入完成 ✓")
+          $("import").disabled = false
+        } else if (msg.type === "error") {
+          setStatus(msg.message || "导入失败", true)
+          $("import").disabled = false
+        }
+      }
+    </script>
+  </body>
+</html>

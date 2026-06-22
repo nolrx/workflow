@@ -1,20 +1,14 @@
 {
   "welcome": {
     "title": "おかえりなさい！",
-    "subtitle": "PPT スタジオと RedInk スタジオで素晴らしい AI コンテンツを作成しましょう。"
+    "subtitle": "コードスタジオで、アイデアをプレビュー可能なフロントエンドプロジェクトに変えましょう。"
   },
   "cards": {
-    "ppt": {
-      "title": "PPT スタジオ",
-      "subtitle": "AI でプレゼンテーションを作成",
-      "description": "アイデア、アウトライン、または説明から美しい PowerPoint プレゼンテーションを生成します。",
-      "button": "PPT を作成"
-    },
-    "redbook": {
-      "title": "RedInk スタジオ",
-      "subtitle": "SNS コンテンツを作成",
-      "description": "トピックから小紅書スタイルの画像とコピーライティングを生成します。",
-      "button": "コンテンツを作成"
+    "code": {
+      "title": "コードスタジオ",
+      "subtitle": "AI によるソフトウェア制作",
+      "description": "要件ドキュメントから開発フロー、スタイル、フロントエンドコードまで、プレビュー可能なプロジェクトを一気に生成します。",
+      "button": "コードスタジオを開く"
     }
   },
   "recentProjects": {

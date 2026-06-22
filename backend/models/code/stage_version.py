@@ -5,8 +5,8 @@ Every stage product (requirements / flow / documents / style / preview) gets an
 append-only version trail. Each generation or manual edit records a new row whose
 ``version_number`` auto-increments within a ``(project_id, stage)`` pair, and at
 most one row per pair carries ``is_current = True`` (the version whose content is
-materialized on the live ``CodeProject``). This mirrors the PPT
-``PPTPageImageVersion`` pattern so users can review or roll back any stage.
+materialized on the live ``CodeProject``). This versioning lets users review or
+roll back any stage.
 """
 import json
 import uuid

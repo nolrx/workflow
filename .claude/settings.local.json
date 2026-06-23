@@ -54,7 +54,13 @@
       "Bash(docker version *)",
       "Bash(node_modules/.bin/tsc -b --noEmit)",
       "Bash(python -m py_compile backend/routes/agent_routes.py)",
-      "Bash(git *)"
+      "Bash(git *)",
+      "WebFetch(domain:github.com)",
+      "Bash(curl -s \"https://api.github.com/repos/bmad-code-org/bmad-method/git/trees/main?recursive=1\" -o bmad_tree.json)",
+      "Bash(echo \"=== exit: $? ===\")",
+      "Bash(curl -s \"https://api.github.com/repos/bmad-code-org/bmad-method/tags?per_page=30\")",
+      "Bash(curl -s \"https://api.github.com/repos/bmad-code-org/bmad-method/branches?per_page=50\")",
+      "Bash(curl -s \"https://api.github.com/repos/bmad-code-org/bmad-method/git/trees/V4?recursive=1\" -o bmad_v4.json)"
     ]
   }
 }

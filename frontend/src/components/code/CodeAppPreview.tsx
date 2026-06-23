@@ -9,19 +9,21 @@
  * model), builds it, and publishes the source (zip) plus the built
  * `dist`. This pane resolves that deliverable from either the current agent run
  * in the store (live, right after generation) or — on reload — the latest
- * project run for the Code project, then previews the built `dist` in an iframe
- * (served from `/api/agent/runs/<id>/site/`) and offers the source zip for
- * download. It also exposes the "generate" trigger.
+ * project run for the Code project. Rather than embedding the heavy live app
+ * inside the chat transcript, it surfaces the result as a compact card and opens
+ * the build in a real browser tab via the session-bound deployed route
+ * (`/preview/<projectId>/`) — a native, full-page experience — while still
+ * offering the source zip for download. It also exposes the "generate" trigger.
  *
  * Wiring (left to the page owner, e.g. as a 5th preview tab):
  *   <CodeAppPreview />
  */
 import { useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { Bot, Download, FileCode2, Loader2, RefreshCw } from "lucide-react"
+import { Bot, Download, ExternalLink, FileCode2, Loader2, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 
-import { AGENT_API_BASE, agentApi, type AgentRun } from "@/api/agent"
+import { agentApi, type AgentRun } from "@/api/agent"
 import { tokenManager } from "@/api/client"
 import { figmaApi } from "@/api/figma"
 import { Badge } from "@/components/ui/badge"
@@ -61,14 +63,17 @@ function projectFromRun(run: AgentRun | null): FrontendProject | null {
 }
 
 /**
- * Built-dist entry URL for the iframe. The token rides in the query; the backend
- * mirrors it into a path-scoped cookie so the dist's relative asset requests stay
- * authenticated. The served site carries a `connect-src 'none'` CSP, so the
- * sandboxed (same-origin, for localStorage) preview cannot exfiltrate over fetch.
+ * Open the project's deployed frontend build in a new browser tab via the
+ * session-bound route `/preview/<projectId>/`. The route is keyed by the Code
+ * project (not a run id), so it always resolves to the latest built run on the
+ * backend. A one-shot `?token=` proves ownership on entry; the backend pins it
+ * into a path-scoped cookie and redirects to a token-less URL, so the JWT never
+ * lingers in the address bar while relative asset requests stay authenticated.
  */
-function previewSrc(runId: string): string {
+function openProjectPreview(projectId: string): void {
   const token = tokenManager.getAccessToken() ?? ""
-  return `${AGENT_API_BASE}/agent/runs/${runId}/site/index.html?token=${encodeURIComponent(token)}`
+  const url = `/preview/${encodeURIComponent(projectId)}/?token=${encodeURIComponent(token)}`
+  window.open(url, "_blank", "noopener,noreferrer")
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -206,6 +211,12 @@ export function CodeAppPreview() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          {builtProject && project?.id && (
+            <Button size="sm" variant="outline" onClick={() => openProjectPreview(project.id)}>
+              <ExternalLink className="mr-2 h-4 w-4" />
+              {t("openInBrowser")}
+            </Button>
+          )}
           {builtProject?.zipArtifactId && (
             <Button size="sm" variant="outline" onClick={handleDownload} disabled={downloading}>
               {downloading ? (
@@ -239,15 +250,22 @@ export function CodeAppPreview() {
             <Loader2 className="h-6 w-6 animate-spin" />
             <span>{t("generating")}</span>
           </div>
-        ) : builtProject ? (
-          <iframe
-            title={t("iframeTitle")}
-            src={previewSrc(builtProject.runId)}
-            // allow-same-origin is required for the built app's localStorage; the
-            // served dist's connect-src 'none' CSP blocks network exfiltration.
-            sandbox="allow-forms allow-modals allow-scripts allow-same-origin"
-            className="h-full min-h-[540px] w-full bg-white"
-          />
+        ) : builtProject && project?.id ? (
+          // Native preview: open the deployed build in a real browser tab instead
+          // of embedding the heavy live app inside the chat transcript.
+          <div className="flex h-full min-h-64 flex-col items-center justify-center gap-4 p-8 text-center">
+            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
+              <ExternalLink className="h-7 w-7" />
+            </div>
+            <div className="space-y-1">
+              <p className="text-sm font-medium">{t("readyTitle")}</p>
+              <p className="max-w-sm text-xs text-muted-foreground">{t("readyHint")}</p>
+            </div>
+            <Button onClick={() => openProjectPreview(project.id)}>
+              <ExternalLink className="mr-2 h-4 w-4" />
+              {t("openInBrowser")}
+            </Button>
+          </div>
         ) : loadingHistory ? (
           <div className="flex h-full min-h-64 items-center justify-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-5 w-5 animate-spin" />

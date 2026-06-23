@@ -47,7 +47,6 @@ agent_bp = Blueprint("agent", __name__)
 # failure — see agent runtime). Values come from the central pricing table.
 WORKFLOW_COSTS = {
     "code_full_generation": pricing.CODE_FULL_GENERATION_TOTAL,
-    "code_frontend_generation": pricing.CODE_FRONTEND_GENERATION,
     "code_frontend_project_generation": pricing.CODE_FRONTEND_PROJECT_GENERATION,
     "code_canvas_generation": pricing.CODE_CANVAS_RUN,
     "code_figma_slice_generation": pricing.CODE_FIGMA_SLICE_TOTAL,
@@ -82,10 +81,7 @@ def create_run():
         return error_response("VALIDATION_ERROR", "config 必须是对象", 400)
 
     # Workflow-specific minimal input validation.
-    if (
-        workflow in ("code_frontend_generation", "code_frontend_project_generation")
-        and not resource_id
-    ):
+    if workflow == "code_frontend_project_generation" and not resource_id:
         return error_response(
             "VALIDATION_ERROR", "前端生成需要一个已确认的 Code 项目（resource_id）", 400
         )

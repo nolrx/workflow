@@ -9,168 +9,179 @@
 # ==============================================================================
 
 services:
-  # --- Middleware: PostgreSQL ------------------------------------------------
-  postgres:
-    image: postgres:16-alpine
-    container_name: ai-creative-studio-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - app-net
+    # --- Middleware: PostgreSQL ------------------------------------------------
+    postgres:
+        image: postgres:16-alpine
+        container_name: ai-creative-studio-postgres
+        restart: unless-stopped
+        environment:
+            POSTGRES_USER: ${POSTGRES_USER}
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+            POSTGRES_DB: ${POSTGRES_DB}
+        ports:
+            - "5432:5432"
+        volumes:
+            - postgres_data:/var/lib/postgresql/data
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}",
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+        networks:
+            - app-net
 
-  # --- Middleware: Redis -----------------------------------------------------
-  redis:
-    image: redis:7-alpine
-    container_name: ai-creative-studio-redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - app-net
+    # --- Middleware: Redis -----------------------------------------------------
+    redis:
+        image: redis:7-alpine
+        container_name: ai-creative-studio-redis
+        restart: unless-stopped
+        ports:
+            - "6379:6379"
+        volumes:
+            - redis_data:/data
+        healthcheck:
+            test: ["CMD", "redis-cli", "ping"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+        networks:
+            - app-net
 
-  # --- Middleware: MongoDB (editable system prompts) -------------------------
-  mongo:
-    image: mongo:7
-    container_name: ai-creative-studio-mongo
-    restart: unless-stopped
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongo_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - app-net
+    # --- Middleware: MongoDB (editable system prompts) -------------------------
+    mongo:
+        image: mongo:7
+        container_name: ai-creative-studio-mongo
+        restart: unless-stopped
+        ports:
+            - "27017:27017"
+        volumes:
+            - mongo_data:/data/db
+        healthcheck:
+            test:
+                [
+                    "CMD",
+                    "mongosh",
+                    "--quiet",
+                    "--eval",
+                    "db.adminCommand('ping')",
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+        networks:
+            - app-net
 
-  # --- Backend: Flask API (gunicorn) -----------------------------------------
-  backend:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    image: ai-creative-studio-backend:latest
-    container_name: ai-creative-studio-backend
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      # Reach Postgres by its compose service name. The .env DATABASE_URL points
-      # at localhost (correct for bare-metal), which is wrong inside the container;
-      # this override stays in sync with the POSTGRES_* vars the postgres service uses.
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      # Reach Mongo by its compose service name (the .env value targets localhost
-      # for bare-metal). Stores editable system prompts.
-      MONGODB_URI: mongodb://mongo:27017
-      # Docker-out-of-Docker lane for the code_frontend_project_generation and
-      # code_figma_slice_generation workflows. TMPDIR must resolve to an IDENTICAL
-      # path on host and in the container so the sibling agent container's
-      # `-v {workdir}:/out` bind mount points at real host files. Both workflows'
-      # mkdtemp() land here (distinct prefixes: fe-agent- / slicer-agent-).
-      FE_AGENT_IMAGE: fe-agent:latest
-      SLICER_AGENT_IMAGE: slicer-agent:latest
-      TMPDIR: /data/workflow/.fe-agent-work
-      # fe-agent now runs TWO CLIs: Claude Code (writes the project) + Codex (real
-      # image assets via the bundled image-assets skill). Codex reuses
-      # OPENAI_API_KEY (from .env, the image key); the backend injects it per
-      # `docker run`. Asset generation runs INSIDE Claude's generate phase, so give
-      # that phase extra room (FE_AGENT_TIMEOUT); FE_CODEX_TIMEOUT caps one
-      # gen-assets call. The asset lane is fail-soft — it never blocks the build.
-      FE_AGENT_TIMEOUT: "1080"
-      FE_CODEX_TIMEOUT: "480"
-      # Codex (slicer-agent) is a reasoning model that analyses a full UI
-      # thumbnail into a ~17KB IR — it routinely needs several minutes, so the
-      # 300s default times out and the run silently degrades to a flat image.
-      # CODEX_TIMEOUT caps the in-container codex call; SLICER_TOTAL_TIMEOUT is
-      # the host-side backstop and must exceed it (+ login/crop overhead).
-      CODEX_TIMEOUT: "900"
-      SLICER_TOTAL_TIMEOUT: "1020"
-    ports:
-      - "5001:5001"
-    volumes:
-      - backend_uploads:/app/backend/uploads
-      # DooD: talk to the host daemon to spawn throwaway fe-agent containers.
-      - /var/run/docker.sock:/var/run/docker.sock
-      # Shared work dir, mounted at the same absolute path on both sides.
-      - ./.fe-agent-work:/data/workflow/.fe-agent-work
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      mongo:
-        condition: service_healthy
-    networks:
-      - app-net
+    # --- Backend: Flask API (gunicorn) -----------------------------------------
+    backend:
+        build:
+            context: .
+            dockerfile: backend/Dockerfile
+        image: ai-creative-studio-backend:latest
+        container_name: ai-creative-studio-backend
+        restart: unless-stopped
+        env_file:
+            - .env
+        environment:
+            # Reach Postgres by its compose service name. The .env DATABASE_URL points
+            # at localhost (correct for bare-metal), which is wrong inside the container;
+            # this override stays in sync with the POSTGRES_* vars the postgres service uses.
+            DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+            # Reach Mongo by its compose service name (the .env value targets localhost
+            # for bare-metal). Stores editable system prompts.
+            MONGODB_URI: mongodb://mongo:27017
+            # Docker-out-of-Docker lane for the code_frontend_project_generation and
+            # code_figma_slice_generation workflows. TMPDIR must resolve to an IDENTICAL
+            # path on host and in the container so the sibling agent container's
+            # `-v {workdir}:/out` bind mount points at real host files. Both workflows'
+            # mkdtemp() land here (distinct prefixes: fe-agent- / slicer-agent-).
+            FE_AGENT_IMAGE: fe-agent:latest
+            SLICER_AGENT_IMAGE: slicer-agent:latest
+            TMPDIR: /data/workflow/.fe-agent-work
+            # fe-agent now runs TWO CLIs: Claude Code (writes the project) + Codex (real
+            # image assets via the bundled image-assets skill). Codex reuses
+            # OPENAI_API_KEY (from .env, the image key); the backend injects it per
+            # `docker run`. Asset generation runs INSIDE Claude's generate phase, so give
+            # that phase extra room (FE_AGENT_TIMEOUT); FE_CODEX_TIMEOUT caps one
+            # gen-assets call. The asset lane is fail-soft — it never blocks the build.
+            FE_AGENT_TIMEOUT: "4800"
+            FE_CODEX_TIMEOUT: "600"
+            # Codex (slicer-agent) is a reasoning model that analyses a full UI
+            # thumbnail into a ~17KB IR — it routinely needs several minutes, so the
+            # 300s default times out and the run silently degrades to a flat image.
+            # CODEX_TIMEOUT caps the in-container codex call; SLICER_TOTAL_TIMEOUT is
+            # the host-side backstop and must exceed it (+ login/crop overhead).
+            CODEX_TIMEOUT: "900"
+            SLICER_TOTAL_TIMEOUT: "1020"
+        ports:
+            - "5001:5001"
+        volumes:
+            - backend_uploads:/app/backend/uploads
+            # DooD: talk to the host daemon to spawn throwaway fe-agent containers.
+            - /var/run/docker.sock:/var/run/docker.sock
+            # Shared work dir, mounted at the same absolute path on both sides.
+            - ./.fe-agent-work:/data/workflow/.fe-agent-work
+        depends_on:
+            postgres:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+            mongo:
+                condition: service_healthy
+        networks:
+            - app-net
 
-  # --- Frontend: nginx (SPA + /api reverse proxy) ----------------------------
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    image: ai-creative-studio-frontend:latest
-    container_name: ai-creative-studio-frontend
-    restart: unless-stopped
-    ports:
-      - "80:80"
-    depends_on:
-      - backend
-    networks:
-      - app-net
+    # --- Frontend: nginx (SPA + /api reverse proxy) ----------------------------
+    frontend:
+        build:
+            context: ./frontend
+            dockerfile: Dockerfile
+        image: ai-creative-studio-frontend:latest
+        container_name: ai-creative-studio-frontend
+        restart: unless-stopped
+        ports:
+            - "80:80"
+        depends_on:
+            - backend
+        networks:
+            - app-net
 
-  # --- Build-only: fe-agent sandbox image ------------------------------------
-  # Produces `fe-agent:latest` into the host image store so the backend's
-  # `docker run` (code_frontend_project_generation workflow) can find it. Gated
-  # behind the `setup` profile, so `docker compose up` never starts it. Build it
-  # alongside the app images with:
-  #   docker compose --profile setup build
-  fe-agent:
-    image: fe-agent:latest
-    build:
-      context: ./backend/docker/fe-agent
-    profiles: ["setup"]
-    command: ["true"]
-    restart: "no"
+    # --- Build-only: fe-agent sandbox image ------------------------------------
+    # Produces `fe-agent:latest` into the host image store so the backend's
+    # `docker run` (code_frontend_project_generation workflow) can find it. Gated
+    # behind the `setup` profile, so `docker compose up` never starts it. Build it
+    # alongside the app images with:
+    #   docker compose --profile setup build
+    fe-agent:
+        image: fe-agent:latest
+        build:
+            context: ./backend/docker/fe-agent
+        profiles: ["setup"]
+        command: ["true"]
+        restart: "no"
 
-  # --- Build-only: slicer-agent sandbox image --------------------------------
-  # Produces `slicer-agent:latest` (OpenAI Codex CLI + Pillow) for the backend's
-  # code_figma_slice_generation workflow to `docker run`. Same `setup` profile as
-  # fe-agent — build both with:
-  #   docker compose --profile setup build
-  slicer-agent:
-    image: slicer-agent:latest
-    build:
-      context: ./backend/docker/slicer-agent
-    profiles: ["setup"]
-    command: ["true"]
-    restart: "no"
+    # --- Build-only: slicer-agent sandbox image --------------------------------
+    # Produces `slicer-agent:latest` (OpenAI Codex CLI + Pillow) for the backend's
+    # code_figma_slice_generation workflow to `docker run`. Same `setup` profile as
+    # fe-agent — build both with:
+    #   docker compose --profile setup build
+    slicer-agent:
+        image: slicer-agent:latest
+        build:
+            context: ./backend/docker/slicer-agent
+        profiles: ["setup"]
+        command: ["true"]
+        restart: "no"
 
 volumes:
-  postgres_data:
-  redis_data:
-  mongo_data:
-  backend_uploads:
+    postgres_data:
+    redis_data:
+    mongo_data:
+    backend_uploads:
 
 networks:
-  app-net:
-    driver: bridge
+    app-net:
+        driver: bridge

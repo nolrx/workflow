@@ -7,7 +7,9 @@ the canvas at 100% fidelity. The HTML -> IR path (AI-generated layer tree) is
 added in a later phase.
 """
 import base64
+import json
 import logging
+import re
 from io import BytesIO
 from pathlib import Path
 from typing import Optional, Tuple
@@ -147,17 +149,59 @@ def build_sliced_export_payload(project, run_id: Optional[str] = None) -> dict:
     return payload
 
 
+def _call_text_model(prompt: str, on_model_call=None) -> Tuple[Optional[str], bool, Optional[str]]:
+    """Call the active text provider once. Returns (text, success, error); never raises."""
+    from backend.services.ai import get_text_provider
+
+    provider = get_text_provider()
+    provider_name = getattr(provider, "provider_name", None)
+    model_name = getattr(provider, "model", None)
+    if not provider or not provider.is_configured():
+        if on_model_call:
+            on_model_call(
+                prompt=prompt, text=None, success=False,
+                error="AI text provider not configured",
+                provider=provider_name, model=model_name,
+            )
+        return None, False, "AI text provider not configured"
+    result = provider.generate_text(prompt)
+    if on_model_call:
+        on_model_call(
+            prompt=prompt, text=result.text if result.success else None,
+            success=result.success, error=result.error,
+            provider=provider_name, model=model_name,
+        )
+    if not result.success:
+        return None, False, result.error
+    return result.text, True, None
+
+
+def _extract_json_object(text: str) -> Optional[dict]:
+    """Tolerant single-object JSON parse (code-fence / prefix tolerant)."""
+    if not text:
+        return None
+    cleaned = text.strip()
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", cleaned, re.DOTALL | re.IGNORECASE)
+    if fenced:
+        cleaned = fenced.group(1).strip()
+    if not cleaned.startswith("{"):
+        match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
+        if match:
+            cleaned = match.group(1)
+    try:
+        value = json.loads(cleaned)
+        return value if isinstance(value, dict) else None
+    except json.JSONDecodeError:
+        logger.warning("figma export: failed to parse model JSON output")
+        return None
+
+
 def build_html_export_payload(project, *, on_model_call=None) -> dict:
     """Convert a project's generated HTML into a plugin layer-tree payload (AI).
 
     Unlike the preview path this requires a model call (no headless browser is
     available to measure the DOM), so the caller charges for it.
     """
-    from backend.services.code.frontend_build_service import (
-        FrontendBuildService,
-        get_frontend_build_service,
-    )
-
     html = latest_frontend_html(project.id)
     if not html:
         raise ExportError("NOT_FOUND", "项目还没有生成的前端 HTML，无法导出", 404)
@@ -165,12 +209,11 @@ def build_html_export_payload(project, *, on_model_call=None) -> dict:
     template = (_PROMPT_DIR / "html_to_figma_ir_prompt.txt").read_text(encoding="utf-8")
     prompt = template.replace("[[HTML]]", html[:_MAX_HTML_CHARS])
 
-    service = get_frontend_build_service()
-    text, success, error = service._call_model(prompt, on_model_call)
+    text, success, error = _call_text_model(prompt, on_model_call)
     if not success:
         raise ExportError("SERVER_ERROR", f"HTML 转 Figma 失败：{error or '模型不可用'}", 502)
 
-    payload = FrontendBuildService._extract_json(text or "")
+    payload = _extract_json_object(text or "")
     if not payload or not isinstance(payload.get("root"), dict):
         raise ExportError("SERVER_ERROR", "模型未返回有效的 Figma 图层结构", 502)
 

@@ -27,6 +27,7 @@ from typing import Any, Optional
 from backend.models.agent import AgentEventLevel, AgentEventType
 from backend.services.agent.context_ledger import ContextLedger
 from backend.services.ai import get_text_provider
+from backend.services.prompts import prompt_store
 
 logger = logging.getLogger(__name__)
 
@@ -172,13 +173,14 @@ def run_ai_consistency_gate(
 
     fingerprint = json.dumps(ledger.fingerprint(), ensure_ascii=False, indent=2)
     summary = (new_product_summary or "")[:_AI_SUMMARY_CAP]
+    # Prompt is admin-editable via the prompt store (code/consistency_gate_prompt.txt);
+    # falls back to the bundled default. ``[[KEY]]`` fill (str.replace) — the body
+    # holds literal JSON braces that would break str.format.
     prompt = (
-        "你是软件项目的一致性审查员。下面是项目已确立的『共识基线』(JSON) 与某一步骤刚产出的"
-        "『新产物摘要』。请判断新产物是否与共识基线在技术栈、术语口径、范围(scope_in/scope_out)"
-        "或关键决策上存在冲突。只输出一个 JSON 对象，不要输出任何其它文字或 Markdown 围栏：\n"
-        '{"conflict": true/false, "conflicts": [{"field": "...", "established": "...", '
-        '"new": "...", "severity": "low|medium|high"}], "summary": "一句话结论"}\n\n'
-        f"# 共识基线\n{fingerprint}\n\n# 新产物摘要（步骤 {step_key}）\n{summary}\n"
+        prompt_store.get("code/consistency_gate_prompt.txt")
+        .replace("[[FINGERPRINT]]", fingerprint)
+        .replace("[[SUMMARY]]", summary)
+        .replace("[[STEP_KEY]]", step_key or "")
     )
 
     try:
@@ -207,10 +209,16 @@ def run_ai_consistency_gate(
 
     parsed = _parse_json_object(result.text)
     if not parsed:
-        return {"conflict": False, "conflicts": [], "summary": "一致性网关输出不可解析，按无冲突处理", "degraded": True}
+        return {"conflict": False, "verdict": "PASS", "conflicts": [],
+                "summary": "一致性网关输出不可解析，按无冲突处理", "degraded": True}
     conflicts = parsed.get("conflicts") if isinstance(parsed.get("conflicts"), list) else []
+    verdict = str(parsed.get("verdict") or "").upper()
+    if verdict not in ("PASS", "CONCERNS", "FAIL"):
+        # Back-compat with the older binary prompt ({"conflict": bool}).
+        verdict = "FAIL" if parsed.get("conflict") else ("CONCERNS" if conflicts else "PASS")
     return {
-        "conflict": bool(parsed.get("conflict")),
+        "conflict": verdict in ("CONCERNS", "FAIL"),
+        "verdict": verdict,
         "conflicts": conflicts,
         "summary": str(parsed.get("summary") or ""),
     }

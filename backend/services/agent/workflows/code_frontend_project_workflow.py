@@ -1,10 +1,10 @@
 """
 Code domain workflow — ``code_frontend_project_generation``.
 
-The agentic alternative to ``code_frontend_generation`` (which produces a single
-inline index.html): an autonomous coding CLI runs in a sandboxed container and
-produces a COMPLETE multi-file React + Vite + TypeScript project that it builds
-and self-checks. The CLI's stream-json is translated live into AgentEvents
+The frontend code-generation path (the removed single-file ``code_frontend_generation``
+is gone): an autonomous coding CLI runs in a sandboxed container and produces a
+COMPLETE multi-file React + Vite + TypeScript project that it builds and
+self-checks. The CLI's stream-json is translated live into AgentEvents
 (``file_created`` / ``tool_call`` / ``tool_result``), so the existing timeline UI
 replays every file write and build command.
 
@@ -15,10 +15,13 @@ which shells out to the OpenAI Codex CLI to generate pictures via the image mode
 surfaced on the timeline as distinct asset-generation events.
 
 Steps: ``fe_planner`` -> ``fe_project_build`` -> ``fe_publish`` (3 counted steps;
-the agent's own build + self-check loop subsumes the separate critic/repair of
-the single-file path). The build runs in ``frontend_project_service`` which owns
-the container lifecycle; this workflow only assembles context, maps events, and
-publishes the deliverable (source zip + previewable dist).
+the agent's own build + self-check loop replaces the removed single-file path's
+critic/repair, and an advisory FR/NFR acceptance review runs at the end of the
+build step — a PASS/CONCERNS/FAIL verdict with per-FR coverage that is recorded
+and surfaced but never blocks publish). The build runs in
+``frontend_project_service`` which owns the container lifecycle; this workflow
+only assembles context, maps events, runs the review, and publishes the
+deliverable (source zip + previewable dist).
 """
 import io
 import json
@@ -34,10 +37,13 @@ from backend.models.agent import (
     AgentRunStatus,
 )
 from backend.models.code import CodeFigmaDesign, CodeProject, CodeProjectStatus
+from backend.services import pricing
 from backend.services.agent.context_ledger import ContextLedger, seed_from_inputs
+from backend.services.agent.context_verifier import gate_available
 from backend.services.agent.files import agent_run_dir
 from backend.services.code.figma import storage as figma_storage
 from backend.services.code.frontend_project_service import get_frontend_project_service
+from backend.services.credit_service import charge
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +58,32 @@ def _documents_digest(project: CodeProject) -> str:
         body = (document.content or "")[:_MAX_DOC_CHARS]
         parts.append(f"## {document.title} ({document.document_type})\n{body}")
     return "\n\n".join(parts)[:_MAX_DIGEST_CHARS]
+
+
+_CODE_EXTS = (".tsx", ".ts", ".jsx", ".js", ".css", ".html", ".json", ".md")
+_REVIEW_MAX_FILE = 4000
+_REVIEW_MAX_TOTAL = 60_000
+
+
+def _source_digest(files: dict) -> str:
+    """Concatenate the textual source files (skip binary assets) for acceptance review."""
+    parts: list[str] = []
+    total = 0
+    for path in sorted(files):
+        low = path.lower()
+        if not low.endswith(_CODE_EXTS) or "node_modules/" in low or low.startswith("dist/"):
+            continue
+        raw = files[path]
+        try:
+            text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+        except (UnicodeDecodeError, AttributeError):
+            continue
+        chunk = f"// ===== {path} =====\n{text[:_REVIEW_MAX_FILE]}"
+        parts.append(chunk)
+        total += len(chunk)
+        if total >= _REVIEW_MAX_TOTAL:
+            break
+    return "\n\n".join(parts)[:_REVIEW_MAX_TOTAL]
 
 
 def _load_figma_frames(project_id: str) -> list[dict]:
@@ -342,6 +374,57 @@ def run_code_frontend_project_workflow(ctx, recorder) -> dict:
                 message=f"图片资源生成：gen-assets 调用 {lane.get('calls')} 次，产出 {n_assets} 张图片资源。",
                 payload={"asset_lane": lane},
             )
+
+        # --- Acceptance review: FR/NFR coverage vs the generated source --------
+        # Advisory gate (never blocks publish): one text-model call rates the
+        # project against the ledger's FR/NFR registry + style and emits a
+        # PASS/CONCERNS/FAIL verdict with per-FR coverage. Charged per call;
+        # skipped when no text provider is configured or no requirements are
+        # registered (e.g. a run not preceded by a full-generation pass).
+        reqs = ledger.to_dict().get("requirements") or []
+        if reqs and src_files and gate_available() and charge(
+            user_id=ctx.user_id,
+            amount=pricing.CODE_CONTEXT_VERIFY,
+            operation="code_context_verify",
+            resource_type="agent_run",
+            resource_id=ctx.run_id,
+            description="project acceptance review",
+            team_id=ctx.team_id,
+        ):
+            registry = "\n".join(f"- [{r['id']}] {r['statement']}" for r in reqs)
+            review = service.review_project(
+                source_digest=_source_digest(src_files),
+                requirements_registry=registry,
+                style_prompt=project.style_prompt or "",
+            )
+            if review:
+                verdict = str(review.get("verdict") or "").upper()
+                cov = review.get("fr_coverage") or []
+                missing = [
+                    c.get("id") for c in cov
+                    if isinstance(c, dict) and not c.get("covered") and c.get("id")
+                ]
+                concern = verdict in ("CONCERNS", "FAIL")
+                recorder.emit(
+                    AgentEventType.WARNING if concern else AgentEventType.PROGRESS,
+                    level=AgentEventLevel.WARNING if concern else AgentEventLevel.INFO,
+                    step_id=step.id,
+                    message=(
+                        f"验收评审：{verdict or '—'}"
+                        + (f"；未覆盖 {', '.join(missing)}" if missing else "；FR 覆盖完整")
+                    ),
+                    payload={
+                        "verdict": verdict,
+                        "missing_fr": missing,
+                        "issues": (review.get("issues") or [])[:20],
+                        "summary": review.get("summary"),
+                    },
+                )
+                step.add_artifact(
+                    AgentArtifactType.JSON, "前端工程验收评审",
+                    content_json=review, filename="frontend_project_review.json",
+                    domain_ref_type="code_frontend_project_meta", domain_ref_id=project_id,
+                )
 
         step.model_response = (result.get("summary") or "")[:8000]
         db.session.commit()

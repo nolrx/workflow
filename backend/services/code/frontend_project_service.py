@@ -1,8 +1,8 @@
 """
 Frontend PROJECT build service (agentic, container-sandboxed).
 
-Unlike ``frontend_build_service`` (one text-model call returning a single inline
-index.html), this drives an autonomous coding CLI (Claude Code, headless) inside
+Unlike the removed single-file HTML flow (one text-model call returning a single
+inline index.html), this drives an autonomous coding CLI (Claude Code, headless) inside
 a throwaway Docker container to produce a COMPLETE multi-file React + Vite + TS
 project that the agent itself builds and self-checks.
 
@@ -31,6 +31,7 @@ TWO agents cooperate inside the one container (mirrors the slicer's Codex setup)
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -260,7 +261,12 @@ fi
 emit() { printf '%s\n' "{\"type\":\"fe_phase\",\"phase\":\"$1\"}"; }
 
 # --- 1. Generate ---------------------------------------------------------
-timeout "${FE_AGENT_TIMEOUT:-720}" claude -p "$(cat /out/prompt.txt)" $CLAUDE_FLAGS
+# Feed the prompt over stdin, NOT as a positional arg: the assembled prompt
+# (requirements + flow + documents + style + figma) routinely exceeds Linux
+# MAX_ARG_STRLEN (128KB per single argv string), so `claude -p "$(cat ...)"`
+# would die at exec with "/usr/bin/timeout: Argument list too long" (E2BIG,
+# surfaced as exit 126). `claude -p` reads the whole stdin as the prompt.
+timeout "${FE_AGENT_TIMEOUT:-720}" claude -p $CLAUDE_FLAGS < /out/prompt.txt
 echo "$?" > /out/claude_exit
 mkdir -p /out/project
 
@@ -445,11 +451,16 @@ if [ -f "$PROJECT_ROOT/package.json" ]; then
   # rung 2: one AI repair round, fed the build log
   if ! build_ok; then
     emit ai-repair
-    REPAIR_PROMPT="$(cat /out/repair_prompt.txt)
-
-# 构建报错(节选)
-$(tail -c 6000 /out/npm_build.log 2>/dev/null)"
-    ( cd "$PROJECT_ROOT" && timeout "${FE_AGENT_REPAIR_TIMEOUT:-300}" claude -p "$REPAIR_PROMPT" $CLAUDE_FLAGS )
+    # Same MAX_ARG_STRLEN guard as the generate step: build the repair prompt
+    # (base prompt + tail of the build log) into a file and pipe it over stdin
+    # instead of passing it as a positional arg, so a large prompt/log can never
+    # blow exec with "Argument list too long".
+    {
+      cat /out/repair_prompt.txt
+      printf '\n\n# 构建报错(节选)\n'
+      tail -c 6000 /out/npm_build.log 2>/dev/null
+    } > /out/repair_full_prompt.txt
+    ( cd "$PROJECT_ROOT" && timeout "${FE_AGENT_REPAIR_TIMEOUT:-300}" claude -p $CLAUDE_FLAGS < /out/repair_full_prompt.txt )
     echo "$?" > /out/claude_repair_exit
     run_build
     build_ok && DEGRADED="ai-repair"
@@ -530,6 +541,72 @@ class FrontendProjectService:
         for key, value in values.items():
             out = out.replace(f"[[{key}]]", value if value is not None else "")
         return out
+
+    @staticmethod
+    def _extract_json(text: str) -> Optional[dict]:
+        """Tolerant single-object JSON parse (code-fence / prefix tolerant)."""
+        if not text:
+            return None
+        cleaned = text.strip()
+        fenced = re.search(r"```(?:json)?\s*(.*?)```", cleaned, re.DOTALL | re.IGNORECASE)
+        if fenced:
+            cleaned = fenced.group(1).strip()
+        if not cleaned.startswith("{"):
+            match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
+            if match:
+                cleaned = match.group(1)
+        try:
+            value = json.loads(cleaned)
+            return value if isinstance(value, dict) else None
+        except json.JSONDecodeError:
+            logger.warning("project review: failed to parse model JSON output")
+            return None
+
+    def review_project(
+        self,
+        *,
+        source_digest: str,
+        requirements_registry: str,
+        style_prompt: str = "",
+        on_model_call=None,
+    ) -> Optional[dict]:
+        """Acceptance review of the generated project against the FR/NFR registry.
+
+        One text-model call -> a structured verdict
+        ``{verdict: PASS|CONCERNS|FAIL, fr_coverage, issues, summary}``. Advisory:
+        returns ``None`` when no text provider is configured or on any failure
+        (never raises, never blocks publish).
+        """
+        from backend.services.ai import get_text_provider
+
+        provider = get_text_provider()
+        if not provider or not provider.is_configured():
+            return None
+        prompt = self._fill(
+            self._load_prompt("frontend_project_critic_prompt.txt"),
+            REQUIREMENTS=requirements_registry or "",
+            STYLE_PROMPT=style_prompt or "",
+            SOURCE=source_digest or "",
+        )
+        provider_name = getattr(provider, "provider_name", None)
+        model_name = getattr(provider, "model", None)
+        try:
+            result = provider.generate_text(prompt)
+        except Exception as error:  # noqa: BLE001 — advisory, never fatal
+            logger.warning("project review model call raised: %s", error)
+            if on_model_call:
+                on_model_call(prompt=prompt, text=None, success=False, error=str(error),
+                              provider=provider_name, model=model_name)
+            return None
+        if on_model_call:
+            on_model_call(
+                prompt=prompt, text=result.text if result.success else None,
+                success=result.success, error=result.error,
+                provider=provider_name, model=model_name,
+            )
+        if not result.success:
+            return None
+        return self._extract_json(result.text)
 
     def is_configured(self) -> bool:
         return bool(os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY"))
@@ -618,15 +695,21 @@ class FrontendProjectService:
             return self._empty("ANTHROPIC_API_KEY not configured")
 
         figma_block, figma_copies = self._figma_design_block(figma_frames)
+        # Keep each upstream doc bounded so the filled prompt stays small enough
+        # for the container agent to finish within FE_AGENT_TIMEOUT. The BMAD
+        # stage docs are detailed (long); an oversized prompt makes Claude Code
+        # time out and fall back to a degraded build. ``documents_digest`` is
+        # already capped upstream (``_MAX_DIGEST_CHARS``).
+        _cap = 16_000
         prompt = self._fill(
             self._load_prompt("frontend_project_prompt.txt"),
             CONTEXT_LEDGER=context_ledger or "",
-            REQUIREMENT=requirement or "",
-            REQUIREMENTS_DOC=requirements_doc or "",
-            DEVELOPMENT_FLOW=development_flow or "",
+            REQUIREMENT=(requirement or "")[:4_000],
+            REQUIREMENTS_DOC=(requirements_doc or "")[:_cap],
+            DEVELOPMENT_FLOW=(development_flow or "")[:_cap],
             DOCUMENTS=documents_digest or "",
-            STYLE_PROMPT=style_prompt or "",
-            UI_BASELINE=ui_baseline_prompt or "",
+            STYLE_PROMPT=(style_prompt or "")[:_cap],
+            UI_BASELINE=(ui_baseline_prompt or "")[:6_000],
             FIGMA_DESIGN=figma_block,
         )
 

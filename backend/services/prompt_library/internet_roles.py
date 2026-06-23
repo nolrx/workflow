@@ -1248,13 +1248,30 @@ def compose_system_prompt(
     return "\n\n".join(parts)
 
 
-def compose_recipe_prompt(recipe_id: str) -> str:
-    """Compose a prompt from a named recipe."""
+def compose_recipe_prompt(
+    recipe_id: str, *, include_base: bool = True, include_output_contract: bool = True
+) -> str:
+    """Compose a prompt from a named recipe.
+
+    Code-domain stage prompts pass ``include_base=False`` and
+    ``include_output_contract=False``: each Code stage now carries its own
+    *authoritative* BMAD persona ("# 角色与原则") and output contract, so the
+    generic ``BASE_SYSTEM_PREFIX`` (10 broad principles) and ``OUTPUT_CONTRACT``
+    (任务理解/关键判断/… skeleton) become redundant noise that dilutes the sharp
+    per-stage contract and can cause output-format drift. The recipe's role
+    prefixes (e.g. product_pm / architecture) are still included — they carry
+    useful domain framing, not a conflicting output structure.
+    """
     try:
         roles = PROMPT_RECIPES[recipe_id]
     except KeyError as error:
         raise ValueError(f"Unknown prompt recipe: {recipe_id}") from error
-    return compose_system_prompt(roles[0], roles[1:])
+    return compose_system_prompt(
+        roles[0],
+        roles[1:],
+        include_base=include_base,
+        include_output_contract=include_output_contract,
+    )
 
 
 def route_prefixes(task_text: str) -> PromptRoute:

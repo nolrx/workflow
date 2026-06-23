@@ -1,7 +1,7 @@
 from backend.services.code.generation_service import CodeGenerationService
 from backend.services.prompt_library import (
-    PROMPT_RECIPE_EXAMPLES,
     PROMPT_PREFIXES,
+    PROMPT_RECIPE_EXAMPLES,
     SYSTEM_PROMPT_ASSEMBLY_GUIDE,
     compose_recipe_prompt,
     compose_system_prompt,
@@ -74,8 +74,11 @@ def test_code_requirement_context_injects_prompt_library_prefixes():
     service = CodeGenerationService()
     prompt, fallback = service._requirements_context("做一个提示词库")
 
-    assert "## BASE_SYSTEM_PREFIX" in prompt
+    # Code recipes drop the generic BASE_SYSTEM_PREFIX + OUTPUT_CONTRACT (each
+    # stage carries its own BMAD persona/contract); the role prefixes stay.
     assert "## PREFIX_PRODUCT_PM" in prompt
+    assert "## BASE_SYSTEM_PREFIX" not in prompt
+    assert "## OUTPUT_CONTRACT" not in prompt
     assert "用户原始需求：" in prompt
     assert "做一个提示词库" in prompt
     assert fallback.startswith("# 软件需求文档")

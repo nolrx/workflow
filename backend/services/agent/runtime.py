@@ -236,18 +236,15 @@ def _register_builtin_workflows() -> None:
     from backend.services.agent.workflows.code_frontend_project_workflow import (
         run_code_frontend_project_workflow,
     )
-    from backend.services.agent.workflows.code_frontend_workflow import (
-        run_code_frontend_workflow,
-    )
     from backend.services.agent.workflows.code_workflow import run_code_workflow
 
     register_workflow("code_full_generation", run_code_workflow)
-    register_workflow("code_frontend_generation", run_code_frontend_workflow)
     register_workflow("code_frontend_project_generation", run_code_frontend_project_workflow)
     register_workflow("code_canvas_generation", run_code_canvas_generation)
     register_workflow("code_figma_slice_generation", run_code_figma_slice_workflow)
-    # Note: the single-file `code_figma_restore` workflow is retired — Figma now
-    # feeds the multi-file project generation (see figma_attach_service).
+    # Note: the single-file `code_frontend_generation` and `code_figma_restore`
+    # workflows were removed — frontend code is now produced solely by the
+    # multi-file project generation; Figma input feeds it via figma_attach_service.
 
 
 _register_builtin_workflows()

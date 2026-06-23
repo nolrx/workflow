@@ -140,7 +140,7 @@ class CodeGenerationService:
     def _requirements_context(self, requirement: str, context_ledger: str = "") -> tuple[str, str]:
         """Build the prompt and local fallback for requirements generation."""
         prompt = self._load_prompt("requirements_prompt.txt").format(
-            system_prefix=compose_recipe_prompt("product_requirement"),
+            system_prefix=compose_recipe_prompt("product_requirement", include_base=False, include_output_contract=False),
             context_ledger=context_ledger,
             requirement=requirement,
         )
@@ -172,7 +172,7 @@ class CodeGenerationService:
     ) -> tuple[str, str]:
         """Build the prompt + fallback for an incremental requirements revision."""
         prompt = self._load_prompt("requirements_revision_prompt.txt").format(
-            system_prefix=compose_recipe_prompt("product_requirement"),
+            system_prefix=compose_recipe_prompt("product_requirement", include_base=False, include_output_contract=False),
             context_ledger=context_ledger,
             current_doc=current_doc,
             instruction=instruction,
@@ -223,7 +223,7 @@ class CodeGenerationService:
         unavailable the local fallback questionnaire is used instead.
         """
         prompt = self._load_prompt("requirements_clarify_prompt.txt").format(
-            system_prefix=compose_recipe_prompt("product_requirement"),
+            system_prefix=compose_recipe_prompt("product_requirement", include_base=False, include_output_contract=False),
             context_ledger=context_ledger,
             requirement=requirement,
             requirements_doc=requirements_doc,
@@ -398,7 +398,7 @@ class CodeGenerationService:
     ) -> str:
         """Stream an incrementally-revised development-flow document."""
         prompt = self._load_prompt("development_flow_revision_prompt.txt").format(
-            system_prefix=compose_recipe_prompt("engineering_implementation"),
+            system_prefix=compose_recipe_prompt("engineering_implementation", include_base=False, include_output_contract=False),
             context_ledger=context_ledger,
             current_doc=current_doc,
             instruction=instruction,
@@ -410,7 +410,7 @@ class CodeGenerationService:
     ) -> str:
         """Stream an incrementally-revised style document."""
         prompt = self._load_prompt("style_revision_prompt.txt").format(
-            system_prefix=compose_recipe_prompt("product_requirement"),
+            system_prefix=compose_recipe_prompt("product_requirement", include_base=False, include_output_contract=False),
             context_ledger=context_ledger,
             current_doc=current_doc,
             instruction=instruction,
@@ -434,7 +434,7 @@ class CodeGenerationService:
         """
         current_json = json.dumps(current_documents, ensure_ascii=False, indent=2)
         prompt = self._load_prompt("document_split_revision_prompt.txt").format(
-            system_prefix=compose_recipe_prompt("engineering_implementation"),
+            system_prefix=compose_recipe_prompt("engineering_implementation", include_base=False, include_output_contract=False),
             context_ledger=context_ledger,
             requirements_doc=requirements_doc,
             development_flow=development_flow,
@@ -484,7 +484,7 @@ class CodeGenerationService:
         except KeyError:
             raise ValueError(f"unknown section revision kind: {kind}")
         prompt = self._load_prompt(prompt_name).format(
-            system_prefix=compose_recipe_prompt(recipe),
+            system_prefix=compose_recipe_prompt(recipe, include_base=False, include_output_contract=False),
             context_ledger=context_ledger,
             current_doc=current_doc,
             selected_text=selected_text,
@@ -497,7 +497,7 @@ class CodeGenerationService:
     ) -> tuple[str, str]:
         """Build the prompt and local fallback for development flow generation."""
         prompt = self._load_prompt("development_flow_prompt.txt").format(
-            system_prefix=compose_recipe_prompt("engineering_implementation"),
+            system_prefix=compose_recipe_prompt("engineering_implementation", include_base=False, include_output_contract=False),
             context_ledger=context_ledger,
             requirements_doc=requirements_doc,
         )
@@ -533,7 +533,7 @@ class CodeGenerationService:
     ) -> tuple[str, str]:
         """Build the prompt and local fallback for document splitting."""
         prompt = self._load_prompt("document_split_prompt.txt").format(
-            system_prefix=compose_recipe_prompt("engineering_implementation"),
+            system_prefix=compose_recipe_prompt("engineering_implementation", include_base=False, include_output_contract=False),
             context_ledger=context_ledger,
             requirements_doc=requirements_doc,
             development_flow=development_flow,
@@ -585,7 +585,7 @@ class CodeGenerationService:
         if not style_text:
             style_text = "- Minimal SaaS: 清晰、专业、克制的产品工作台。"
         prompt = self._load_prompt("style_prompt.txt").format(
-            system_prefix=compose_recipe_prompt("product_requirement"),
+            system_prefix=compose_recipe_prompt("product_requirement", include_base=False, include_output_contract=False),
             context_ledger=context_ledger,
             requirement=requirement,
             styles=style_text,

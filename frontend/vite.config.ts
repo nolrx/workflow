@@ -17,6 +17,12 @@ export default defineConfig({
         target: 'http://localhost:5001',
         changeOrigin: true,
       },
+      // Session-bound deployed preview of generated frontend projects (served by
+      // the backend at the top level, mirroring the nginx /preview proxy in prod).
+      '/preview': {
+        target: 'http://localhost:5001',
+        changeOrigin: true,
+      },
     },
   },
 })

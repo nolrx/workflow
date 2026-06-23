@@ -36,9 +36,6 @@ CODE_CONTEXT_VERIFY = _credits("PRICE_CODE_CONTEXT_VERIFY", 0)  # per AI context
 # gate — e.g. no AI provider configured — are not over-charged.
 CODE_FULL_GENERATION_TOTAL = CODE_FULL_GENERATION
 
-# Frontend project generation + adversarial review (+ one repair pass) — heavier.
-CODE_FRONTEND_GENERATION = _credits("PRICE_CODE_FRONTEND", 0)
-
 # Agentic frontend PROJECT generation: an autonomous coding CLI in a sandboxed
 # container produces a real multi-file React/Vite/TS project it builds itself
 # (~$1 / run in PoC measurements). Much heavier than the single-file HTML path
@@ -52,10 +49,6 @@ CODE_FRONTEND_PROJECT_GENERATION = _credits("PRICE_CODE_FRONTEND_PROJECT", 0)
 # rest of the Code domain but routed through charge()/refund_credits() so it can
 # be metered via PRICE_CODE_SECTION_REVISE without code changes.
 CODE_SECTION_REVISION = _credits("PRICE_CODE_SECTION_REVISE", 0)
-
-# Figma restore: pull a Figma file (node tree + rendered image) and reconstruct a
-# single-file HTML app from it — one heavier (vision) text generation + review.
-CODE_FIGMA_RESTORE = _credits("PRICE_CODE_FIGMA_RESTORE", 0)
 
 # Figma export of a generated HTML app: one model call that converts the HTML
 # into a Design IR (node tree) for the companion plugin to rebuild as layers.
@@ -87,7 +80,6 @@ OPERATION = {
     "code_context_verify": ("agent_run", CODE_CONTEXT_VERIFY),
     "code_frontend_project": ("agent_run", CODE_FRONTEND_PROJECT_GENERATION),
     "code_section_revise": ("code_project", CODE_SECTION_REVISION),
-    "code_figma_restore": ("agent_run", CODE_FIGMA_RESTORE),
     "code_figma_export": ("code_project", CODE_FIGMA_EXPORT),
     "code_figma_slice": ("agent_run", CODE_FIGMA_SLICE_TOTAL),
     "code_canvas_run": ("agent_run", CODE_CANVAS_RUN),

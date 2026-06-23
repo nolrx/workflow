@@ -169,7 +169,7 @@ export function CodeStudio() {
     <AppLayout title={t("title")}>
       <AgentRunPanel />
       <div
-        className={`mx-auto flex h-[calc(100vh-7.5rem)] min-h-0 w-full flex-col gap-3 transition-[max-width] duration-300 ${
+        className={`mx-auto flex h-full min-h-0 w-full flex-col gap-3 transition-[max-width] duration-300 ${
           showThumbnails ? "max-w-6xl" : "max-w-4xl"
         }`}
       >

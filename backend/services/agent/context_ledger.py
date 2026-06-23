@@ -71,6 +71,7 @@ class ContextLedger:
                     "scope_out": [],
                 },
                 "glossary": [],
+                "requirements": [],
                 "tech_stack": {
                     "frontend": "",
                     "backend": "",
@@ -107,7 +108,7 @@ class ContextLedger:
         tech = data.get("tech_stack")
         if isinstance(tech, dict):
             base["tech_stack"].update({k: tech.get(k, base["tech_stack"][k]) for k in base["tech_stack"]})
-        for key in ("glossary", "decisions", "constraints", "open_questions", "provenance"):
+        for key in ("glossary", "requirements", "decisions", "constraints", "open_questions", "provenance"):
             value = data.get(key)
             if isinstance(value, list):
                 base[key] = value
@@ -132,6 +133,7 @@ class ContextLedger:
             or p.get("target_users")
             or p.get("scope_in")
             or self._data["glossary"]
+            or self._data["requirements"]
             or self._data["decisions"]
             or self._data["constraints"]
             or any(self._data["tech_stack"].get(k) for k in ("frontend", "backend", "data"))
@@ -143,6 +145,7 @@ class ContextLedger:
         *,
         project: Optional[dict] = None,
         glossary_add: Optional[list] = None,
+        requirements_add: Optional[list] = None,
         tech_stack: Optional[dict] = None,
         decisions_add: Optional[list] = None,
         constraints_add: Optional[list] = None,
@@ -167,6 +170,9 @@ class ContextLedger:
 
         if glossary_add:
             self._merge_glossary(glossary_add)
+
+        if requirements_add:
+            self._merge_requirements(requirements_add)
 
         if tech_stack:
             tgt = self._data["tech_stack"]
@@ -217,6 +223,40 @@ class ContextLedger:
             else:
                 index[key] = entry
                 self._data["glossary"].append(entry)
+
+    def _merge_requirements(self, items: list) -> None:
+        """Register FR/NFR items by stable id (latest statement wins).
+
+        This is the cross-stage traceability anchor: ``requirements`` step seeds
+        the canonical FR/NFR list from its doc; every downstream prompt then sees
+        the exact ids via :meth:`render_for_prompt` and must reference (not
+        re-describe) them — so a module / document / build can be traced back to
+        the requirement it satisfies, and a dropped requirement is detectable.
+        """
+        index = {
+            _clean_str(r.get("id")): r
+            for r in self._data["requirements"]
+            if isinstance(r, dict)
+        }
+        for raw in items:
+            if not isinstance(raw, dict):
+                continue
+            rid = _clean_str(raw.get("id"))
+            statement = _clean_str(raw.get("statement"))
+            if not rid or not statement:
+                continue
+            kind = _clean_str(raw.get("kind")) or ("NFR" if rid.upper().startswith("NFR") else "FR")
+            entry = {
+                "id": rid,
+                "kind": kind,
+                "statement": statement,
+                "source_step": _clean_str(raw.get("source_step")),
+            }
+            if rid in index:
+                index[rid].update(entry)
+            else:
+                index[rid] = entry
+                self._data["requirements"].append(entry)
 
     def _merge_decisions(self, items: list) -> None:
         index = {
@@ -278,7 +318,7 @@ class ContextLedger:
         return self
 
     # ---- rendering -----------------------------------------------------------
-    def render_for_prompt(self, *, max_chars: int = 1800) -> str:
+    def render_for_prompt(self, *, max_chars: int = 2400) -> str:
         """Render the compact consensus block prepended to downstream prompts.
 
         Returns ``""`` for an effectively empty ledger so injection is a no-op for
@@ -303,6 +343,12 @@ class ContextLedger:
             consensus.append(f"- 明确不做: {', '.join(p['scope_out'])}")
         if consensus:
             sections.append("\n".join(consensus))
+
+        if self._data["requirements"]:
+            lines = ["### 需求条目登记（FR/NFR — 下游须按此编号引用，勿改述、勿漏项）"]
+            for r in self._data["requirements"][:24]:
+                lines.append(f"- [{r['id']}] {r['statement'][:90]}")
+            sections.append("\n".join(lines))
 
         if self._data["glossary"]:
             lines = ["### 术语口径"] + [
@@ -360,6 +406,7 @@ class ContextLedger:
                 g["term"]: g["definition"][:120] for g in self._data["glossary"]
             },
             "decisions": [d["statement"] for d in self._data["decisions"]],
+            "requirements": {r["id"]: r["statement"][:120] for r in self._data["requirements"]},
         }
 
 

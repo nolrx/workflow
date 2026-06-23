@@ -143,6 +143,34 @@ def _bullets(text: str, limit: int = 6) -> list:
     return out
 
 
+_REQ_ID_RE = re.compile(r"^(FR|NFR)\s*0*(\d+)", re.IGNORECASE)
+
+
+def _req_items_from_section(body: str, limit: int = 24) -> list:
+    """Pull {id, kind, statement} FR/NFR entries from a 功能范围 / 非功能要求 body.
+
+    Per the requirements prompt each item starts with an FRn / NFRn id; lines
+    that don't are skipped. Drives the ledger requirement registry so downstream
+    stages reference stable ids instead of re-describing scope.
+    """
+    out: list = []
+    for line in (body or "").splitlines():
+        s = line.strip().lstrip("-*•").strip()
+        s = re.sub(r"^\d+[.、)]\s*", "", s).strip()
+        s = s.replace("**", "").replace("`", "").strip()
+        m = _REQ_ID_RE.match(s)
+        if not m:
+            continue
+        kind = m.group(1).upper()
+        rid = f"{kind}{int(m.group(2))}"
+        statement = s[m.end():].lstrip(" :：.、)-").strip()
+        if statement:
+            out.append({"id": rid, "kind": kind, "statement": statement[:160]})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _await_artifact_on_disk(artifact, *, attempts: int = 10, interval: float = 0.2) -> bool:
     """Block until an artifact's on-disk file is present, non-empty and readable.
 
@@ -393,12 +421,17 @@ def run_code_workflow(ctx, recorder) -> dict:
             # Establish / refresh the baseline口径 from the requirements doc.
             sections = _md_sections(doc)
             one_liner = _bullets(_section_body(sections, "产品定位", "定位"), 1)
+            req_items = (
+                _req_items_from_section(_section_body(sections, "功能范围"))
+                + _req_items_from_section(_section_body(sections, "非功能"))
+            )
             ledger.merge(
                 project={
                     "one_liner": one_liner[0] if one_liner else "",
                     "target_users": _bullets(_section_body(sections, "目标用户"), 5),
                     "scope_in": _bullets(_section_body(sections, "功能范围", "功能"), 8),
                 },
+                requirements_add=req_items,
                 # Carry the project-appropriate architecture (designed by the
                 # requirements step) forward as consensus constraints so flow /
                 # documents / style build on it instead of re-deciding the stack.
@@ -411,7 +444,7 @@ def run_code_workflow(ctx, recorder) -> dict:
                 provenance_entry={
                     "step": "requirements_revision" if revise else "requirements",
                     "agent_key": "requirements",
-                    "fields_touched": ["project", "tech_stack.constraints", "open_questions"],
+                    "fields_touched": ["project", "requirements", "tech_stack.constraints", "open_questions"],
                 },
             )
             det = run_deterministic_checks(
@@ -465,6 +498,7 @@ def run_code_workflow(ctx, recorder) -> dict:
             )
 
     def _do_flow(*, revise: bool = False, instruction: str = "") -> None:
+        nonlocal extra_credits
         label = "开发流程修订 Agent" if revise else "开发流程 Agent"
         input_summary = (
             f"按调整意见修订流程：{instruction[:300]}" if revise else "基于需求文档生成开发流程"
@@ -522,8 +556,39 @@ def run_code_workflow(ctx, recorder) -> dict:
                 new_output={"text": flow},
                 expectations={"nonempty_output": True, "required_ledger_fields": ["project.one_liner"]},
             )
+            # AI consistency gate at the requirements -> flow boundary: the dev
+            # flow must not silently re-choose the tech stack or drop an FR/NFR
+            # established by the requirements doc. Charged per call; skipped when
+            # no text provider is configured.
+            ai_result = None
+            if not gate_available():
+                recorder.emit(
+                    AgentEventType.PROGRESS,
+                    step_id=step.id,
+                    message="未配置文本模型，跳过上下文一致性 AI 闸门（仅程序化校验）",
+                )
+            elif charge(
+                user_id=ctx.user_id,
+                amount=pricing.CODE_CONTEXT_VERIFY,
+                operation="code_context_verify",
+                resource_type="agent_run",
+                resource_id=ctx.run_id,
+                description="context verify @ flow",
+                team_id=ctx.team_id,
+            ):
+                extra_credits += pricing.CODE_CONTEXT_VERIFY
+                ai_result = run_ai_consistency_gate(
+                    ledger=ledger, new_product_summary=flow[:2000], step_key="flow"
+                )
+            else:
+                recorder.emit(
+                    AgentEventType.WARNING,
+                    level=AgentEventLevel.WARNING,
+                    step_id=step.id,
+                    message="积分不足，本步仅执行程序化上下文校验",
+                )
             emit_context_events(
-                recorder, step, det_result=det, ai_result=None,
+                recorder, step, det_result=det, ai_result=ai_result,
                 ledger_after=ledger, injected_text=injected,
             )
             step.set_output(

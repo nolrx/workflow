@@ -10,7 +10,7 @@ interface HeaderProps {
 export function Header({ title }: HeaderProps) {
   const { t } = useTranslation("common")
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b bg-background/95 px-6 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+    <header className="z-30 flex h-16 shrink-0 items-center justify-between border-b bg-background/95 px-6 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="flex items-center gap-4">
         {title && <h1 className="text-lg font-semibold">{title}</h1>}
       </div>

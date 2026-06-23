@@ -6,12 +6,12 @@ export const PREVIEW_TABS: PreviewTab[] = ["requirements", "flow", "documents", 
 /**
  * Workflows whose output lands in the "app" preview tab (the file-generation
  * stage). The current path is the containerized agent that builds a complete
- * multi-file project; the legacy single-file HTML workflow is kept so older runs
- * still replay onto the same tab.
+ * multi-file project. The legacy single-file HTML workflow can no longer be
+ * created (removed), but is kept here so older runs still replay onto this tab.
  */
 export const FRONTEND_WORKFLOWS = new Set<string>([
   "code_frontend_project_generation", // containerized multi-file project (current)
-  "code_frontend_generation", // legacy single-file HTML (replay only)
+  "code_frontend_generation", // legacy single-file HTML — creation removed, replay-only
 ])
 
 export const isFrontendWorkflow = (workflow: string | null | undefined): boolean =>

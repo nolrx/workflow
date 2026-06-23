@@ -41,7 +41,7 @@ def create_app(config_name: str = None) -> Flask:
     from backend.routes.admin_routes import admin_bp
     from backend.routes.agent_routes import agent_bp
     from backend.routes.auth_routes import auth_bp
-    from backend.routes.code import code_project_bp, figma_bp, github_bp
+    from backend.routes.code import code_preview_bp, code_project_bp, figma_bp, github_bp
     from backend.routes.credit_routes import credit_bp
     from backend.routes.team_routes import team_bp
     from backend.routes.user_routes import user_bp
@@ -54,6 +54,10 @@ def create_app(config_name: str = None) -> Flask:
     app.register_blueprint(code_project_bp, url_prefix="/api/code")
     app.register_blueprint(figma_bp, url_prefix="/api/code/figma")
     app.register_blueprint(github_bp, url_prefix="/api/code/github")
+    # Session-bound deployed preview of generated frontend projects. Mounted at the
+    # top level (not under /api) so it reads like a real deployment; nginx proxies
+    # the /preview prefix to the backend (see frontend/nginx/default.conf).
+    app.register_blueprint(code_preview_bp, url_prefix="/preview")
     app.register_blueprint(admin_bp, url_prefix="/api/admin")
 
     # Health check endpoint

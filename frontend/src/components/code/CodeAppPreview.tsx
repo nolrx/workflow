@@ -4,7 +4,9 @@
  * The file-generation stage runs the containerized coding agent
  * (`code_frontend_project_generation`): a headless Claude Code CLI builds a
  * complete multi-file React + Vite + TypeScript project inside a throwaway
- * Docker container, builds it, and publishes the source (zip) plus the built
+ * Docker container (when the UI needs real imagery it triggers the bundled
+ * image-assets skill, which has Codex generate raster assets via the image
+ * model), builds it, and publishes the source (zip) plus the built
  * `dist`. This pane resolves that deliverable from either the current agent run
  * in the store (live, right after generation) or — on reload — the latest
  * project run for the Code project, then previews the built `dist` in an iframe

@@ -1,4 +1,4 @@
-你是一名资深前端工程师。请在【当前目录】创建一个 COMPLETE、可运行、可构建的前端工程项目(直接在当前目录初始化,不要再新建一层子目录),实现下面已确认的产品规格。
+你是一名资深前端工程师。请在【当前目录】创建一个 COMPLETE、可运行、可构建的前端工程项目(直接在当前目录初始化,不要再新建一层子目录),实现下面已确认的产品规格,并达到接近真实上线产品的视觉保真度。
 
 # 项目共识(内部上下文 — 严格遵守,不得引入与之冲突的内容)
 [[CONTEXT_LEDGER]]
@@ -24,13 +24,36 @@
 [[FIGMA_DESIGN]]
 
 # 硬性要求(不可协商;产物会被自动构建校验,违反将被判失败)
-1. 技术栈:React 19 + TypeScript + Vite + 纯 CSS(每个组件配套 .css)。禁止 Tailwind、UI 组件库、任何 CDN / 远程资源 / 远程字体 / 网络请求。
-2. 工程结构:组件拆到 src/components/;状态用 React hooks;类型集中在 src/types.ts;数据用 localStorage 持久化(首次加载播种合理的示例数据)。
+1. 技术栈:React 19 + TypeScript + Vite + 纯 CSS(每个组件配套 .css)。禁止 Tailwind、UI 组件库、任何 CDN / 远程资源 / 远程字体 / 运行时网络请求。注意:由 image-assets 技能在构建期生成、保存在 src/assets/ 下的本地图片**不算**远程资源,可放心使用(它们会被 Vite 打包成本地文件,运行时不发任何网络请求)。
+2. 工程结构:组件拆到 src/components/;状态用 React hooks;类型集中在 src/types.ts;数据用 localStorage 持久化(首次加载播种合理的示例数据)。图片资源统一放 src/assets/。
 3. vite.config.ts 必须设置 base: './'(相对路径),以便构建产物能在子路径下的 iframe 内预览。
 4. 所有交互必须真实可用:每个按钮 / 链接 / 菜单都有真实事件;每个输入 / 选择 / 表单都改变有意义的状态且有提交行为;禁止死控件、禁止 href="#" 空链接。
 5. 功能完整:用内存 / localStorage 状态实现真实功能。禁止 TODO / FIXME、占位、"未实现"、"coming soon"、空事件处理器、仅 mock 的界面。
 6. 你必须自己依次运行 `npm install` 和 `npm run build` 自检,若有报错就修到两条命令都成功为止。不要运行 `npm run dev`、`vite preview` 或任何长驻 / 不退出的进程。
 7. 合理覆盖核心功能,优先完整流程而非装饰性填充。
+8. **必须生成真实图片资源**:本工程要达到高保真,你必须用下面的 `gen-assets` 命令为关键视觉位生成真实位图(通常 3–6 张:主视觉/插画/照片/头像/产品图/背景等),保存到 `src/assets/` 并在界面中 import 引用。**这是硬性验收项**——除非产品本质上完全不需要任何图片(如纯计算器),否则未生成任何图片资源将判为不合格。禁止用 emoji、纯色 div 或空 img 充当图片。
+
+# 视觉保真(高度仿真)
+- 目标是"看起来像真实上线的产品",而非线框/Demo:层级、留白、阴影、圆角、状态(hover/active/focus/disabled)、空态/加载态都要打磨到位。
+- 内容要真实可信:用贴合产品语境的真实文案、人名、数据与列表,不要 "Lorem ipsum"、"示例1/示例2" 这类占位内容。
+- 严格控制 emoji:**不要把 emoji 当作图标、插画、Logo、头像或界面装饰**。功能性图标用内联 SVG;图片/插画/照片一律用下面的「图片资源」机制生成真实位图。仅在确实表达情绪的正文文本里可偶尔出现 emoji,且整体克制。
+
+# 图片资源(必做 — 经 image-assets 技能 / gen-assets 命令 → Codex 生成真实位图)
+**这是必做步骤,不是可选项。** 容器内已预置 `gen-assets` 命令(image-assets 技能的执行器),用它触发 Codex 子 Agent 调用图像模型生成真实位图。请按以下流程执行:
+
+1. 规划阶段就确定本产品需要哪些关键图片(给出每张的用途、主题、风格、建议尺寸)。
+2. 用 Bash 直接运行 `gen-assets`(一次可描述多张,每张写明 `src/assets/` 下的目标路径):
+       gen-assets "1) src/assets/hero.png — 现代简约 SaaS 仪表盘工作场景照,冷色调,1536x1024; 2) src/assets/avatar-1.png — 职业人物头像,中性背景,1024x1024; 3) src/assets/feature-1.png — 产品功能示意插画,扁平风,1024x1024"
+   若提示 `gen-assets: command not found`,改用绝对路径 `/home/node/bin/gen-assets "..."`。
+   命令返回后,确认 `src/assets/` 下确实出现了对应 PNG 文件(可用 `ls src/assets`)。
+3. 在组件中通过 import 引用(Vite 会打包并按 base './' 重写路径,保证子路径 iframe 预览也能加载):
+       import heroUrl from './assets/hero.png'
+       // <img src={heroUrl} alt="产品概览" />
+
+约束与兜底:
+- 资源数量适度(一般 3–6 张),聚焦关键视觉位;建议先把图片生成出来,再围绕它实现界面。
+- **必须真的执行 `gen-assets` 命令**(不要只在脑海里假设有图、也不要直接写不存在的 import 路径)。
+- 仅当命令明确报错(如 command not found / 未配置 key / 生成失败)时,才退而用克制的 CSS 渐变、纯色块或内联 SVG 兜底,并在最终总结里**写明 gen-assets 失败的原因**——即便如此也**绝不**用 emoji 充当图片。
 
 # 完成后
-用一句话总结:生成了哪些主要文件、应用有哪些可交互功能、`npm run build` 是否通过。
+用一句话总结:生成了哪些主要文件、**实际执行 gen-assets 生成了哪些图片资源(若失败请写明原因)**、应用有哪些可交互功能、`npm run build` 是否通过。

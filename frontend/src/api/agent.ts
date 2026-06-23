@@ -149,15 +149,17 @@ export const agentApi = {
     const response = await api.get<Envelope<{ run: AgentRun }>>(`/agent/runs/${runId}`)
     return response.data.run
   },
-  /** List the current user's runs, optionally scoped to a domain or a resource (for replay). */
+  /** List the current user's runs, optionally scoped to a domain, a resource, or a workflow (for replay). */
   listRuns: async (params?: {
     domain?: string
     resourceId?: string
+    workflow?: string
     limit?: number
   }): Promise<AgentRun[]> => {
     const q = new URLSearchParams()
     if (params?.domain) q.set("domain", params.domain)
     if (params?.resourceId) q.set("resource_id", params.resourceId)
+    if (params?.workflow) q.set("workflow", params.workflow)
     if (params?.limit) q.set("limit", String(params.limit))
     const response = await api.get<Envelope<{ runs: AgentRun[] }>>(
       `/agent/runs?${q.toString()}`

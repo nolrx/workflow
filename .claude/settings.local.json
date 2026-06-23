@@ -47,7 +47,14 @@
       "Bash(grep -iE \"node_modules|/code.js|dist/|venv|\\\\.env\\($|\\\\.\\)|\\\\.pyc\")",
       "Bash(awk '{print $2}')",
       "Bash(git check-ignore *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Read(//home/ubuntu/**)",
+      "Bash(npm -v)",
+      "Bash(pnpm -v)",
+      "Bash(docker version *)",
+      "Bash(node_modules/.bin/tsc -b --noEmit)",
+      "Bash(python -m py_compile backend/routes/agent_routes.py)",
+      "Bash(git *)"
     ]
   }
 }

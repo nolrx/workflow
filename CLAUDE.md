@@ -94,9 +94,11 @@ uv run pytest path/to/test_x.py::test_name -v       # 跑单个测试
 
 **Agent Swarm（`backend/services/agent/`，路由 `/api/agent`）—— Code 域的执行与回放底座：**
 - `runtime.py` —— 进程级 `ThreadPoolExecutor(max_workers=4)`(模块级单例 `agent_runtime`)。workflow 用 `register_workflow(key, fn)` 注册进 `_WORKFLOWS` 字典、用 `get_workflow(key)` 取出；`agent_runtime.start(app, run_id)` 把一次 run 提交到线程池，在 `app.app_context()` 里执行。
-- **目前注册了两个独立 workflow**（`code_frontend_generation` 是单独的 run，不是 `code_full_generation` 的某一步）：
+- **`runtime.py` 模块级 `_register_builtin_workflows()` 注册 5 个独立 workflow**（彼此是独立的 run，不是某个的子步；`agent_routes` 的 `WORKFLOW_COSTS` 既是计费表也是白名单，`create_run` 用 `get_workflow` 校验）：
   - **`code_full_generation`**（`workflows/code_workflow.py`，`run_code_workflow`）——**7 步**：`planner`(规划) → `requirements`(需求) → `flow`(开发流程) → `documents`(文档拆分) → `style`(风格) → `preview`(UI 预览) → `publisher`(发布)。
   - **`code_frontend_generation`**（`workflows/code_frontend_workflow.py`，`run_code_frontend_workflow`）——前端代码生成：`fe_planner` → `fe_build` → `fe_critic` →（`fe_repair`，仅 critic 不通过时执行、不计入进度）→ `fe_publish`。它要求已有一个完成的 Code 项目（按 `resource_id` 复用上一段 full-generation run 的 ledger），产出 **Sandpack 可直接预览的文件 map**（React + TS + 纯 CSS）。
+  - **`code_frontend_project_generation`**（`workflows/code_frontend_project_workflow.py`）、**`code_canvas_generation`**（`workflows/code_canvas_workflow.py`）——各为独立 run。前者同样走 Docker-out-of-Docker（`fe-agent` 容器）。
+  - **`code_figma_slice_generation`**（`workflows/code_figma_slice_workflow.py`）——把一张 UI 预览缩略图重建成**可在 Figma 逐元素编辑的 Design IR**：`fe_slice_planner` → `fe_slice_analyze` → `fe_slice_publish`。**分析步在 docker `slicer-agent` 容器里跑 OpenAI Codex CLI**（Docker-out-of-Docker：后端容器挂宿主 `/var/run/docker.sock`、`TMPDIR` 两侧同路径供 `-v {workdir}:/out` bind mount；镜像用 `docker compose --profile setup build` 预构建）。**任何失败（认证/超时/无产物）都静默降级成单图 IR**（整图、run 仍 `completed`，表象像"切片没生效"），排查看 `TMPDIR/slicer-agent-*/` 下的 `codex_stderr.log`/`codex_exit`/`degraded`。Codex 调用契约见 `figma_slice_service.py::_CONTAINER_SCRIPT` 注释（须先 `codex login --with-api-key`，env 里的 `OPENAI_API_KEY` 不会被自动使用；prompt 走 **stdin** 而非位置参数，因 `-i/--image` 是 variadic 会吞掉位置参；Codex 是 reasoning 模型耗时数分钟，`CODEX_TIMEOUT` 默认 300 偏紧，生产已在 compose 设 900）。
 - `recorder.py` 把每步的 prompt/响应、事件（带单调 `sequence`）、产物写入 `AgentRun/AgentStep/AgentEvent/AgentArtifact`（模型在 `backend/models/agent/{run,step,event,artifact}.py`）；`bus.py` 是 SSE 事件总线。客户端经 `GET /api/agent/runs/<id>/stream` 先重放已存事件再接实时推送——**已结束的 run 可被完整逐步回放**（流式 token delta 不持久化，回放时呈现各步完整响应）。
 - 主要 HTTP 端点：`POST /api/agent/runs`(创建并启动一次 run、预扣积分、校验 domain/workflow)、`GET /api/agent/runs`(列当前用户的 run，可按 domain/resource_id 过滤)、`GET /api/agent/runs/<id>`(run+steps+events+artifacts 快照)、`GET /api/agent/runs/<id>/stream`(SSE)、`POST /api/agent/runs/<id>/cancel`(协作式取消)、`GET /api/agent/artifacts/<id>/file`(下载产物，仅 owner)。
 
@@ -121,9 +123,10 @@ uv run pytest path/to/test_x.py::test_name -v       # 跑单个测试
 **认证**：Flask-JWT-Extended，access token 30 分钟、refresh token 30 天。用 `@jwt_required()` 保护接口，用 `get_jwt_identity()` 读取当前用户。
 
 **Prompt（提示词）**：
-- **Code** 的 prompt 是 `backend/prompts/code/` 下的 `.txt` 模板：`requirements_prompt`、`development_flow_prompt`、`document_split_prompt`、`style_prompt`、`frontend_build_prompt`、`frontend_critic_prompt`、`frontend_repair_prompt`。其中文档拆分/风格等模板会用 `backend/services/prompt_library/`（`internet_roles.py` 的 `compose_recipe_prompt(...)` / `compose_system_prompt(...)`）拼出一个 `{system_prefix}`。
+- **Code** 的 prompt 是 `backend/prompts/code/` 下的 `.txt` 模板：`requirements_prompt`、`development_flow_prompt`、`document_split_prompt`、`style_prompt`、`frontend_build_prompt`、`frontend_critic_prompt`、`frontend_repair_prompt`、`figma_slice_prompt`（切片分析）。其中文档拆分/风格等模板会用 `backend/services/prompt_library/`（`internet_roles.py` 的 `compose_recipe_prompt(...)` / `compose_system_prompt(...)`）拼出一个 `{system_prefix}`。
 - **RedBook** 的 prompt 是 `backend/prompts/redbook/` 下的 `.txt` 模板；**PPT** 的 prompt 构造器是从 `backend.services.ppt.prompts` 导入的函数。
-- 增删改 prompt 请在这些位置进行，不要内联写进业务逻辑。**注意 Code 模板含 JSON 示例，里面的花括号要写成 `{{ }}` 转义**，否则 `.format()` 会报错（`test_code_json_parsing.py` 也覆盖了模型 JSON 输出的解析健壮性）。
+- 增删改 prompt 请在这些位置进行，不要内联写进业务逻辑。**走 `.format()` 的模板（多数含 JSON 示例的）里花括号要写成 `{{ }}` 转义**，否则报错（`test_code_json_parsing.py` 覆盖了 JSON 解析健壮性）；而走 `_fill` / `[[KEY]]` 占位符替换的模板（如 `figma_slice_prompt`，由 `figma_slice_service._fill` 处理）则**不要**转义花括号。
+- **⚠️ 运行时 prompt 由 `backend/services/prompts/`（`prompt_store.get(key)`，key 形如 `code/<file>.txt`）从 MongoDB `prompts` collection 读取——上面的 `.txt` / `internet_roles` 只是 `defaults.py` 的 seed 与 fallback 源。改了模板文件「不会自动生效」**：`seed_defaults()` 只插入缺失的 key、**从不覆盖已存文档**（为保护 admin 后台编辑），所以已 seed 过的 prompt 会一直用 Mongo 里的旧版本，重建镜像也没用。让改动生效要：① 改 `.txt`；② 更新 Mongo 对应 `_id` 文档的 `content`（`is_overridden=True` 表示被 admin 改过，**勿擅自覆盖、先问**；`False` 时可安全同步成新 default）；③ 重启后端清 `prompt_store._cache`（带 TTL）。仅当 Mongo 不可达时才整体走文件 fallback。
 
 ## 前端架构
 

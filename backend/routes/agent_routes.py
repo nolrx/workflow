@@ -200,12 +200,19 @@ def list_runs():
     limit = min(int(request.args.get("limit", 20)), 100)
     domain = request.args.get("domain")
     resource_id = request.args.get("resource_id")
+    workflow = request.args.get("workflow")
     query = AgentRun.query.filter_by(user_id=user_id)
     if domain:
         query = query.filter_by(domain=domain)
     if resource_id:
         # Used to find (and replay) the run(s) tied to a given project/task.
         query = query.filter_by(resource_id=resource_id)
+    if workflow:
+        # A resource accumulates runs across several workflows (e.g. a Code
+        # project has its conversation run plus auxiliary frontend / figma /
+        # canvas runs). Replay targets one specific workflow, so allow scoping
+        # to it instead of blindly taking the latest run of any kind.
+        query = query.filter_by(workflow=workflow)
     runs = query.order_by(AgentRun.created_at.desc()).limit(limit).all()
     return success_response({"runs": [run.to_dict() for run in runs]})
 

@@ -80,7 +80,12 @@ export function CodeStudio() {
       return
     }
     boundRunResourceRef.current = projectId
-    void openLatestRunForResource(projectId).then((found) => {
+    // Bind to the conversation/document run specifically. A project's resource_id
+    // also collects auxiliary runs (frontend build, figma slice, canvas) whose
+    // events carry no review gates, so replaying "the latest run of any kind"
+    // would rebind the transcript to one with no document cards — the reopened
+    // session would look empty. The app preview resolves its own frontend run.
+    void openLatestRunForResource(projectId, "code_full_generation").then((found) => {
       // Legacy / run-less project: drop any prior session's run so its transcript
       // doesn't bleed through onto this one.
       if (!found && boundRunResourceRef.current === projectId) resetAgentRun()

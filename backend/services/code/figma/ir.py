@@ -120,7 +120,7 @@ class DesignTokens:
 @dataclass
 class DesignIR:
     ir_version: str = IR_VERSION
-    source: str = "figma"  # figma | html | preview_image
+    source: str = "figma"  # figma | html | preview_image | sliced
     name: str = ""
     root: IRNode = field(default_factory=IRNode)
     tokens: DesignTokens = field(default_factory=DesignTokens)
@@ -320,6 +320,21 @@ def _node_to_plugin(node: IRNode, *, parent_x: float, parent_y: float) -> Dict[s
             payload["fontFamily"] = node.text_style.font_family or "Inter"
             payload["fontWeight"] = node.text_style.font_weight
             payload["textAlignHorizontal"] = node.text_style.text_align_horizontal or "LEFT"
+            # The plugin renders these (build.ts/code.ts) but they were being
+            # dropped here — forward them when present.
+            if node.text_style.line_height_px is not None:
+                payload["lineHeight"] = node.text_style.line_height_px
+            if node.text_style.letter_spacing is not None:
+                payload["letterSpacing"] = node.text_style.letter_spacing
+    # Auto-layout hints for FRAME containers. The plugin applies these only when
+    # it's visually safe (single-axis, non-overlapping, ~uniform gaps); otherwise
+    # children keep absolute x/y — see buildFrame / maybeApplyAutoLayout.
+    if node.layout_mode in ("HORIZONTAL", "VERTICAL"):
+        payload["layoutMode"] = node.layout_mode
+        if node.item_spacing is not None:
+            payload["itemSpacing"] = node.item_spacing
+        if node.padding:
+            payload["padding"] = node.padding
     if node.children:
         payload["children"] = [
             _node_to_plugin(child, parent_x=box.x, parent_y=box.y) for child in node.children

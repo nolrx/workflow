@@ -51,8 +51,13 @@ interface AgentState {
 
   startRun: (body: CreateRunBody) => Promise<string>
   openRun: (runId: string) => Promise<void>
-  listRuns: (params?: { domain?: string; resourceId?: string; limit?: number }) => Promise<AgentRun[]>
-  openLatestRunForResource: (resourceId: string) => Promise<boolean>
+  listRuns: (params?: {
+    domain?: string
+    resourceId?: string
+    workflow?: string
+    limit?: number
+  }) => Promise<AgentRun[]>
+  openLatestRunForResource: (resourceId: string, workflow?: string) => Promise<boolean>
   cancelRun: () => Promise<void>
   resumeRun: (action: "approve" | "revise", instruction?: string) => Promise<void>
   /** Submit a UI-style selection at the style_select gate (resumes the run). */
@@ -248,9 +253,14 @@ export const useAgentStore = create<AgentState>()((set, get) => {
       }
     },
 
-    // Find and replay the most recent run tied to a resource (e.g. a Code project).
-    openLatestRunForResource: async (resourceId) => {
-      const runs = await get().listRuns({ resourceId, limit: 1 })
+    // Find and replay the most recent run tied to a resource (e.g. a Code
+    // project). A resource accumulates runs across several workflows, so pass
+    // `workflow` to replay a specific one (e.g. the conversation/document run)
+    // instead of whatever auxiliary run (frontend build, figma slice, canvas)
+    // happens to be newest — otherwise the conversation rebinds to a run with no
+    // review events and the transcript renders empty.
+    openLatestRunForResource: async (resourceId, workflow) => {
+      const runs = await get().listRuns({ resourceId, workflow, limit: 1 })
       if (!runs.length) return false
       await get().openRun(runs[0].id)
       return true

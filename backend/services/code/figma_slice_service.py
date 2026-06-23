@@ -138,10 +138,23 @@ walk(ir.get("root") or {})
 print("cropped %d slice(s)" % count)
 CROP_EOF
 
+# --- 0. Authenticate Codex with the API key --------------------------------
+# codex (>=0.x) does NOT pick up OPENAI_API_KEY from the environment on its own:
+# the key must be written to auth.json via `login --with-api-key`, otherwise
+# every request goes out with no bearer header and the API rejects it (401).
+# `login` reads the key from stdin; pipe it in here.
+printf '%s' "${OPENAI_API_KEY:-}" | codex login --with-api-key > /out/login.log 2>&1
+echo "$?" > /out/login_exit
+
 # --- 1. Analyse: Codex vision -> /out/ir.json -------------------------------
+# The prompt MUST be fed on stdin, NOT as a positional argument: `-i/--image` is
+# variadic (<FILE>...) and greedily swallows any following positional, so a
+# trailing prompt arg gets parsed as a second image path and codex then reads an
+# (empty) stdin -> "No prompt provided". With the prompt on stdin, `-i` binds
+# only preview.png and codex takes its instructions from stdin.
 emit analyze
 timeout "${CODEX_TIMEOUT:-300}" codex ${SLICER_CODEX_FLAGS} \
-  -i /out/preview.png "$(cat /out/prompt.txt)" 2> /out/codex_stderr.log
+  -i /out/preview.png < /out/prompt.txt 2> /out/codex_stderr.log
 echo "$?" > /out/codex_exit
 
 # Codex is told to write /out/ir.json; if it wrote one elsewhere in the scratch

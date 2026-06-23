@@ -90,6 +90,21 @@ services:
       FE_AGENT_IMAGE: fe-agent:latest
       SLICER_AGENT_IMAGE: slicer-agent:latest
       TMPDIR: /data/workflow/.fe-agent-work
+      # fe-agent now runs TWO CLIs: Claude Code (writes the project) + Codex (real
+      # image assets via the bundled image-assets skill). Codex reuses
+      # OPENAI_API_KEY (from .env, the image key); the backend injects it per
+      # `docker run`. Asset generation runs INSIDE Claude's generate phase, so give
+      # that phase extra room (FE_AGENT_TIMEOUT); FE_CODEX_TIMEOUT caps one
+      # gen-assets call. The asset lane is fail-soft — it never blocks the build.
+      FE_AGENT_TIMEOUT: "1080"
+      FE_CODEX_TIMEOUT: "480"
+      # Codex (slicer-agent) is a reasoning model that analyses a full UI
+      # thumbnail into a ~17KB IR — it routinely needs several minutes, so the
+      # 300s default times out and the run silently degrades to a flat image.
+      # CODEX_TIMEOUT caps the in-container codex call; SLICER_TOTAL_TIMEOUT is
+      # the host-side backstop and must exceed it (+ login/crop overhead).
+      CODEX_TIMEOUT: "900"
+      SLICER_TOTAL_TIMEOUT: "1020"
     ports:
       - "5001:5001"
     volumes:

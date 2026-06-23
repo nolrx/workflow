@@ -99,6 +99,10 @@
       "app": "应用预览"
     }
   },
+  "stepper": {
+    "retry": "重试此阶段",
+    "retryFailed": "重试失败，请稍后再试"
+  },
   "conversation": {
     "title": "对话",
     "intro": "描述你想做的产品，我会先生成需求文档，每一步都交你确认后再继续。",
@@ -131,6 +135,7 @@
     "openButton": "快速确认需求（{{count}} 项）",
     "apply": "确认并迭代需求",
     "applySuggestions": "全部采用建议",
+    "skip": "跳过",
     "suggestedBadge": "建议",
     "customPlaceholder": "其他（自定义）…"
   },

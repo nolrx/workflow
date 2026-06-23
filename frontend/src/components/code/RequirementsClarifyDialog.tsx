@@ -260,28 +260,39 @@ export function RequirementsClarifyDialog({
           </div>
         )}
 
-        <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
+        <DialogFooter className="flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          {/* Skip = dismiss the questionnaire without iterating. The user lands back
+              at the review gate with approve / free-text revise still available, and
+              the once-per-round auto-open guard keeps it from re-popping this round. */}
           <Button
             variant="ghost"
-            className="sm:order-1"
-            disabled={submitting || questions.length === 0}
-            onClick={() => handleApply(true)}
+            className="text-muted-foreground sm:order-1"
+            disabled={submitting}
+            onClick={() => onOpenChange(false)}
           >
-            <ListChecks className="mr-2 h-4 w-4" />
-            {t("clarify.applySuggestions")}
+            {t("clarify.skip")}
           </Button>
-          <Button
-            className="sm:order-2"
-            disabled={submitting || questions.length === 0}
-            onClick={() => handleApply(false)}
-          >
-            {submitting ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Check className="mr-2 h-4 w-4" />
-            )}
-            {t("clarify.apply")}
-          </Button>
+          <div className="flex flex-col gap-2 sm:order-2 sm:flex-row">
+            <Button
+              variant="ghost"
+              disabled={submitting || questions.length === 0}
+              onClick={() => handleApply(true)}
+            >
+              <ListChecks className="mr-2 h-4 w-4" />
+              {t("clarify.applySuggestions")}
+            </Button>
+            <Button
+              disabled={submitting || questions.length === 0}
+              onClick={() => handleApply(false)}
+            >
+              {submitting ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Check className="mr-2 h-4 w-4" />
+              )}
+              {t("clarify.apply")}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

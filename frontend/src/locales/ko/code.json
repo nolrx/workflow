@@ -99,6 +99,10 @@
       "app": "앱 미리보기"
     }
   },
+  "stepper": {
+    "retry": "이 단계 재시도",
+    "retryFailed": "재시도에 실패했습니다. 잠시 후 다시 시도해 주세요"
+  },
   "conversation": {
     "title": "대화",
     "intro": "만들고 싶은 제품을 설명해 주세요. 먼저 요구사항 문서를 작성하고, 각 단계마다 확인을 받은 뒤 진행합니다.",
@@ -131,6 +135,7 @@
     "openButton": "요구사항 빠른 확인 ({{count}}개)",
     "apply": "확정하고 반영",
     "applySuggestions": "모두 추천 적용",
+    "skip": "건너뛰기",
     "suggestedBadge": "추천",
     "customPlaceholder": "기타(직접 입력)…"
   },

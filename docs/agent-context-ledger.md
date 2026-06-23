@@ -1,6 +1,6 @@
 # Agent 会话上下文账本（Session Context Ledger）规范
 
-> 范围:**仅 Code 域 + Agent Swarm**(`code_full_generation`、`code_frontend_generation`)。PPT / RedBook 不涉及。
+> 范围:**仅 Code 域 + Agent Swarm**(`code_full_generation`、`code_frontend_project_generation`、`code_backend_project_generation`)。PPT / RedBook 不涉及。
 > 性质:**内部 / 调试可见,从不进入用户产出**。它是保证多步工作流口径一致、避免上下文漂移层层放大的底座。
 
 ## 1. 目的
@@ -37,13 +37,13 @@ Code 工作流的每一步都各自从数据库读取前序产出、再把整篇
 
 | 阶段 | 工作流 / 步骤 | 账本动作 |
 |---|---|---|
-| 播种 | `code_full_generation` · planner | `seed_from_inputs()`:项目定位 + 默认技术栈(前端 React18+TS+plain CSS、后端 Flask)+ 风格约束 |
+| 播种 | `code_full_generation` · planner | `seed_from_inputs()`:项目定位 + 风格约束;**故意不预设技术栈**(`tech_stack.frontend/backend/data` 留空,由 requirements 步从真实需求推导,避免把所有项目锚到单一栈) |
 | 充实 | requirements / flow / documents / style | 每步后从产物**容错抽取**关键事实 merge 回账本 |
 | 校验闸门 #1 | documents(文档拆分) | 确定性校验 + **AI 一致性闸门**(高风险边界) |
 | 终态 | publisher | 写最终快照 + 落盘 `上下文账本（最终）` JSON artifact |
-| 校验闸门 #2 | `code_frontend_generation` · fe_build | 前端 run 在 fe_planner **重载**上一轮 full-generation run 的账本;build 后做确定性校验 + **AI 一致性闸门** |
+| 校验闸门 #2 | `code_frontend_project_generation` · fe_project_build（及全栈的 `code_backend_project_generation` · be_project_build）| 容器工程 run 在 planner 步 **重载**上一轮 full-generation run 的账本;build 后做确定性校验 + **AI 一致性闸门** |
 
-> **闸门为何落在 documents 与 frontend_build**:这两处是口径最易漂移、且漂移会向下游放大的边界(文档拆分决定后续所有文档的口径;前端代码生成是所有文档的汇流处)。当前 `code_full_generation` 为 7 步(无独立"润化"步),故原计划的"拆分→润化"边界对应到**文档拆分步**本身。
+> **闸门为何落在 documents 与容器工程构建步**:这两处是口径最易漂移、且漂移会向下游放大的边界(文档拆分决定后续所有文档的口径;前端/后端代码生成是所有文档的汇流处)。当前 `code_full_generation` 为 7 步(无独立"润化"步),故原计划的"拆分→润化"边界对应到**文档拆分步**本身。
 
 - 账本的**当前态**持久化在 `AgentRun.context_ledger_raw`(`get/set_context_ledger`)。
 - 每一步的**注入快照 + 校验结果**持久化在 `AgentStep.context_snapshot_raw` / `context_check_raw`(`get/set_context_snapshot` / `get/set_context_check`),以支持逐步回放。
@@ -53,7 +53,7 @@ Code 工作流的每一步都各自从数据库读取前序产出、再把整篇
 - **`.format` 系模板**(`backend/prompts/code/{requirements,development_flow,document_split,style}_prompt.txt`):在 `{system_prefix}` 与 `---` 之间插入新占位符 **`{context_ledger}`**。`generation_service.py` 的对应 `_xxx_context(..., context_ledger="")` 把渲染文本作为实参传入。
   - **空账本渲染为 `""`** → 模板仅多一个空行,完全向后兼容(旧调用方不传该参数也正常)。
   - **`.format` 纪律**:模板加了 `{context_ledger}` 就必须在该模板所有 `.format()` 调用处传 `context_ledger=`,否则 `KeyError`。渲染文本本身不含单个 `{`/`}`(作为实参不被二次扫描),模板内既有 JSON 示例的 `{{ }}` 转义保持不变。
-- **`.replace` 系模板**(`frontend_build_prompt.txt`,因含 JSX 花括号):使用 **`[[CONTEXT_LEDGER]]`** token,由 `frontend_build_service.build_app(..., context_ledger="")` 经 `_fill` 替换。
+- **`.replace`/`_fill` 系模板**(`frontend_project_prompt.txt` / `backend_project_prompt.txt`,因含 JSX/代码花括号):使用 **`[[CONTEXT_LEDGER]]`** token,由 `frontend_project_service` / `backend_project_service` 经 `_fill` 替换。
 
 渲染格式(`render_for_prompt`)为紧凑中文 markdown:`## 项目共识 / ### 术语口径 / ### 技术栈口径 / ### 关键决策 / ### 全局约束 / ### 待确认问题`,超长时自底向上裁剪、保留标题。
 
@@ -75,7 +75,7 @@ Code 工作流的每一步都各自从数据库读取前序产出、再把整篇
 
 ## 6. 积分策略
 
-- 单价:`pricing.CODE_CONTEXT_VERIFY`(env `PRICE_CODE_CONTEXT_VERIFY`,默认 1),`OPERATION["code_context_verify"] = ("agent_run", …)`。
+- 单价:`pricing.CODE_CONTEXT_VERIFY`(env `PRICE_CODE_CONTEXT_VERIFY`,**默认 0**——当前版本 Code 域计费整体关闭),`OPERATION["code_context_verify"] = ("agent_run", …)`。
 - **按每次 AI 闸门调用实时 `charge()`**,不折进预扣预留。理由:闸门可被跳过(provider 未配 / 余额不足 / 前端 fallback),折进预扣会对从不触发闸门的 run 多扣,并使现有 `_run_produced_nothing` 自动退款逻辑复杂化。
 - **优雅降级**:仅在 `gate_available()` 为真时才 `charge`;`charge` 返回 `False`(余额不足)→ 跳过 AI 闸门、仅做程序化校验、发 `warning` 事件;均不阻断主流程。
 - **不退款**:闸门扣费是独立审计事务,校验工作已执行,失败时不退;只退未产出任何 artifact 时的预扣预留。

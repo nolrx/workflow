@@ -169,6 +169,19 @@ export const agentApi = {
   cancelRun: async (runId: string): Promise<void> => {
     await api.post<Envelope<unknown>>(`/agent/runs/${runId}/cancel`)
   },
+  /** Relaunch a failed / partial run to retry its failed stage (re-using the work
+   *  completed stages already produced). ``stage`` is an optional precise hint
+   *  (the failed step's agent_key); the backend re-derives it authoritatively. */
+  retryRun: async (
+    runId: string,
+    body: { stage?: string | null } = {}
+  ): Promise<CreateRunResult> => {
+    const response = await api.post<Envelope<CreateRunResult>>(
+      `/agent/runs/${runId}/retry`,
+      body
+    )
+    return response.data
+  },
   /** Resume a paused run: approve / revise the reviewed document, or submit a
    *  UI-style selection (select_style) at the style_select gate. */
   resumeRun: async (

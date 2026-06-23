@@ -5,6 +5,12 @@ from backend.models.code.canvas import CodeCanvas, CodeCanvasNodeType
 from backend.models.code.figma_credential import FigmaCredential
 from backend.models.code.figma_design import CodeFigmaDesign
 from backend.models.code.figma_export import FigmaExportPackage
+from backend.models.code.fullstack import (
+    CodeDeployment,
+    CodeProjectLedger,
+    ContractStatus,
+    DeploymentStatus,
+)
 from backend.models.code.github import (
     GitHubPushLog,
     GitHubPushStatus,
@@ -29,6 +35,10 @@ __all__ = [
     "CodeFigmaDesign",
     "FigmaCredential",
     "FigmaExportPackage",
+    "CodeProjectLedger",
+    "CodeDeployment",
+    "ContractStatus",
+    "DeploymentStatus",
     "GitHubRepoLink",
     "GitHubPushLog",
     "GitHubPushStatus",

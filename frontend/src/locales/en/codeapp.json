@@ -13,9 +13,26 @@
   "readyTitle": "Frontend project is ready",
   "readyHint": "It's deployed to this session's preview URL — open it in a new tab to run it with a native, full-page browser experience.",
   "loadingHistory": "Loading the generated project…",
+  "version": {
+    "label": "Select version",
+    "latest": "Latest",
+    "partial": "Partial"
+  },
+  "public": {
+    "on": "Public",
+    "off": "Private",
+    "onHint": "Public: anyone with the link can open this preview (no login). Click to make it private.",
+    "offHint": "Private: only you can see it. Click to expose it on the public internet and get a shareable link.",
+    "shareLabel": "Public link",
+    "copy": "Copy link"
+  },
   "toast": {
     "started": "Project generation started",
     "startFailed": "Failed to start",
-    "downloadFailed": "Download failed"
+    "downloadFailed": "Download failed",
+    "madePublic": "Preview is now public — anyone with the link can open it",
+    "madePrivate": "Preview is now private",
+    "visibilityFailed": "Failed to change visibility",
+    "copyFailed": "Copy failed"
   }
 }

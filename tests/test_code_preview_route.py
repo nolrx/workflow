@@ -75,8 +75,11 @@ def test_rejects_missing_or_invalid_token(ctx):
 
 
 def test_other_user_cannot_preview(ctx):
+    # A non-owner with a valid token, against a PRIVATE project: the route now
+    # supports public sharing (visibility == 'public' serves anonymously), so a
+    # non-owner of a non-public project is denied with 403 FORBIDDEN.
     resp = ctx["client"].get(f"/preview/{ctx['pid']}/?token={ctx['other_token']}")
-    assert resp.status_code == 404
+    assert resp.status_code == 403
 
 
 def test_404_when_no_built_run(ctx, tmp_path):
@@ -99,9 +102,41 @@ def test_entry_redirects_and_pins_cookie(ctx):
     # Entry request: redirect to a token-less URL with a path-scoped cookie.
     assert resp.status_code == 302
     assert resp.headers["Location"].endswith(f"/preview/{pid}/")
-    set_cookie = resp.headers.get("Set-Cookie", "")
-    assert "fe_preview_token=" in set_cookie
-    assert f"Path=/preview/{pid}/" in set_cookie
+    # Werkzeug emits one Set-Cookie header per cookie; join them to assert over all.
+    set_cookies = "\n".join(resp.headers.getlist("Set-Cookie"))
+    assert "fe_preview_token=" in set_cookies
+    assert f"Path=/preview/{pid}/" in set_cookies
+    # The app-token cookie is planted on EVERY owner entry — even with NO running
+    # deployment — so a later deploy + token-less reload can still reach
+    # /app/<pid>/api without a 403. Scoped to /app/<pid>/ so it rides only those calls.
+    assert "fs_app_token=" in set_cookies
+    assert f"Path=/app/{pid}/" in set_cookies
+    # Both cookies hold a minted, longer-lived preview token (NOT the 30-min access
+    # token) so a left-open preview tab keeps working — Max-Age matches the TTL.
+    from backend.utils.preview_token import PREVIEW_TOKEN_TTL
+
+    assert f"Max-Age={PREVIEW_TOKEN_TTL}" in set_cookies
+    assert PREVIEW_TOKEN_TTL > 1800
+    # The pinned cookie value is a freshly minted token, not the entry access token.
+    assert f"fe_preview_token={token}" not in set_cookies
+
+
+def test_minted_cookie_outlives_access_token_and_is_project_scoped(ctx):
+    # A minted preview token authenticates the token-less follow-up requests and is
+    # pinned to its project: replaying it under a different project's path is rejected.
+    from backend.routes.code.preview_routes import _PREVIEW_COOKIE
+    from backend.utils.preview_token import mint_preview_token, preview_identity
+
+    client, pid, token = ctx["client"], ctx["pid"], ctx["token"]
+    resp = client.get(f"/preview/{pid}/?token={token}")
+    set_cookies = "\n".join(resp.headers.getlist("Set-Cookie"))
+    # Pull the minted value out of the Set-Cookie header and verify its scope.
+    minted = set_cookies.split(f"{_PREVIEW_COOKIE}=", 1)[1].split(";", 1)[0]
+    assert preview_identity(minted, f"project:{pid}") == "u-prev"
+    assert preview_identity(minted, "project:some-other-pid") is None
+    # A token minted for another project cannot authenticate THIS project's preview.
+    foreign = mint_preview_token("u-prev", "project:other")
+    assert client.get(f"/preview/{pid}/?token={foreign}").status_code == 403
 
 
 def test_serves_index_and_assets_via_cookie(ctx):

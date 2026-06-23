@@ -72,6 +72,25 @@ CODE_FIGMA_SLICE_TOTAL = CODE_FIGMA_SLICE
 CODE_CANVAS_RUN = _credits("PRICE_CODE_CANVAS_RUN", 0)
 CODE_CANVAS_NODE = _credits("PRICE_CODE_CANVAS_NODE", 0)
 
+# --- Full-stack generation (frontend + backend + middleware, concurrent) -------
+# The fullstack orchestration first synthesizes ONE shared OpenAPI contract (a
+# single text-model call), then fans out three concurrent agent runs that
+# implement / consume it, and finally an atomic deploy run brings the generated
+# app up behind a reverse proxy. Each piece is metered independently; all default
+# 0 (free) like the rest of the Code domain — set the PRICE_* envs to enable.
+CODE_CONTRACT_SYNTHESIS = _credits("PRICE_CODE_CONTRACT_SYNTHESIS", 0)  # shared API contract
+# Agentic backend PROJECT generation: a coding CLI in a sandboxed container
+# produces a polyglot multi-file backend (with its own Dockerfile) implementing
+# the shared contract. Same agent-execution lane as the frontend project path.
+CODE_BACKEND_PROJECT_GENERATION = _credits("PRICE_CODE_BACKEND_PROJECT", 0)
+# Middleware provisioning: derives the data/cache layer from the manifest and
+# generates the schema / migrations / seed (applied at deploy time).
+CODE_MIDDLEWARE_PROVISIONING = _credits("PRICE_CODE_MIDDLEWARE", 0)
+# Atomic deploy run: builds the generated backend image, provisions the
+# per-project middleware namespace, starts the long-lived container, wires the
+# reverse proxy and health-checks — with rollback on any failure.
+CODE_FULLSTACK_DEPLOY = _credits("PRICE_CODE_FULLSTACK_DEPLOY", 0)
+
 
 # Operation label -> (resource_type, unit_cost). Used when writing CreditTransaction
 # records so the audit log carries a stable operation/resource vocabulary.
@@ -84,4 +103,8 @@ OPERATION = {
     "code_figma_slice": ("agent_run", CODE_FIGMA_SLICE_TOTAL),
     "code_canvas_run": ("agent_run", CODE_CANVAS_RUN),
     "code_canvas_node": ("agent_run", CODE_CANVAS_NODE),
+    "code_contract_synthesis": ("code_project", CODE_CONTRACT_SYNTHESIS),
+    "code_backend_project": ("agent_run", CODE_BACKEND_PROJECT_GENERATION),
+    "code_middleware": ("agent_run", CODE_MIDDLEWARE_PROVISIONING),
+    "code_fullstack_deploy": ("agent_run", CODE_FULLSTACK_DEPLOY),
 }

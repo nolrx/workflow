@@ -97,8 +97,8 @@ MANIFEST: dict[str, dict] = {
     },
     "frontend_project_prompt.txt": {
         "mode": "fill",
-        "placeholders": ["CONTEXT_LEDGER", "REQUIREMENT", "REQUIREMENTS_DOC", "DEVELOPMENT_FLOW", "DOCUMENTS", "STYLE_PROMPT", "UI_BASELINE", "FIGMA_DESIGN"],
-        "must_contain": ["gen-assets", "base: './'", "npm run build", "npm install", "src/assets", "src/components", "src/types.ts", "React", "Vite", "localStorage"],
+        "placeholders": ["CONTEXT_LEDGER", "REQUIREMENT", "REQUIREMENTS_DOC", "DEVELOPMENT_FLOW", "DOCUMENTS", "STYLE_PROMPT", "UI_BASELINE", "FIGMA_DESIGN", "CONTRACT"],
+        "must_contain": ["gen-assets", "base: './'", "npm run build", "npm install", "src/assets", "src/components", "src/types.ts", "React", "Vite", "localStorage", "window.__API_BASE__"],
     },
     "frontend_project_repair_prompt.txt": {
         "mode": "plain",
@@ -126,6 +126,38 @@ MANIFEST: dict[str, dict] = {
         # width/height/name are tiny scalars injected in several places — fine to repeat.
         "allow_repeat": ["IMAGE_WIDTH", "IMAGE_HEIGHT", "NAME"],
         "must_contain": ["/out/ir.json", "snake_case", "ir_version", "sliced"],
+    },
+    # --- Full-stack pipeline (frontend + backend + middleware) ----------------
+    "contract_synthesis_prompt.txt": {
+        "mode": "fill",
+        "placeholders": ["REQUIREMENTS", "FLOW", "DOCUMENTS"],
+        "must_contain": [
+            '"openapi"', '"api_summary"', '"tech_stack"', '"middleware"',
+            '"datastores"', "/health", "PORT", "DATABASE_URL",
+        ],
+    },
+    "backend_project_prompt.txt": {
+        "mode": "fill",
+        "placeholders": [
+            "CONTEXT_LEDGER", "REQUIREMENT", "REQUIREMENTS_DOC",
+            "DEVELOPMENT_FLOW", "DOCUMENTS", "CONTRACT", "MIDDLEWARE",
+        ],
+        "must_contain": ["Dockerfile", "/health", "PORT", "DATABASE_URL", "REDIS_URL", "EXPOSE 8080"],
+    },
+    "backend_project_critic_prompt.txt": {
+        "mode": "fill",
+        "placeholders": ["CONTRACT", "SOURCE"],
+        "must_contain": ['"verdict"', '"endpoint_coverage"', '"issues"', '"summary"', "PASS", "CONCERNS", "FAIL"],
+    },
+    "backend_project_repair_prompt.txt": {
+        "mode": "plain",
+        "placeholders": [],
+        "must_contain": ["Dockerfile", "/health", "PORT", "DATABASE_URL", "docker build"],
+    },
+    "middleware_prompt.txt": {
+        "mode": "fill",
+        "placeholders": ["DATA_DESIGN", "MANIFEST", "CONTRACT"],
+        "must_contain": ['"init_sql"', '"seed_sql"', '"entities"', '"summary"'],
     },
 }
 

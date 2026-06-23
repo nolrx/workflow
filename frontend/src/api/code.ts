@@ -265,6 +265,14 @@ export const codeApi = {
     )
     return response.data.project
   },
+  // Toggle whether the built frontend preview at /preview/<id>/ is reachable on
+  // the public internet (no login). Owner-only; only the rendered site is exposed.
+  setPreviewVisibility: async (projectId: string, isPublic: boolean) => {
+    const response = await api.post<
+      Envelope<{ visibility: string; public: boolean; preview_path: string }>
+    >(`/code/projects/${projectId}/preview-visibility`, { public: isPublic })
+    return response.data
+  },
   // --- inline section (partial) revision ---
   // Rewrite only the user-selected span of a confirmed document. The model is
   // fed the whole document as context but returns just the replacement, which the

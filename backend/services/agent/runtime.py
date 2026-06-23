@@ -6,6 +6,7 @@ thread inside ``app.app_context()``. The runtime owns the cancel registry and
 the workflow registry; the actual step logic lives in ``workflows/``.
 """
 import logging
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -46,6 +47,60 @@ def _run_produced_nothing(run_id: str) -> bool:
     """True if the run produced no artifacts — i.e. it failed before any useful
     output, which is the condition under which we auto-refund the reservation."""
     return AgentArtifact.query.filter_by(run_id=run_id).count() == 0
+
+
+def reconcile_orphaned_runs(app) -> int:
+    """Fail runs left RUNNING/QUEUED by a dead worker (e.g. a process restart).
+
+    Called once at startup. The background executor lives in-process, so when the
+    process is replaced any in-flight run loses its worker and would otherwise
+    hang ``running`` forever — and, counting as ACTIVE, it blocks the user from
+    re-running via the idempotent endpoints. A freshly-started process has no
+    in-flight runs of its own, so every RUNNING/QUEUED row is by definition
+    orphaned and safe to fail here (this deployment runs a single gunicorn
+    worker, so there is no peer process still driving them). PAUSED runs are left
+    alone — they await user input, not a worker. Refunds the reservation when the
+    run produced nothing. Returns how many were reconciled.
+    """
+    with app.app_context():
+        orphans = AgentRun.query.filter(
+            AgentRun.status.in_([AgentRunStatus.RUNNING, AgentRunStatus.QUEUED])
+        ).all()
+        count = 0
+        for run in orphans:
+            run_id = run.id
+            run.status = AgentRunStatus.FAILED
+            run.error_message = "服务重启导致运行中断，请重新发起。"
+            run.completed_at = datetime.utcnow()
+            if run.credit_reserved and _run_produced_nothing(run_id):
+                try:
+                    refund_credits(
+                        run.user_id, run.credit_reserved, "agent_run", "agent_run", run_id,
+                        description=f"refund interrupted {run.workflow}", team_id=run.team_id,
+                    )
+                    run.credit_used = 0
+                except Exception:  # noqa: BLE001
+                    logger.error("Refund failed for orphaned run %s", run_id, exc_info=True)
+                    run.credit_used = run.credit_reserved
+            db.session.commit()
+            # Emit terminal events so any open SSE / polling client settles instead
+            # of spinning on a perpetually-"running" run.
+            try:
+                recorder = RunRecorder(run_id, event_bus)
+                recorder.emit(
+                    AgentEventType.ERROR, level=AgentEventLevel.ERROR,
+                    message="服务重启，运行被中断",
+                )
+                recorder.emit(
+                    AgentEventType.RUN_COMPLETED, message="工作流结束",
+                    payload={"status": AgentRunStatus.FAILED},
+                )
+            except Exception:  # noqa: BLE001
+                logger.error("Failed to emit terminal events for orphaned run %s", run_id, exc_info=True)
+            count += 1
+        if count:
+            logger.info("Reconciled %d orphaned agent run(s) on startup", count)
+        return count
 
 
 class AgentRuntime:
@@ -222,11 +277,17 @@ class AgentRuntime:
                 db.session.remove()
 
 
-# Process-wide singleton.
-agent_runtime = AgentRuntime(max_workers=4)
+# Process-wide singleton. Worker count is env-tunable: the full-stack pipeline
+# fans out THREE concurrent container/model runs per project (frontend + backend
+# + middleware), so the default headroom is raised above the original 4 — each
+# run mostly blocks on `docker run`, so the slots are I/O-bound, not CPU-bound.
+agent_runtime = AgentRuntime(max_workers=int(os.getenv("AGENT_MAX_WORKERS", "8")))
 
 
 def _register_builtin_workflows() -> None:
+    from backend.services.agent.workflows.code_backend_project_workflow import (
+        run_code_backend_project_workflow,
+    )
     from backend.services.agent.workflows.code_canvas_workflow import (
         run_code_canvas_generation,
     )
@@ -236,12 +297,23 @@ def _register_builtin_workflows() -> None:
     from backend.services.agent.workflows.code_frontend_project_workflow import (
         run_code_frontend_project_workflow,
     )
+    from backend.services.agent.workflows.code_fullstack_deploy_workflow import (
+        run_code_fullstack_deploy_workflow,
+    )
+    from backend.services.agent.workflows.code_middleware_workflow import (
+        run_code_middleware_workflow,
+    )
     from backend.services.agent.workflows.code_workflow import run_code_workflow
 
     register_workflow("code_full_generation", run_code_workflow)
     register_workflow("code_frontend_project_generation", run_code_frontend_project_workflow)
     register_workflow("code_canvas_generation", run_code_canvas_generation)
     register_workflow("code_figma_slice_generation", run_code_figma_slice_workflow)
+    # Full-stack pipeline: backend + middleware generation (concurrent with the
+    # frontend project run) and the atomic deploy that joins all three.
+    register_workflow("code_backend_project_generation", run_code_backend_project_workflow)
+    register_workflow("code_middleware_provisioning", run_code_middleware_workflow)
+    register_workflow("code_fullstack_deploy", run_code_fullstack_deploy_workflow)
     # Note: the single-file `code_frontend_generation` and `code_figma_restore`
     # workflows were removed — frontend code is now produced solely by the
     # multi-file project generation; Figma input feeds it via figma_attach_service.

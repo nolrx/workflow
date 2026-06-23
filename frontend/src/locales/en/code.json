@@ -99,6 +99,10 @@
       "app": "App preview"
     }
   },
+  "stepper": {
+    "retry": "Retry stage",
+    "retryFailed": "Retry failed — please try again"
+  },
   "conversation": {
     "title": "Conversation",
     "intro": "Describe the product you want to build. I'll draft the requirements first and check with you before each next step.",
@@ -131,6 +135,7 @@
     "openButton": "Quick-confirm requirements ({{count}})",
     "apply": "Confirm & iterate",
     "applySuggestions": "Use all suggestions",
+    "skip": "Skip",
     "suggestedBadge": "Suggested",
     "customPlaceholder": "Other (custom)…"
   },

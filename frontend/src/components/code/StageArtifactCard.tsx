@@ -28,6 +28,9 @@ import { useCodeStore, type ReviseSectionArgs } from "@/stores/codeStore"
 // The app preview pulls in an iframe + history lookups, so only load it when a
 // card actually mounts it (after the build completes).
 const CodeAppPreview = lazy(() => import("@/components/code/CodeAppPreview"))
+// Full-stack pipeline (frontend + backend + middleware) lives alongside the
+// frontend-only preview in the same "app" stage; lazy for the same reason.
+const CodeFullstackPanel = lazy(() => import("@/components/code/CodeFullstackPanel"))
 
 /** The stages that can surface as an inline artifact card in the conversation. */
 export type ArtifactStage = "requirements" | "flow" | "documents" | "style" | "app"
@@ -342,7 +345,12 @@ export function StageArtifactCard({ stage, open, onToggle, state = "idle" }: Sta
               </div>
             }
           >
-            <CodeAppPreview />
+            <div className="space-y-4">
+              <CodeAppPreview />
+              <div className="border-t pt-4">
+                <CodeFullstackPanel />
+              </div>
+            </div>
           </Suspense>
         )
     }

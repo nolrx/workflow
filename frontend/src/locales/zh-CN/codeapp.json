@@ -13,9 +13,26 @@
   "readyTitle": "前端工程已生成",
   "readyHint": "已部署到该会话的预览地址，点击在新标签页中以原生浏览器效果打开运行。",
   "loadingHistory": "加载已生成的项目…",
+  "version": {
+    "label": "选择版本",
+    "latest": "最新",
+    "partial": "部分"
+  },
+  "public": {
+    "on": "公开",
+    "off": "私有",
+    "onHint": "已公开：任何人都可通过链接访问此预览(无需登录)。点击改为私有。",
+    "offHint": "当前私有：仅你可见。点击公开到公网，生成可分享链接。",
+    "shareLabel": "公开链接",
+    "copy": "复制链接"
+  },
   "toast": {
     "started": "项目生成任务已启动",
     "startFailed": "启动失败",
-    "downloadFailed": "下载失败"
+    "downloadFailed": "下载失败",
+    "madePublic": "预览已公开，任何人可通过链接访问",
+    "madePrivate": "预览已设为私有",
+    "visibilityFailed": "切换可见性失败",
+    "copyFailed": "复制失败"
   }
 }

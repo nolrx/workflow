@@ -6,6 +6,7 @@ Endpoints (registered at /api/agent):
     GET    /runs/<run_id>              full snapshot (run + steps + events + artifacts)
     GET    /runs/<run_id>/stream       live SSE event stream (replay + push)
     POST   /runs/<run_id>/cancel       request cooperative cancellation
+    POST   /runs/<run_id>/retry        relaunch a failed run to retry its failed stage
     GET    /artifacts/<id>/file        download / view a produced artifact
 """
 import json
@@ -22,7 +23,7 @@ from flask import (
     send_from_directory,
     stream_with_context,
 )
-from flask_jwt_extended import decode_token, get_jwt_identity, jwt_required
+from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from backend.extensions import db
 from backend.models.agent import (
@@ -37,6 +38,7 @@ from backend.services.agent.bus import event_bus
 from backend.services.agent.files import artifact_abs_path
 from backend.services.agent.runtime import agent_runtime, get_workflow
 from backend.services.credit_service import InsufficientCreditsError, deduct_credits
+from backend.utils.preview_token import PREVIEW_TOKEN_TTL, mint_preview_token, preview_identity
 from backend.utils.response import error_response, success_response
 
 logger = logging.getLogger(__name__)
@@ -50,9 +52,16 @@ WORKFLOW_COSTS = {
     "code_frontend_project_generation": pricing.CODE_FRONTEND_PROJECT_GENERATION,
     "code_canvas_generation": pricing.CODE_CANVAS_RUN,
     "code_figma_slice_generation": pricing.CODE_FIGMA_SLICE_TOTAL,
+    # Full-stack pipeline (concurrent frontend + backend + middleware + deploy).
+    "code_backend_project_generation": pricing.CODE_BACKEND_PROJECT_GENERATION,
+    "code_middleware_provisioning": pricing.CODE_MIDDLEWARE_PROVISIONING,
+    "code_fullstack_deploy": pricing.CODE_FULLSTACK_DEPLOY,
 }
 VALID_DOMAINS = {"code"}
-MAX_CONCURRENT_RUNS = 2
+# The full-stack pipeline starts THREE concurrent runs per project (frontend +
+# backend + middleware), so the per-user active-run cap must clear 3 with
+# headroom. Env-tunable for ops.
+MAX_CONCURRENT_RUNS = int(os.getenv("AGENT_MAX_CONCURRENT_RUNS", "6"))
 
 
 def _get_owned_run(run_id: str) -> AgentRun | None:
@@ -88,6 +97,14 @@ def create_run():
     if workflow == "code_figma_slice_generation" and not resource_id:
         return error_response(
             "VALIDATION_ERROR", "切片导出需要一个已有的 Code 项目（resource_id）", 400
+        )
+    if workflow in (
+        "code_backend_project_generation",
+        "code_middleware_provisioning",
+        "code_fullstack_deploy",
+    ) and not resource_id:
+        return error_response(
+            "VALIDATION_ERROR", "全栈生成/部署需要一个已有的 Code 项目（resource_id）", 400
         )
     if workflow == "code_full_generation":
         has_requirement = bool((config.get("requirement") or "").strip())
@@ -299,6 +316,86 @@ def resume_run(run_id: str):
     )
 
 
+# Terminal statuses from which a run may be relaunched to retry its failed stage.
+# A hard FAILED run stopped at the failing stage; a PARTIAL run completed but left
+# one stage (e.g. preview image generation) failed. Both can resume the remaining
+# work without restarting from scratch.
+_RETRYABLE_STATUSES = {AgentRunStatus.FAILED, AgentRunStatus.PARTIAL}
+
+
+@agent_bp.route("/runs/<run_id>/retry", methods=["POST"])
+@jwt_required()
+def retry_run(run_id: str):
+    """Relaunch a failed run to retry its failed stage (re-using completed stages).
+
+    Body (optional): ``{"stage": <agent_key of the failed step>}`` — a precise hint
+    for which stage to resume from. The workflow is authoritative: it re-derives the
+    failed stage from the persisted step that ended ``failed`` and continues from
+    there, re-using everything earlier stages already produced (documents, ledger,
+    project). The worker keeps its original ``started_at`` so the runtime treats
+    this as a continuation, not a fresh run.
+    """
+    user_id = get_jwt_identity()
+    run = _get_owned_run(run_id)
+    if not run:
+        return error_response("NOT_FOUND", "任务不存在", 404)
+    if run.status not in _RETRYABLE_STATUSES:
+        return error_response("INVALID_STATE", "仅失败或部分完成的任务可以重试当前阶段", 400)
+
+    # Per-user concurrency cap (the run is terminal, so it is not counted as active).
+    active = AgentRun.query.filter(
+        AgentRun.user_id == user_id,
+        AgentRun.status.in_(list(AgentRunStatus.ACTIVE)),
+    ).count()
+    if active >= MAX_CONCURRENT_RUNS:
+        return error_response(
+            "CONCURRENCY_LIMIT", f"已有 {active} 个进行中的任务，请稍后再试", 429
+        )
+
+    data = request.get_json() or {}
+    stage = (data.get("stage") or "").strip() or None
+
+    # Re-reserve credits only when the original failure refunded them (early failure
+    # with no artifacts → credit_used == 0). A run that already kept its charge
+    # (produced documents/images) retries without paying twice.
+    if run.credit_reserved and run.credit_used == 0:
+        try:
+            deduct_credits(
+                user_id=user_id,
+                amount=run.credit_reserved,
+                operation="agent_run",
+                resource_type="agent_run",
+                resource_id=run.id,
+                description=f"Agent run retry: {run.workflow}",
+                team_id=run.team_id,
+            )
+        except InsufficientCreditsError:
+            return error_response("INSUFFICIENT_CREDITS", "积分不足，无法重试", 402)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Credit reservation failed for retry: %s", exc, exc_info=True)
+            return error_response("SERVER_ERROR", "扣费失败，未能重试", 500)
+
+    # Stash the one-shot retry directive, flip the run back to RUNNING (so a
+    # duplicate retry racing in is rejected), clear the terminal markers, relaunch.
+    config = run.get_config()
+    config["_resume"] = {"action": "retry", "stage": stage}
+    run.set_config(config)
+    run.status = AgentRunStatus.RUNNING
+    run.error_message = None
+    run.completed_at = None
+    db.session.commit()
+
+    agent_runtime.start(current_app._get_current_object(), run_id)
+    return success_response(
+        {
+            "run_id": run_id,
+            "status": run.status,
+            "stream_url": f"/api/agent/runs/{run_id}/stream",
+        },
+        "正在重试当前阶段",
+    )
+
+
 def _is_stream_end(run) -> bool:
     """A stream segment ends at a terminal status OR a pause (awaiting the user).
 
@@ -474,9 +571,10 @@ def serve_run_site(run_id: str, filename: str):
     relative to this route's path.
     """
     token = request.args.get("token", "") or request.cookies.get(_PREVIEW_COOKIE, "")
-    try:
-        identity = decode_token(token).get("sub")
-    except Exception:  # noqa: BLE001 - any decode failure is simply a rejected preview
+    # Accepts the one-shot ?token= access token (entry) or a minted, run-scoped
+    # preview token (cookie) that outlives the 30-min access token.
+    identity = preview_identity(token, f"run:{run_id}")
+    if not identity:
         return error_response("FORBIDDEN", "无效的预览令牌", 403)
     run = AgentRun.query.filter_by(id=run_id, user_id=identity).first()
     if not run:
@@ -487,14 +585,16 @@ def serve_run_site(run_id: str, filename: str):
 
     response = send_from_directory(site_dir, filename)
     response.headers["Content-Security-Policy"] = _PREVIEW_CSP
-    # On the entry request (token in the query), pin the token to this run's site
-    # path so the subsequent relative asset fetches authenticate via the cookie.
+    # On the entry request (token in the query), exchange the one-shot access token
+    # for a longer-lived run-scoped preview token and pin it to this run's site path,
+    # so subsequent relative asset fetches authenticate via the cookie — and keep
+    # working past the 30-min access-token expiry.
     if request.args.get("token"):
         site_root = request.path[: request.path.find("/site/") + len("/site/")]
         response.set_cookie(
             _PREVIEW_COOKIE,
-            request.args["token"],
-            max_age=1800,
+            mint_preview_token(identity, f"run:{run_id}"),
+            max_age=PREVIEW_TOKEN_TTL,
             httponly=True,
             samesite="Lax",
             path=site_root,

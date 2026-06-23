@@ -196,6 +196,32 @@ def update_project(project_id: str):
     return success_response({"project": project.to_dict()}, "项目已保存")
 
 
+@code_project_bp.route("/projects/<project_id>/preview-visibility", methods=["POST"])
+@jwt_required()
+def set_preview_visibility(project_id: str):
+    """Toggle whether the project's built frontend preview is publicly reachable.
+
+    ``public`` => ``/preview/<project_id>/`` serves the latest built site WITHOUT
+    auth (the unguessable UUID is the share capability; revocable by flipping
+    back). ``private`` => owner-token only. Only the rendered static site is ever
+    exposed — source/zip stay on the JWT-protected ``/api/agent`` routes.
+    """
+    project = _get_owned_project(project_id)
+    if not project:
+        return error_response("NOT_FOUND", "项目不存在", 404)
+    data = request.get_json() or {}
+    project.visibility = "public" if bool(data.get("public")) else "private"
+    db.session.commit()
+    return success_response(
+        {
+            "visibility": project.visibility,
+            "public": project.visibility == "public",
+            "preview_path": f"/preview/{project.id}/",
+        },
+        "已更新预览可见性",
+    )
+
+
 @code_project_bp.route("/projects/<project_id>/flow", methods=["POST"])
 @jwt_required()
 def generate_flow(project_id: str):

@@ -99,6 +99,10 @@
       "app": "アプリプレビュー"
     }
   },
+  "stepper": {
+    "retry": "この段階を再試行",
+    "retryFailed": "再試行に失敗しました。しばらくして再度お試しください"
+  },
   "conversation": {
     "title": "会話",
     "intro": "作りたいプロダクトを説明してください。まず要件定義書を作成し、各ステップで確認してから次へ進みます。",
@@ -131,6 +135,7 @@
     "openButton": "要件をクイック確認（{{count}} 件）",
     "apply": "確定して要件に反映",
     "applySuggestions": "すべて推奨を採用",
+    "skip": "スキップ",
     "suggestedBadge": "推奨",
     "customPlaceholder": "その他（自由入力）…"
   },

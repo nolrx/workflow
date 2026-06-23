@@ -30,6 +30,14 @@ export const STEP_TAB: Record<string, PreviewTab> = {
   fe_build: "app",
   fe_critic: "app",
   fe_repair: "app",
+  // full-stack pipeline steps (backend / middleware / deploy) — same app tab
+  be_planner: "app",
+  be_project_build: "app",
+  be_publish: "app",
+  mw_planner: "app",
+  mw_provision: "app",
+  mw_publish: "app",
+  fs_deploy: "app",
 }
 
 /** Workflow progress.current_step -> preview tab (used to auto-follow the run). */

@@ -99,15 +99,31 @@ services:
             # `-v {workdir}:/out` bind mount points at real host files. Both workflows'
             # mkdtemp() land here (distinct prefixes: fe-agent- / slicer-agent-).
             FE_AGENT_IMAGE: fe-agent:latest
+            BE_AGENT_IMAGE: be-agent:latest
             SLICER_AGENT_IMAGE: slicer-agent:latest
             TMPDIR: /data/workflow/.fe-agent-work
+            # Full-stack deploy: generated backend containers join THIS network
+            # (named explicitly below so the name is stable across compose project
+            # names), so the backend reaches them by container name. APP_BACKEND_PORT
+            # is the in-container port the generated backend listens on (PORT env).
+            APP_NETWORK: ai-creative-studio-net
+            APP_BACKEND_PORT: "8080"
             # fe-agent now runs TWO CLIs: Claude Code (writes the project) + Codex (real
             # image assets via the bundled image-assets skill). Codex reuses
             # OPENAI_API_KEY (from .env, the image key); the backend injects it per
             # `docker run`. Asset generation runs INSIDE Claude's generate phase, so give
             # that phase extra room (FE_AGENT_TIMEOUT); FE_CODEX_TIMEOUT caps one
             # gen-assets call. The asset lane is fail-soft — it never blocks the build.
-            FE_AGENT_TIMEOUT: "4800"
+            #
+            # "0" = NO wall-clock cap: the coding agent runs to completion instead of
+            # being killed mid-generate (exit 124) and degraded to a fallback page.
+            # We would rather wait for a real build than ship a degraded one; a run is
+            # then bounded only by the agent finishing or a UI cancel. FE_CODEX_TIMEOUT
+            # (per image call, fail-soft) and the npm/build caps stay finite on purpose
+            # so a wedged deterministic tool can't run forever.
+            FE_AGENT_TIMEOUT: "0"
+            FE_AGENT_REPAIR_TIMEOUT: "0"
+            FE_AGENT_TOTAL_TIMEOUT: "0"
             FE_CODEX_TIMEOUT: "600"
             # Codex (slicer-agent) is a reasoning model that analyses a full UI
             # thumbnail into a ~17KB IR — it routinely needs several minutes, so the
@@ -176,6 +192,19 @@ services:
         command: ["true"]
         restart: "no"
 
+    # --- Build-only: be-agent sandbox image ------------------------------------
+    # Produces `be-agent:latest` (Claude Code + Codex + python3) for the backend's
+    # code_backend_project_generation workflow to `docker run`. Same `setup`
+    # profile — build all agent images with:
+    #   docker compose --profile setup build
+    be-agent:
+        image: be-agent:latest
+        build:
+            context: ./backend/docker/be-agent
+        profiles: ["setup"]
+        command: ["true"]
+        restart: "no"
+
 volumes:
     postgres_data:
     redis_data:
@@ -184,4 +213,9 @@ volumes:
 
 networks:
     app-net:
+        # Explicit name so generated backend containers (started via DooD with
+        # `--network ai-creative-studio-net`) land on the SAME network as the
+        # platform backend regardless of the compose project name, and are
+        # reachable by container name for the /app/<pid>/api reverse proxy.
+        name: ai-creative-studio-net
         driver: bridge

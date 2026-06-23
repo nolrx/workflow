@@ -59,6 +59,8 @@ interface AgentState {
   }) => Promise<AgentRun[]>
   openLatestRunForResource: (resourceId: string, workflow?: string) => Promise<boolean>
   cancelRun: () => Promise<void>
+  /** Relaunch the bound run (failed / partial) to retry its failed stage. */
+  retryRun: (stage?: string | null) => Promise<void>
   resumeRun: (action: "approve" | "revise", instruction?: string) => Promise<void>
   /** Submit a UI-style selection at the style_select gate (resumes the run). */
   selectStyle: (styleIds: string[]) => Promise<void>
@@ -271,6 +273,23 @@ export const useAgentStore = create<AgentState>()((set, get) => {
       if (!run) return
       await agentApi.cancelRun(run.id)
       await refresh(run.id)
+    },
+
+    // Retry a failed / partial run from its failed stage. The backend re-runs the
+    // worker on the SAME run id (re-using completed stages), so — like resumeRun —
+    // we re-subscribe to the live stream, which pulls only events past what we
+    // already hold. Throws on a rejected retry (e.g. insufficient credits) so the
+    // caller can surface it.
+    retryRun: async (stage) => {
+      const run = get().run
+      if (!run || (run.status !== "failed" && run.status !== "partial")) return
+      activeRunId = run.id
+      // A fresh terminal state may be re-entered, so let the post-run credit
+      // refresh fire again once this retry settles.
+      creditRefreshedRunId = null
+      await agentApi.retryRun(run.id, { stage })
+      await refresh(run.id)
+      void stream(run.id)
     },
 
     // Human-in-the-loop review: approve the produced document (advance to the

@@ -260,13 +260,28 @@ fi
 # the recovery ladder (build phases write their output to /out logs, not stdout).
 emit() { printf '%s\n' "{\"type\":\"fe_phase\",\"phase\":\"$1\"}"; }
 
+# Run a command under an OPTIONAL wall-clock cap. A cap of "0" / "" / non-numeric
+# means NO limit — the coding agent runs to completion instead of being killed
+# mid-generate (exit 124) and degraded to a fallback page. Operators who would
+# rather wait for a real build than ship a degraded one set FE_AGENT_TIMEOUT=0
+# (see docker-compose). A cooperative cancel from the UI still stops the run.
+run_capped() {  # usage: run_capped <seconds> cmd [args...]
+  local secs="${1:-0}"; shift
+  case "$secs" in (''|*[!0-9]*) secs=0 ;; esac
+  if [ "$secs" -eq 0 ]; then
+    "$@"
+  else
+    timeout "$secs" "$@"
+  fi
+}
+
 # --- 1. Generate ---------------------------------------------------------
 # Feed the prompt over stdin, NOT as a positional arg: the assembled prompt
 # (requirements + flow + documents + style + figma) routinely exceeds Linux
 # MAX_ARG_STRLEN (128KB per single argv string), so `claude -p "$(cat ...)"`
 # would die at exec with "/usr/bin/timeout: Argument list too long" (E2BIG,
 # surfaced as exit 126). `claude -p` reads the whole stdin as the prompt.
-timeout "${FE_AGENT_TIMEOUT:-720}" claude -p $CLAUDE_FLAGS < /out/prompt.txt
+run_capped "${FE_AGENT_TIMEOUT:-720}" claude -p $CLAUDE_FLAGS < /out/prompt.txt
 echo "$?" > /out/claude_exit
 mkdir -p /out/project
 
@@ -460,7 +475,7 @@ if [ -f "$PROJECT_ROOT/package.json" ]; then
       printf '\n\n# 构建报错(节选)\n'
       tail -c 6000 /out/npm_build.log 2>/dev/null
     } > /out/repair_full_prompt.txt
-    ( cd "$PROJECT_ROOT" && timeout "${FE_AGENT_REPAIR_TIMEOUT:-300}" claude -p $CLAUDE_FLAGS < /out/repair_full_prompt.txt )
+    ( cd "$PROJECT_ROOT" && run_capped "${FE_AGENT_REPAIR_TIMEOUT:-300}" claude -p $CLAUDE_FLAGS < /out/repair_full_prompt.txt )
     echo "$?" > /out/claude_repair_exit
     run_build
     build_ok && DEGRADED="ai-repair"
@@ -519,6 +534,10 @@ class FrontendProjectService:
         # so the host's hard ceiling is the SUM of phases plus margin, NOT a single
         # claude budget. The in-container timeouts are the real per-phase guard;
         # total_timeout only backstops a container that never exits.
+        # Set FE_AGENT_TIMEOUT / FE_AGENT_REPAIR_TIMEOUT / FE_AGENT_TOTAL_TIMEOUT to
+        # 0 to DISABLE the cap for that phase — the agent then runs to completion
+        # instead of being killed (124) and degraded. Only a cooperative cancel or
+        # the agent finishing stops the run.
         self.gen_timeout = int(os.getenv("FE_AGENT_TIMEOUT", "720"))
         self.repair_timeout = int(os.getenv("FE_AGENT_REPAIR_TIMEOUT", "300"))
         self.npm_timeout = int(os.getenv("FE_AGENT_NPM_TIMEOUT", "240"))
@@ -677,6 +696,7 @@ class FrontendProjectService:
         style_prompt: str = "",
         ui_baseline_prompt: str = "",
         context_ledger: str = "",
+        contract_block: str = "",
         figma_frames: Optional[list] = None,
         on_event: Optional[Callable[[dict], None]] = None,
         is_cancelled: Optional[Callable[[], bool]] = None,
@@ -711,6 +731,10 @@ class FrontendProjectService:
             STYLE_PROMPT=(style_prompt or "")[:_cap],
             UI_BASELINE=(ui_baseline_prompt or "")[:6_000],
             FIGMA_DESIGN=figma_block,
+            # Full-stack mode: when a shared API contract is injected the frontend
+            # calls the REAL backend (via window.__API_BASE__) instead of using
+            # localStorage; empty in standalone mode (backward compatible).
+            CONTRACT=(contract_block or "")[:9_000],
         )
 
         workdir = Path(tempfile.mkdtemp(prefix="fe-agent-"))
@@ -797,7 +821,10 @@ class FrontendProjectService:
                 if is_cancelled and is_cancelled():
                     proc.kill()
                     return self._empty("cancelled")
-            proc.wait(timeout=self.total_timeout)
+            # total_timeout <= 0 means "wait forever" — pairs with the in-container
+            # FE_AGENT_TIMEOUT=0 (uncapped agent). A run is then bounded only by the
+            # agent finishing or a cooperative cancel, never by a wall-clock kill.
+            proc.wait(timeout=self.total_timeout if self.total_timeout > 0 else None)
         except subprocess.TimeoutExpired:
             proc.kill()
             raise RuntimeError("frontend project agent timed out")

@@ -13,9 +13,26 @@
   "readyTitle": "프런트엔드 프로젝트가 생성되었습니다",
   "readyHint": "이 세션의 미리보기 주소에 배포되었습니다. 새 탭에서 열면 네이티브 전체 화면 브라우저 환경으로 실행됩니다.",
   "loadingHistory": "생성된 프로젝트를 불러오는 중…",
+  "version": {
+    "label": "버전 선택",
+    "latest": "최신",
+    "partial": "일부"
+  },
+  "public": {
+    "on": "공개",
+    "off": "비공개",
+    "onHint": "공개됨: 링크가 있으면 누구나 이 미리보기를 열 수 있습니다(로그인 불필요). 클릭하면 비공개로 전환합니다.",
+    "offHint": "비공개: 나만 볼 수 있습니다. 클릭하면 인터넷에 공개하고 공유 링크를 생성합니다.",
+    "shareLabel": "공개 링크",
+    "copy": "링크 복사"
+  },
   "toast": {
     "started": "프로젝트 생성을 시작했습니다",
     "startFailed": "시작 실패",
-    "downloadFailed": "다운로드 실패"
+    "downloadFailed": "다운로드 실패",
+    "madePublic": "미리보기가 공개되었습니다 — 링크가 있으면 누구나 열 수 있습니다",
+    "madePrivate": "미리보기가 비공개로 설정되었습니다",
+    "visibilityFailed": "공개 설정 변경 실패",
+    "copyFailed": "복사 실패"
   }
 }

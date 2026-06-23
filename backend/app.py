@@ -41,7 +41,14 @@ def create_app(config_name: str = None) -> Flask:
     from backend.routes.admin_routes import admin_bp
     from backend.routes.agent_routes import agent_bp
     from backend.routes.auth_routes import auth_bp
-    from backend.routes.code import code_preview_bp, code_project_bp, figma_bp, github_bp
+    from backend.routes.code import (
+        app_proxy_bp,
+        code_preview_bp,
+        code_project_bp,
+        figma_bp,
+        fullstack_bp,
+        github_bp,
+    )
     from backend.routes.credit_routes import credit_bp
     from backend.routes.team_routes import team_bp
     from backend.routes.user_routes import user_bp
@@ -54,10 +61,17 @@ def create_app(config_name: str = None) -> Flask:
     app.register_blueprint(code_project_bp, url_prefix="/api/code")
     app.register_blueprint(figma_bp, url_prefix="/api/code/figma")
     app.register_blueprint(github_bp, url_prefix="/api/code/github")
+    # Full-stack pipeline orchestration (start the 3 concurrent runs, deploy,
+    # status, contract). Mounted under /api/code alongside the project routes.
+    app.register_blueprint(fullstack_bp, url_prefix="/api/code")
     # Session-bound deployed preview of generated frontend projects. Mounted at the
     # top level (not under /api) so it reads like a real deployment; nginx proxies
     # the /preview prefix to the backend (see frontend/nginx/default.conf).
     app.register_blueprint(code_preview_bp, url_prefix="/preview")
+    # Reverse proxy from the served frontend to the live generated backend
+    # container (/app/<pid>/api/... -> http://<container>:<port>/...). Top-level
+    # like /preview; nginx proxies the /app prefix to the backend.
+    app.register_blueprint(app_proxy_bp, url_prefix="/app")
     app.register_blueprint(admin_bp, url_prefix="/api/admin")
 
     # Health check endpoint
@@ -128,6 +142,17 @@ def create_app(config_name: str = None) -> Flask:
     # Create database tables
     with app.app_context():
         db.create_all()
+
+    # Reconcile runs orphaned by a previous process (e.g. a restart / crash): the
+    # background executor is in-process, so a replaced process leaves in-flight
+    # runs stuck 'running' forever (and, counting as ACTIVE, they block the user
+    # from re-running). Mark them failed (+ refund) on boot. Fails soft.
+    try:
+        from backend.services.agent.runtime import reconcile_orphaned_runs
+
+        reconcile_orphaned_runs(app)
+    except Exception as error:  # noqa: BLE001 — never block startup on reconciliation
+        logger.warning("Orphaned-run reconciliation skipped: %s", error)
 
     # Seed editable system prompts into MongoDB (idempotent; only inserts
     # missing keys). Fails soft — if Mongo is unreachable the app still runs off

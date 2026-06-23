@@ -1,0 +1,39 @@
+{
+  "title": "Full-stack generation (frontend + backend + middleware)",
+  "intro": "Driven by one shared API contract: the frontend, backend and middleware pipelines generate concurrently, then deploy atomically into a live preview where the frontend calls the real backend.",
+  "generate": "Generate full-stack app",
+  "regenerate": "Regenerate full-stack",
+  "contractReady": "Shared API contract ready",
+  "deployed": "Deployed",
+  "openInBrowser": "Open preview",
+  "needFlowHint": "The development flow isn't complete yet — finish the requirements and flow before generating the full-stack app.",
+  "waiting": "Waiting to start…",
+  "waitingAll": "Deploy becomes available once the pipelines finish — the backend project must succeed (the frontend and middleware are best-effort).",
+  "backendRequired": "The backend project must finish successfully before you can deploy. Retry the backend pipeline, then deploy.",
+  "deployDespiteFailure": "Some pipelines didn't finish cleanly, but the backend is ready, so you can still deploy — the database setup or live frontend preview may be incomplete.",
+  "deploy": "Deploy & preview",
+  "deployHint": "The backend project is ready. Run the atomic deploy (create database → build backend image → start container → health check → wire the reverse proxy).",
+  "apiBase": "The frontend calls the backend live via {{base}}.",
+  "lane": {
+    "frontend": "Frontend project",
+    "backend": "Backend project",
+    "middleware": "Middleware / data layer",
+    "deploy": "Atomic deploy"
+  },
+  "status": {
+    "idle": "Idle",
+    "queued": "Queued",
+    "running": "Running",
+    "paused": "Awaiting review",
+    "completed": "Completed",
+    "partial": "Partial",
+    "failed": "Failed",
+    "cancelled": "Cancelled"
+  },
+  "toast": {
+    "started": "Full-stack generation started (frontend / backend / middleware concurrently)",
+    "startFailed": "Failed to start",
+    "deployStarted": "Atomic deploy started",
+    "deployFailed": "Failed to start deploy"
+  }
+}

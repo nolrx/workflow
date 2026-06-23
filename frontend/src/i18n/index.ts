@@ -9,6 +9,7 @@ import enDashboard from '@/locales/en/dashboard.json'
 import enCode from '@/locales/en/code.json'
 import enAgent from '@/locales/en/agent.json'
 import enCodeApp from '@/locales/en/codeapp.json'
+import enFullstack from '@/locales/en/fullstack.json'
 import enTeam from '@/locales/en/team.json'
 import enSettings from '@/locales/en/settings.json'
 import enErrors from '@/locales/en/errors.json'
@@ -21,6 +22,7 @@ import zhDashboard from '@/locales/zh-CN/dashboard.json'
 import zhCode from '@/locales/zh-CN/code.json'
 import zhAgent from '@/locales/zh-CN/agent.json'
 import zhCodeApp from '@/locales/zh-CN/codeapp.json'
+import zhFullstack from '@/locales/zh-CN/fullstack.json'
 import zhTeam from '@/locales/zh-CN/team.json'
 import zhSettings from '@/locales/zh-CN/settings.json'
 import zhErrors from '@/locales/zh-CN/errors.json'
@@ -33,6 +35,7 @@ import jaDashboard from '@/locales/ja/dashboard.json'
 import jaCode from '@/locales/ja/code.json'
 import jaAgent from '@/locales/ja/agent.json'
 import jaCodeApp from '@/locales/ja/codeapp.json'
+import jaFullstack from '@/locales/ja/fullstack.json'
 import jaTeam from '@/locales/ja/team.json'
 import jaSettings from '@/locales/ja/settings.json'
 import jaErrors from '@/locales/ja/errors.json'
@@ -45,6 +48,7 @@ import koDashboard from '@/locales/ko/dashboard.json'
 import koCode from '@/locales/ko/code.json'
 import koAgent from '@/locales/ko/agent.json'
 import koCodeApp from '@/locales/ko/codeapp.json'
+import koFullstack from '@/locales/ko/fullstack.json'
 import koTeam from '@/locales/ko/team.json'
 import koSettings from '@/locales/ko/settings.json'
 import koErrors from '@/locales/ko/errors.json'
@@ -76,6 +80,7 @@ const resources = {
     code: enCode,
     agent: enAgent,
     codeapp: enCodeApp,
+    fullstack: enFullstack,
     team: enTeam,
     settings: enSettings,
     errors: enErrors,
@@ -89,6 +94,7 @@ const resources = {
     code: zhCode,
     agent: zhAgent,
     codeapp: zhCodeApp,
+    fullstack: zhFullstack,
     team: zhTeam,
     settings: zhSettings,
     errors: zhErrors,
@@ -102,6 +108,7 @@ const resources = {
     code: jaCode,
     agent: jaAgent,
     codeapp: jaCodeApp,
+    fullstack: jaFullstack,
     team: jaTeam,
     settings: jaSettings,
     errors: jaErrors,
@@ -115,6 +122,7 @@ const resources = {
     code: koCode,
     agent: koAgent,
     codeapp: koCodeApp,
+    fullstack: koFullstack,
     team: koTeam,
     settings: koSettings,
     errors: koErrors,
@@ -130,7 +138,7 @@ i18n
     resources,
     fallbackLng: 'en',
     supportedLngs: supportedLanguages,
-    ns: ['common', 'auth', 'dashboard', 'code', 'agent', 'codeapp', 'team', 'settings', 'errors', 'admin', 'canvas'],
+    ns: ['common', 'auth', 'dashboard', 'code', 'agent', 'codeapp', 'fullstack', 'team', 'settings', 'errors', 'admin', 'canvas'],
     defaultNS: 'common',
 
     detection: {

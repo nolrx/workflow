@@ -37,6 +37,7 @@ from backend.models.agent import (
     AgentRun,
     AgentRunStatus,
     AgentStep,
+    AgentStepStatus,
 )
 from backend.models.code import CodeDocument, CodeProject, CodeProjectStatus, CodeStage
 from backend.services import pricing
@@ -242,11 +243,12 @@ def run_code_workflow(ctx, recorder) -> dict:
 
     # --- shared helpers ------------------------------------------------------
     def progress(current_step: str, *, cursor_stage="__keep__", review_stage="__keep__") -> None:
+        shown = min(completed, TOTAL_STEPS)
         r = db.session.get(AgentRun, ctx.run_id)
         if r:
             prog = r.get_progress()
             prog["total_steps"] = TOTAL_STEPS
-            prog["completed_steps"] = completed
+            prog["completed_steps"] = shown
             prog["failed_steps"] = failed
             prog["current_step"] = current_step
             if cursor_stage != "__keep__":
@@ -257,8 +259,8 @@ def run_code_workflow(ctx, recorder) -> dict:
             db.session.commit()
         recorder.emit(
             AgentEventType.PROGRESS,
-            message=f"进度 {completed}/{TOTAL_STEPS}",
-            payload={"completed": completed, "total": TOTAL_STEPS, "current": current_step},
+            message=f"进度 {shown}/{TOTAL_STEPS}",
+            payload={"completed": shown, "total": TOTAL_STEPS, "current": current_step},
         )
 
     def persist_ledger() -> None:
@@ -286,7 +288,7 @@ def run_code_workflow(ctx, recorder) -> dict:
         if r:
             prog = r.get_progress()
             prog["total_steps"] = TOTAL_STEPS
-            prog["completed_steps"] = completed
+            prog["completed_steps"] = min(completed, TOTAL_STEPS)
             prog["failed_steps"] = failed
             prog["current_step"] = stage
             prog["review_stage"] = stage
@@ -307,6 +309,24 @@ def run_code_workflow(ctx, recorder) -> dict:
     def _attempt_for(agent_key: str) -> int:
         """Attempt number for a new step (counts existing same-key steps incl. self)."""
         return AgentStep.query.filter_by(run_id=ctx.run_id, agent_key=agent_key).count()
+
+    # The seven pipeline stages that count toward progress (planner + the six that
+    # follow). Used to recompute ``completed`` from reality on a retry, so re-running
+    # a stage that already has a completed step (e.g. a revise that later failed)
+    # never drifts the counter.
+    _COUNTED_STAGES = {
+        "planner", "requirements", "flow", "documents", "style", "preview", "publisher",
+    }
+
+    def _completed_count() -> int:
+        """Distinct counted stages that currently have a completed step."""
+        done = {
+            row.agent_key
+            for row in AgentStep.query.filter_by(
+                run_id=ctx.run_id, status=AgentStepStatus.COMPLETED
+            ).all()
+        }
+        return len(done & _COUNTED_STAGES)
 
     # --- stage implementations ----------------------------------------------
     def _do_planner() -> None:
@@ -1007,6 +1027,56 @@ def run_code_workflow(ctx, recorder) -> dict:
         cfg.pop("_resume", None)
         run.set_config(cfg)
         db.session.commit()
+
+    # RETRY: a previous run failed at some stage; re-run from that stage to the end,
+    # re-using everything earlier stages already produced (project, documents,
+    # ledger). The failed stage is authoritative — read it from the step that ended
+    # ``failed`` (latest wins), falling back to the directive hint / progress cursor.
+    if resume and resume.get("action") == "retry":
+        failed_step = (
+            AgentStep.query.filter_by(run_id=ctx.run_id, status=AgentStepStatus.FAILED)
+            .order_by(AgentStep.order_index.desc(), AgentStep.created_at.desc())
+            .first()
+        )
+        retry_stage = (
+            resume.get("stage")
+            or (failed_step.agent_key if failed_step else None)
+            or prev_progress.get("current_step")
+            or "requirements"
+        )
+        recorder.emit(
+            AgentEventType.REVIEW_RESOLVED,
+            message=f"重试「{retry_stage}」阶段",
+            payload={"stage": retry_stage, "retry": True},
+        )
+        # planner failed → nothing usable downstream; restart from project creation.
+        if retry_stage == "planner":
+            _do_planner()
+            completed = _completed_count()
+            progress("requirements", cursor_stage="requirements", review_stage=None)
+            if ctx.is_cancelled():
+                return cancel_result()
+            _do_requirements(revise=False)
+            completed = _completed_count()
+            persist_ledger()
+            return pause_at("requirements")
+        # requirements is the first review stage (handled outside _TAIL).
+        if retry_stage == "requirements":
+            _do_requirements(revise=False)
+            completed = _completed_count()
+            persist_ledger()
+            return pause_at("requirements")
+        # flow / documents / style / preview / publisher all live on the tail. Reset
+        # the running counter to reality first so _run_from's per-stage increments
+        # start from the true number of completed stages.
+        if retry_stage in _TAIL:
+            completed = _completed_count()
+            return _run_from(retry_stage)
+        # Unknown / stale stage → safest is to re-run requirements and re-gate.
+        _do_requirements(revise=False)
+        completed = _completed_count()
+        persist_ledger()
+        return pause_at("requirements")
 
     # REVISE: regenerate the document under review, then pause again.
     if resume and resume.get("action") == "revise":

@@ -23,6 +23,9 @@
 
 [[FIGMA_DESIGN]]
 
+# 共享 API 契约(若下方非空 = 全栈模式:前端必须改为调用真实后端)
+[[CONTRACT]]
+
 ---
 
 # ROLE & PRINCIPLES(角色与原则)
@@ -58,7 +61,9 @@
 
 1. **技术栈**:React 19 + TypeScript + Vite + 纯 CSS(每个组件配套同名 .css)。**禁止 Tailwind、禁止任何 UI 组件库、禁止任何 CDN / 远程资源 / 远程字体 / 运行时网络请求。** 注意:由 image-assets 技能在构建期生成、保存在 `src/assets/` 下的本地图片**不算**远程资源(它们会被 Vite 打包成本地文件,运行时不发任何网络请求),可放心使用。
 
-2. **工程结构**:组件拆到 `src/components/`;状态用 React hooks;类型集中在 `src/types.ts`;数据用 localStorage 持久化,并在首次加载时播种合理的示例数据;图片资源统一放 `src/assets/`。组织上对齐开发流程的模块(M)划分。
+2. **工程结构**:组件拆到 `src/components/`;状态用 React hooks;类型集中在 `src/types.ts`;图片资源统一放 `src/assets/`。组织上对齐开发流程的模块(M)划分。**数据持久化分两种模式**:
+   - **全栈模式(上方「共享 API 契约」非空)**:前端所有数据读写都**调用真实后端**,不要用 localStorage 充当数据源。封装一个 API 客户端,基址按如下顺序解析:`window.__API_BASE__`(部署时由平台注入)→ `import.meta.env.VITE_API_BASE_URL` → 默认 `'/api'`;然后**严格按共享 API 契约**逐端点调用(method/path/字段与契约一致,路径相对基址,如 `${base}/orders`)。要处理 loading / error / 空态。仅 UI 偏好等非业务数据可用 localStorage。
+   - **独立模式(契约为空)**:沿用 localStorage 持久化,并在首次加载时播种合理的示例数据。
 
 3. **vite.config.ts 必须设置 `base: './'`(相对路径)**,以便构建产物能在子路径下的 iframe 内预览。
 
@@ -88,7 +93,7 @@
 # PRE-DELIVERY SELF-CHECK(交付前自检 — 全部满足才能交付)
 - [ ] **构建通过**:`npm install` 与 `npm run build` 都已亲自运行且成功,无报错;未启动任何长驻进程。
 - [ ] **技术栈合规**:React 19 + TS + Vite + 纯 CSS(每组件配套 .css),`vite.config.ts` 设了 `base: './'`;无 Tailwind/UI 库/CDN/远程资源/远程字体/运行时网络请求。
-- [ ] **结构合规**:组件在 `src/components/`、类型在 `src/types.ts`、状态用 hooks、数据 localStorage 持久化且首次播种示例、图片在 `src/assets/`。
+- [ ] **结构合规**:组件在 `src/components/`、类型在 `src/types.ts`、状态用 hooks、图片在 `src/assets/`。数据持久化按模式:全栈模式经 `window.__API_BASE__` 解析基址、严格按契约调用真实后端(含 loading/error/空态),独立模式用 localStorage 并首次播种示例。
 - [ ] **逐 FR 可验证**:每条 FR 都有可操作的界面入口与真实行为,能演示;无死控件、无 `href="#"`、无空事件处理器、无 TODO/FIXME/占位/mock/"coming soon"。
 - [ ] **真实图片硬验收**:确已执行 `gen-assets` 生成 3~6 张 PNG 到 `src/assets/`(已用 `ls src/assets` 核对),并在组件中 import 引用;失败已写明原因且未用 emoji 充当图片。
 - [ ] **视觉保真**:状态/空态/加载态/留白/层级打磨到位,文案/人名/数据真实可信,无 Lorem ipsum 占位;emoji 未被当作图标/插画/Logo/头像/装饰。

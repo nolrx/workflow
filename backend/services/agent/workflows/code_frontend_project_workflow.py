@@ -300,6 +300,23 @@ def run_code_frontend_project_workflow(ctx, recorder) -> dict:
                 payload={"figma_frames": len(figma_frames)},
             )
 
+        # Full-stack mode: if a shared API contract was synthesized for this
+        # project, inject it so the generated frontend calls the REAL backend
+        # (via window.__API_BASE__) instead of localStorage. Empty otherwise.
+        from backend.services.code.fullstack import contract_service
+
+        _ledger_row = contract_service.get_ledger(project_id)
+        contract_block = ""
+        if _ledger_row and _ledger_row.contract_status == "ready":
+            contract_block = contract_service.render_contract_for_prompt(
+                _ledger_row.get_api_contract()
+            )
+            recorder.emit(
+                AgentEventType.PROGRESS, step_id=step.id,
+                message="全栈模式:已注入共享 API 契约,前端将调用真实后端(window.__API_BASE__)",
+                payload={"fullstack": True},
+            )
+
         result = service.build_project(
             requirement=project.requirement_input,
             requirements_doc=project.requirements_doc,
@@ -308,6 +325,7 @@ def run_code_frontend_project_workflow(ctx, recorder) -> dict:
             style_prompt=project.style_prompt or "",
             ui_baseline_prompt=project.ui_baseline_prompt or "",
             context_ledger=injected,
+            contract_block=contract_block,
             figma_frames=figma_frames,
             on_event=on_event,
             is_cancelled=ctx.is_cancelled,
@@ -423,7 +441,11 @@ def run_code_frontend_project_workflow(ctx, recorder) -> dict:
                 step.add_artifact(
                     AgentArtifactType.JSON, "前端工程验收评审",
                     content_json=review, filename="frontend_project_review.json",
-                    domain_ref_type="code_frontend_project_meta", domain_ref_id=project_id,
+                    # Distinct ref type: the acceptance review must NOT collide with
+                    # the publish step's project-meta artifact (also JSON), or the
+                    # frontend preview picker (.find by domain_ref_type) grabs this
+                    # review (no preview_url) and renders no preview.
+                    domain_ref_type="code_frontend_project_review", domain_ref_id=project_id,
                 )
 
         step.model_response = (result.get("summary") or "")[:8000]

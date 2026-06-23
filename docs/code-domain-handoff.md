@@ -10,13 +10,18 @@
 - Code 域有**两条生成入口**，对同一份 `CodeProject` 操作：
   1. **同步路由** `/api/code/projects/...`：一次 HTTP 请求 = 一次模型调用，立即返回（无回放、无时间线）。适合单步重算与脚本化。
   2. **Agent Swarm** `/api/agent/runs`（当前前端主用）：把整条流水线变成可观测、可回放、可人工确认、可恢复的 `AgentRun`，通过 SSE 实时推送。
-- **三个已注册 workflow**：
+- **七个已注册 workflow**（`runtime._register_builtin_workflows()`，`agent_routes.WORKFLOW_COSTS` 是计费表兼白名单）：
   | workflow key | 步骤 | 产物 | 状态 |
   |---|---|---|---|
   | `code_full_generation` | planner→requirements→flow→documents→style→preview→publisher（7 步，**人工确认门控 + 可恢复**） | 需求/流程/文档/风格/预览图，写回 `CodeProject`/`CodeDocument` | ✅ 当前主流程 |
   | `code_frontend_project_generation` | fe_planner→fe_project_build→fe_publish（3 步，**容器化 agent**） | 多文件 React+Vite+TS 工程（源码 zip + 可预览 dist） | ✅ 当前前端生成默认 |
-  | `code_frontend_generation` | fe_planner→fe_build→fe_critic→(fe_repair)→fe_publish | **单文件 HTML** app | ⚠️ 遗留，仅供旧 run 回放，前端不再主动触发 |
-- **⚠️ CLAUDE.md 关于前端生成的描述已过时**：它写 `code_frontend_generation` 产出「Sandpack 文件 map（React+TS+纯 CSS）」——实际上该 workflow 产出**单文件 HTML**，且已被容器化的 `code_frontend_project_generation` 取代为默认。预览也不是 Sandpack，而是 `<iframe>` 指向 `/api/agent/runs/<id>/site/`。详见 §5、§11。
+  | `code_canvas_generation` | 用户自绘 node graph，拓扑序执行（agent/merge/branch 节点） | 节点结论落 `CodeDocument` / stage 版本 | ✅ n8n 式 remix 画布 |
+  | `code_figma_slice_generation` | fe_slice_planner→fe_slice_analyze→fe_slice_publish（3 步，**Codex 容器**） | UI 预览图 → 可逐元素编辑的 Design IR | ✅ Figma 高保真导出 |
+  | `code_backend_project_generation` | be_planner→be_project_build→be_publish（3 步，**be-agent 容器**） | 多文件 polyglot 后端工程（含 Dockerfile，源码 zip） | 🆕 全栈：后端工程 |
+  | `code_middleware_provisioning` | mw_planner→mw_provision→mw_publish（3 步） | schema/迁移/seed 产物 + 中间件清单（**不实建库**） | 🆕 全栈：中间件 |
+  | `code_fullstack_deploy` | fs_deploy（4 phase：provision→build→start→done） | 有序原子部署长驻后端容器 + 反代 + 预览 | 🆕 全栈：部署 |
+- **⚠️ 旧的单文件 HTML 流程已彻底移除**（commit `c5e782e`）：`code_frontend_generation`（spec→单文件 index.html）与已退休的 `code_figma_restore` 连同 `frontend_build_service`、`frontend_build/critic/repair/from_figma` 提示词一并删除。前端代码现在只由容器多文件工程路径产出；历史 run 仍可回放（`previewTabs.ts` 保留旧 key 仅供回放）。CLAUDE.md 已同步更正，不再以本文为唯一勘误源。
+- **全栈生成（后端 + 中间件 + 部署）是在研新增**：上表后三个 workflow + `CodeProjectLedger`/`CodeDeployment` 模型 + `/api/code/.../fullstack` 编排端点构成全栈流水线，由**共享 OpenAPI 契约**连接前后端。设计与实施清单见 **`docs/code-fullstack-generation.md`**，本文 §5.3 给出摘要。
 - **Code 域当前计费默认全为 0**（免费），但所有扣费都走 `charge()`/`refund_credits()`，设 `PRICE_CODE_*` 环境变量即可开启计量，无需改代码。详见 §9。
 
 ---
@@ -33,18 +38,24 @@
 └───────────────┬─────────────────────────────┬───────────────────┘
                 │ /api/code (同步)              │ /api/agent (SSE/回放)
 ┌───────────────▼──────────────┐  ┌────────────▼────────────────────┐
-│ routes/code/project_routes.py│  │ routes/agent_routes.py           │
-│  CodeProject CRUD / 各 stage │  │  POST/GET runs, stream, cancel,  │
-│  生成 / 版本历史 / 局部修订  │  │  resume, artifacts/file, site/   │
+│ routes/code/*                │  │ routes/agent_routes.py           │
+│  project_routes(CRUD/stage)  │  │  POST/GET runs, stream, cancel,  │
+│  preview_routes(/preview)    │  │  resume, artifacts/file, site/   │
+│  fullstack_routes(/fullstack │  │                                  │
+│   +/deploy +/app 反代)       │  │                                  │
+│  figma_routes / github_routes│  │                                  │
 └───────────────┬──────────────┘  └────────────┬────────────────────┘
                 │                                │ runtime.start(app, run_id)
 ┌───────────────▼───────────────┐  ┌────────────▼────────────────────┐
 │ services/code/*               │  │ services/agent/                 │
 │  generation_service           │  │  runtime(线程池) / recorder /   │
 │  version_service              │  │  bus(SSE) / context_ledger /    │
-│  frontend_build_service       │  │  context_verifier / files /     │
-│  frontend_project_service     │  │  workflows/code_*               │
-│  styles                       │  │                                 │
+│  frontend_project_service     │  │  context_verifier / files /     │
+│  backend_project_service      │  │  canvas_nodes /                 │
+│  middleware_service           │  │  workflows/code_*               │
+│  deploy_service               │  │                                 │
+│  fullstack/contract_service   │  │                                 │
+│  figma_slice_service / styles │  │                                 │
 └───────────────┬───────────────┘  └────────────┬────────────────────┘
                 └──────────────┬────────────────┘
                 ┌──────────────▼────────────────┐
@@ -58,7 +69,7 @@
                 └───────────────────────────────┘
 ```
 
-蓝图注册（`backend/app.py`）：`agent_bp → /api/agent`、`code_project_bp → /api/code`。
+蓝图注册（`backend/app.py`）：`agent_bp → /api/agent`、`code_project_bp → /api/code`、`fullstack_bp → /api/code`、`figma_bp → /api/code/figma`、`github_bp → /api/code/github`、`code_preview_bp → /preview`、`app_proxy_bp → /app`（生成后端容器的反代）。
 
 两条入口的关系：**Agent Swarm 内部也是调用 `services/code` 的同一批方法**（`get_code_generation_service()` 等），只是包了一层 step/event/artifact 记录 + ledger + 人工门控。所以业务生成逻辑只有一份，不会漂移。
 
@@ -101,7 +112,7 @@ AgentRun (1) ──< AgentStep   (order_index, 可 parent_step_id 嵌套)
   - `progress` 形状：`{total_steps, completed_steps, failed_steps, current_step, cursor?, review_stage?}`。`cursor`/`review_stage` 是 human-in-loop 的恢复游标。
 - `AgentStep`：人可读摘要(`input/output/reasoning_summary`、`decision_notes`、`self_check`、`next_action`) + 完整调试(`prompt_snapshot`、`model_response`、`model_provider/name`) + `context_snapshot_raw`/`context_check_raw`(账本与校验快照，内部/调试可见)。
 - `AgentEvent`：`sequence`(每 run 内单调递增，由 recorder 分配)、`event_type`、`level`、`message`、`payload_raw`。**这是回放的真相源**。
-- `AgentArtifact`：`artifact_type`、`content_text`/`content_json_raw` 内联，文件经 `storage_path` 引用，`preview_url`，`domain_ref_type`/`domain_ref_id` 反链业务行（如 `code_project`、`code_document`、`code_frontend_html`、`code_frontend_project_zip`、`code_frontend_project_meta`）。
+- `AgentArtifact`：`artifact_type`、`content_text`/`content_json_raw` 内联，文件经 `storage_path` 引用，`preview_url`，`domain_ref_type`/`domain_ref_id` 反链业务行。当前 `domain_ref_type` 全集：`code_project`、`code_document`、`code_frontend_html`（遗留回放）、`code_frontend_project_zip`、`code_frontend_project_meta`、`code_frontend_project_review`、`code_figma_slice_ir`、`code_figma_slice_payload`、`code_canvas_node`、`code_backend_project_zip`、`code_backend_project_meta`、`code_middleware_meta`、`code_middleware_sql`、`code_deploy_meta`。
   - 表结构由 `db.create_all()` 在启动时建（无 Alembic）。改模型重启即生效，无迁移历史。
 
 事件类型全集（`models/agent/event.py`）：`run_started, step_started, model_request, model_response, tool_call, tool_result, artifact_created, file_created, progress, context_updated, context_conflict, warning, error, step_completed, run_completed, step_awaiting_review, user_revision, review_resolved`。
@@ -110,8 +121,8 @@ AgentRun (1) ──< AgentStep   (order_index, 可 parent_step_id 嵌套)
 
 ## 3. Agent Swarm 运行底座（`services/agent/`）
 
-- **runtime.py**：进程级单例 `agent_runtime = AgentRuntime(max_workers=4)`（`ThreadPoolExecutor`，**全进程同时最多 4 个 run**）。
-  - workflow 用 `register_workflow(key, fn)` 注册进 `_WORKFLOWS`，模块加载时 `_register_builtin_workflows()` 注册上述三个 key。
+- **runtime.py**：进程级单例 `agent_runtime = AgentRuntime(max_workers=int(os.getenv("AGENT_MAX_WORKERS", "8")))`（`ThreadPoolExecutor`，**默认全进程同时最多 8 个 run**；为支撑全栈 3 个并发容器构建 run 从 4 提到 8）。
+  - workflow 用 `register_workflow(key, fn)` 注册进 `_WORKFLOWS`，模块加载时 `_register_builtin_workflows()` 注册上述七个 key。
   - `start(app, run_id)` → `executor.submit(self._execute, ...)` 立即返回；`_execute` 在 `with app.app_context():` 内跑，首启发 `RUN_STARTED`、置 `RUNNING`/`started_at`，调 `workflow_fn(ctx, recorder)`。
   - workflow 返回 `{status, resource_id?, extra_credits}`。结算：`credit_used = credit_reserved + extra_credits`。
   - **PAUSED** 分支：不发 `RUN_COMPLETED`、不置 `completed_at`，worker 退出，等用户 resume 重启。
@@ -155,27 +166,37 @@ AgentRun (1) ──< AgentStep   (order_index, 可 parent_step_id 嵌套)
 
 ---
 
-## 5. 前端代码生成 workflow（两套，注意取舍）
+## 5. 前端 / 后端 / 全栈代码生成 workflow
 
-UI-baseline 确认（`status=ui_confirmed`）之后才生成前端。两个 workflow 共享「重载上一段 `code_full_generation` run 的 ledger 以保持口径」的做法。
+UI-baseline 确认（`status=ui_confirmed`）之后才生成代码。容器化 workflow 共享「重载上一段 `code_full_generation` run 的 ledger 以保持口径」的做法。
 
 ### 5.1 `code_frontend_project_generation`（✅ 当前默认，容器化多文件）
 实现：`workflows/code_frontend_project_workflow.py` + `services/code/frontend_project_service.py`。`TOTAL_STEPS=3`：`fe_planner → fe_project_build → fe_publish`。
 
-- `fe_project_build` 在**一次性 Docker 容器**里跑无头 Claude Code CLI（`claude -p ... --permission-mode bypassPermissions`），自主创建 + 构建 React+Vite+TS 多文件工程。CLI 的 stream-json 被实时翻译成 `file_created`/`tool_call`/`tool_result`/`fe_phase` 事件，时间线逐文件回放。
+- `fe_project_build` 在**一次性 Docker 容器**里跑无头 Claude Code CLI（`claude -p ... --permission-mode bypassPermissions`）+ Codex（双引擎，Codex 经 image-assets 技能产出真实位图资源），自主创建 + 构建 React+Vite+TS 多文件工程。CLI 的 stream-json 被实时翻译成 `file_created`/`tool_call`/`tool_result`/`fe_phase` 事件，时间线逐文件回放。
+- prompt 已按 **BMAD 风格 + FR/NFR 逐条落地**重构（`frontend_project_prompt.txt`，`[[KEY]]` fill 模板）。注入占位符含 `[[CONTEXT_LEDGER]]`/`[[REQUIREMENT]]`/`[[REQUIREMENTS_DOC]]`/`[[DEVELOPMENT_FLOW]]`/`[[DOCUMENTS]]`/`[[STYLE_PROMPT]]`/`[[UI_BASELINE]]`/`[[FIGMA_DESIGN]]`/`[[CONTRACT]]`。**`[[CONTRACT]]` 非空 = 全栈模式**：前端改为调用真实后端 `/app/<pid>/api`（见 §5.3）。
 - **自愈构建梯队**（保证一定有可预览 dist）：① `npm run build` → ② 一轮 AI 定向修复（喂构建日志）→ ③ 确定性补桩缺失相对引用（`repair.mjs`）→ ④ 跳过 tsc 直接 `vite build` → ⑤ 合成降级预览页。到达的 rung 记入 `degraded_reason`（`ai-repair|stub|vite-only|fallback`）。**降级但有产物 ≠ 失败**；只有 agent 完全没产出源码才 hard-fail（→ runtime 退款）。
-- 产物：源码 `frontend_project.zip`（artifact）+ 构建 `dist` 写入 `agent_run_dir/site/`，预览 URL `/api/agent/runs/<id>/site/index.html`。返回 `files/dist_files/usage/cost_usd/degraded`。
+- 产物：源码 `frontend_project.zip`（artifact）+ 构建 `dist` 写入 `agent_run_dir/site/`，预览 URL `/api/agent/runs/<id>/site/index.html`；另有会话级原生预览 `/preview/<project_id>/`（见 §11）。返回 `files/dist_files/usage/cost_usd/degraded`。
 - **运维强约束**：需要宿主有 Docker + 镜像 `fe-agent:latest`（`FE_AGENT_IMAGE`）+ `ANTHROPIC_API_KEY`（CLI 自带 Anthropic 后端，**绕开** capability-routed provider 抽象）。容器以非 root `node` 用户运行，仅挂载 `/out`，`--rm` 即焚。
 
-### 5.2 `code_frontend_generation`（⚠️ 遗留，单文件 HTML，仅回放）
-实现：`workflows/code_frontend_workflow.py` + `services/code/frontend_build_service.py`。`TOTAL_STEPS=4`：`fe_planner → fe_build → fe_critic →（fe_repair，仅 critic 不通过且有 issues 时，不计进度）→ fe_publish`。
+### 5.2 单文件 HTML 流程（❌ 已移除，仅回放）
+旧的 `code_frontend_generation`（spec→单文件 `index.html`）与已退休的 `code_figma_restore`（Figma→单文件 HTML）已在 commit `c5e782e` **彻底移除**：`workflows/code_frontend_workflow.py`、`services/code/frontend_build_service.py`、`frontend_build/critic/repair/from_figma` 提示词均已删除。
 
-- `build_app` 走文本 provider 产出**单文件 `index.html`**（内联 CSS + 浏览器原生 JS），`critique_app` 对抗式复检可交互性/完整性，不通过则 `repair_app` 修一轮。
-- critic 判定：模型返回 `{passed, issues:[...], summary}`；`passed` 为真或无 issues 则通过。审查/修复模型不可用时**fail-open**（视为通过/保留原 HTML）。
-- 产物：`index.html`（artifact，`domain_ref_type=code_frontend_html`）。
-- 前端 `previewTabs.ts` 把它标为 legacy（`FRONTEND_WORKFLOWS` 含两者，但 `CodeAppPreview` 只主动触发 project 版）。新需求别在这条上加功能，除非要兼容旧 run 回放。
+- 历史 run 仍可逐步回放；前端 `previewTabs.ts` 保留 `code_frontend_html` 旧 key **仅用于回放**，`CodeAppPreview` 只主动触发 §5.1 的 project 版。
+- **不要**在这条链路上加新功能；新需求一律走容器多文件工程路径。
 
-> **CLAUDE.md 偏差**：CLAUDE.md 描述 `code_frontend_generation` 产出「Sandpack 文件 map（React+TS+纯 CSS）」并把它当默认——这与代码不符。实际默认是 5.1 的容器多文件工程，预览是 iframe 而非 Sandpack。
+### 5.3 全栈生成（🆕 在研：后端 + 中间件 + 部署）
+在 §5.1 前端工程之外新增三个独立 run，三者由**共享 OpenAPI 契约**连接（后端实现、前端消费）。完整设计 / 数据模型 / 实施清单见 **`docs/code-fullstack-generation.md`**；此处仅摘要。
+
+- **编排端点** `POST /api/code/projects/<pid>/fullstack/runs`（`fullstack_routes.py`）：① 同步合成共享契约（`fullstack/contract_service.py`，写 `CodeProjectLedger`，计费 `CODE_CONTRACT_SYNTHESIS`）；② 创建 3 个并发 `AgentRun`：`code_frontend_project_generation`（注入契约）+ `code_backend_project_generation` + `code_middleware_provisioning`。
+- `code_backend_project_generation`（`be_planner → be_project_build → be_publish`）：镜像前端工程，在 `be-agent:latest` 容器里跑 Claude Code + Codex 写 **polyglot 后端工程**（自带 `Dockerfile`/健康检查/读 env），自检构建梯子（语法/契约校验，**不实跑**）。产物 `domain_ref_type=code_backend_project_*`。
+- `code_middleware_provisioning`（`mw_planner → mw_provision → mw_publish`）：从中间件清单生成 schema/迁移/seed 产物，**不实建库**（实建库在部署 run）。产物 `code_middleware_*`。
+- 三者皆 `COMPLETED` 后 `POST /api/code/projects/<pid>/deploy` 创建 `code_fullstack_deploy` run（`fs_deploy`，4 phase：provision→build→start→done）：中间件建库/迁移 → `docker build+run` 后端容器（注入 DB/Redis 连接）→ 健康检查 → 注册 `/app/<pid>/api` 反代 → 前端 dist 运行时 API base 指向它 → 端到端联通校验，**有序原子 + 任一步失败回滚**（`deploy_service.py`）。
+- 数据：`CodeProjectLedger`（共享契约 + 中间件清单 + 合并账本，乐观锁 `version`）、`CodeDeployment`（容器名/端口/db_name/redis_prefix/状态/健康/api_base_path），均在 `models/code/fullstack.py`，由 `create_all()` 建表。
+
+### 5.4 其它独立 workflow
+- `code_canvas_generation`（`code_canvas_workflow.py` + `services/agent/canvas_nodes.py`）：n8n 式 remix 画布——用户自绘 node graph，已完成的 stage 产物作为只读 source 预填，agent/merge/branch 节点拓扑序执行一次；branch 节点剪掉未选中的下游子图，节点结论可落 `CodeDocument` 或 stage 版本（`domain_ref_type=code_canvas_node`）。
+- `code_figma_slice_generation`（`code_figma_slice_workflow.py` + `figma_slice_service.py`）：把一张 UI 预览缩略图重建成可在 Figma 逐元素编辑的 Design IR（`fe_slice_planner → fe_slice_analyze → fe_slice_publish`，分析步在 `slicer-agent` 容器里跑 Codex CLI）。契约见 `docs/figma-ir-spec.md`。**任何失败静默降级成单图 IR**。
 
 ---
 
@@ -191,7 +212,7 @@ UI-baseline 确认（`status=ui_confirmed`）之后才生成前端。两个 work
   - 账本**仅内部/调试可见，绝不进入用户产出**。
 - **context_verifier.py**：两层，**都永不向上抛**（校验失败不能中断 run）。
   - `run_deterministic_checks`：非空、文档类型覆盖、必填账本字段、前端栈一致性——失败只发 `warning`。
-  - `run_ai_consistency_gate`：仅在**高风险边界**（`documents` 与 `frontend_build`）跑一次模型一致性闸，按 `pricing.CODE_CONTEXT_VERIFY` **逐次计费**。provider 未配置返回 `None`（跳过，不计费）；调用/解析出错 fail-open 返回无冲突并标 `degraded`。
+  - `run_ai_consistency_gate`：仅在**高风险边界**跑一次模型一致性闸——当前是 `documents` 步（`code_workflow`）以及容器工程生成步（`code_frontend_project_workflow`、`code_backend_project_workflow`）。按 `pricing.CODE_CONTEXT_VERIFY` **逐次计费**。闸门 prompt 已抽到 prompt store（`code/consistency_gate_prompt.txt`），不再硬编码。provider 未配置返回 `None`（跳过，不计费）；调用/解析出错 fail-open 返回无冲突并标 `degraded`。
   - 结果经 `emit_context_events` 发 `CONTEXT_UPDATED`/`CONTEXT_CONFLICT` 事件，并写入 step 的 context_snapshot/context_check。
 
 ---
@@ -244,7 +265,7 @@ UI-baseline 确认（`status=ui_confirmed`）之后才生成前端。两个 work
 ### 8.2 `/api/agent`（Agent Swarm，`@jwt_required`，owner 校验 `_get_owned_run`）
 | 方法 | 路径 | 用途 |
 |---|---|---|
-| POST | `/runs` | 创建并启动 run（校验 domain/workflow，预扣 `WORKFLOW_COSTS[workflow]`；每用户活跃 run 上限 `MAX_CONCURRENT_RUNS=2`，超限 429 `CONCURRENCY_LIMIT`）|
+| POST | `/runs` | 创建并启动 run（校验 domain/workflow，预扣 `WORKFLOW_COSTS[workflow]`；每用户活跃 run 上限 `MAX_CONCURRENT_RUNS`，默认 **6**（env `AGENT_MAX_CONCURRENT_RUNS`，为支撑全栈 3 并发 run 从 2 提到 6），超限 429 `CONCURRENCY_LIMIT`）|
 | GET | `/runs` | 列当前用户 run（按 domain/resource_id 过滤）|
 | GET | `/runs/<id>` | run + steps + events + artifacts 快照 |
 | GET | `/runs/<id>/stream` | SSE（`?last_sequence=` 断点续传）|
@@ -253,6 +274,20 @@ UI-baseline 确认（`status=ui_confirmed`）之后才生成前端。两个 work
 | GET | `/artifacts/<id>/file` | 下载产物（owner-only，`?download=1`）|
 | GET | `/runs/<id>/site/<path>` | iframe 预览容器构建产物（token 走 query→path-scoped cookie，带 `connect-src 'none'` CSP）|
 
+### 8.3 全栈编排（🆕，`fullstack_routes.py`，挂 `/api/code`）
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| POST | `/projects/<pid>/fullstack/runs` | 同步合成共享契约（写 `CodeProjectLedger`）+ 创建 3 个并发 run，返回 `{contract, runs:{frontend,backend,middleware}}` |
+| POST | `/projects/<pid>/deploy` | 创建 `code_fullstack_deploy` run（有序原子部署 + 回滚）|
+| GET | `/projects/<pid>/fullstack/status` | 三 run + 部署状态汇总 |
+| GET | `/projects/<pid>/contract` | 取共享 OpenAPI 契约 |
+| ANY | `/app/<pid>/api/<path>` | 反代到生成后端容器（部署后，`app_proxy_bp` 挂 `/app`）|
+
+### 8.4 会话级原生预览（`preview_routes.py`，挂 `/preview`）
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | `/preview/<project_id>/<path>` | 项目最近一段前端工程 run 的 dist 原生预览（token→cookie→302 鉴权；部署后感知 `/app/<pid>/api` 同源 API base）|
+
 统一响应：`{success, data, message}` / `{success:false, error, message}`，辅助函数 `backend/utils/response.py`。错误码：`VALIDATION_ERROR(400)`、`NOT_FOUND(404)`、`FORBIDDEN(403)`、`INSUFFICIENT_CREDITS(402)`、`CONCURRENCY_LIMIT(429)`、`INVALID_STATE(400)`、`SERVER_ERROR(500)`。
 
 ---
@@ -260,7 +295,9 @@ UI-baseline 确认（`status=ui_confirmed`）之后才生成前端。两个 work
 ## 9. 计费与积分
 
 - 单价集中在 `services/pricing.py`，每项可被 `PRICE_*` 环境变量覆盖：
-  - `CODE_FULL_GENERATION`(`PRICE_CODE_FULL`,默认0)、`CODE_FULL_GENERATION_TOTAL`(=前者，预扣)、`CODE_CONTEXT_VERIFY`(`PRICE_CODE_CONTEXT_VERIFY`,0)、`CODE_FRONTEND_GENERATION`(`PRICE_CODE_FRONTEND`,0)、`CODE_FRONTEND_PROJECT_GENERATION`(`PRICE_CODE_FRONTEND_PROJECT`,0)、`CODE_SECTION_REVISION`(`PRICE_CODE_SECTION_REVISE`,0)。
+  - 核心：`CODE_FULL_GENERATION`(`PRICE_CODE_FULL`,默认0)、`CODE_FULL_GENERATION_TOTAL`(=前者，预扣)、`CODE_CONTEXT_VERIFY`(`PRICE_CODE_CONTEXT_VERIFY`,0)、`CODE_FRONTEND_PROJECT_GENERATION`(`PRICE_CODE_FRONTEND_PROJECT`,0)、`CODE_SECTION_REVISION`(`PRICE_CODE_SECTION_REVISE`,0)。（旧 `CODE_FRONTEND_GENERATION`/`PRICE_CODE_FRONTEND` 随单文件流程一并删除。）
+  - 其它 run：`CODE_FIGMA_SLICE`/`CODE_FIGMA_SLICE_TOTAL`(`PRICE_CODE_FIGMA_SLICE`,0)、`CODE_FIGMA_EXPORT`(`PRICE_CODE_FIGMA_EXPORT`,0)、`CODE_CANVAS_RUN`/`CODE_CANVAS_NODE`(`PRICE_CODE_CANVAS_RUN`/`_NODE`,0)。
+  - 全栈（🆕）：`CODE_CONTRACT_SYNTHESIS`(`PRICE_CODE_CONTRACT_SYNTHESIS`,0)、`CODE_BACKEND_PROJECT_GENERATION`(`PRICE_CODE_BACKEND_PROJECT`,0)、`CODE_MIDDLEWARE_PROVISIONING`(`PRICE_CODE_MIDDLEWARE`,0)、`CODE_FULLSTACK_DEPLOY`(`PRICE_CODE_FULLSTACK_DEPLOY`,0)。
   - **当前 Code 域默认全 0（免费）**，但全部经 `charge()`/`refund_credits()`，0 当 no-op；设环境变量即可开计费，无需改码。
 - 时机：
   - 创建 run 时按 workflow 总价**预扣**（`deduct_credits`，原子 `UPDATE ... WHERE balance>=amount`，余额不足删 run 返 402）。
@@ -290,17 +327,22 @@ UI-baseline 确认（`status=ui_confirmed`）之后才生成前端。两个 work
   - `openLatestRunForResource(resourceId)`：调出某 Code 项目最近的 run 做过程回放；整条对话由事件回放派生（`deriveConversation`）。
 - **CodeStudio**（`pages/code/CodeStudio.tsx`）：单列会话式工作台。顶部 `CodeStepper` 跟踪五个 stage；对话区是主界面，构建通过聊天驱动，预览作为内联可折叠产物卡折进对话。`handleStart` 用 `startRun({workflow:"code_full_generation", config:{requirement,title,style_ids}})`；`approve/revise` 走 `resumeRun`。预览缩略图在右侧滑入栏 `PreviewThumbnailPanel`。
 - **组件树**：`CodeStudio → ConversationRail(+RequirementsClarifyDialog +StageArtifactCard) + PreviewThumbnailPanel + AgentRunPanel + CodeStepper`；`StageArtifactCard →（SelectionReviseTextarea 划选修订 + StageHistoryDialog 版本弹窗 + CodeAppPreview 前端预览）`。
-- **前端工程预览**（`CodeAppPreview`）：`FRONTEND_WORKFLOW="code_frontend_project_generation"`；从当前 run 或回放最近 project run 取 `code_frontend_project_meta` 的 `preview_url`，用 `<iframe sandbox="allow-forms allow-modals allow-scripts allow-same-origin">` 指向 `/api/agent/runs/<id>/site/index.html?token=...`（token 进 query，后端镜像到 path-scoped cookie；站点 `connect-src 'none'` CSP 防外联）。源码 zip 经鉴权 `downloadArtifact` 下载。
+- **前端工程预览**（`CodeAppPreview`）：`FRONTEND_WORKFLOW="code_frontend_project_generation"`；从当前 run 或回放最近 project run 取 `code_frontend_project_meta` 的 `preview_url`（**守卫 `preview_url` 非空**，避开同 `resource_id` 下验收评审 `code_frontend_project_review` 行取错导致的空白预览）。已**去 iframe 改为预览按钮在新标签打开**（`window.open(..., "_blank", "noopener,noreferrer")`）：最新版走干净的会话级 `/preview/<projectId>/?token=...`（顶层 nginx 映射，token→path-scoped cookie→302 鉴权；部署后该路由会注入同源 `/app/<pid>/api` base），历史版走 `/api/agent/runs/<runId>/site/index.html?token=...`。源码 zip 经鉴权 `downloadArtifact` 下载。
 - **i18n**：i18next，命名空间 JSON 在 `src/locales/{en,ja,ko,zh-CN}/`（`code`、`agent`、`codeapp`、`errors` 等）。新 key 要四语言齐全，别硬编码文案。
 
 ---
 
 ## 12. Prompt 体系（`backend/prompts/code/*.txt` + `prompt_library`）
 
+- **BMAD 骨架**：Code 阶段 prompt 已按「角色与原则 / 输入（视为既定事实）/ 本阶段职责与边界 / 产出契约（唯一权威）/ 交付前自检」五段重构，带稳定 `FR/NFR/M/MS` 编号与「不做(交给下游)」边界（commit `c5e782e`）。Code 配方拼 `{system_prefix}` 时传 `include_output_contract=False`，不再附加通用 `OUTPUT_CONTRACT`，以免与各阶段「产出契约」冲突。
 - **两种占位符风格，别混用**：
   - `generation_service`（文本文档）用 **`str.format`** → 占位符 `{system_prefix}`、`{context_ledger}`、`{requirement}`、`{requirements_doc}`、`{development_flow}`、`{current_doc}`、`{instruction}`、`{selected_text}`、`{styles}`、`{current_documents}`。**模板里的 JSON 示例花括号必须写成 `{{ }}` 转义**，否则 `.format()` 报错（`test_code_json_parsing.py` 覆盖了模型 JSON 解析健壮性）。
-  - `frontend_build_service` / `frontend_project_service`（含 JSX `{ }`）用 **`str.replace`** → 占位符 `[[CONTEXT_LEDGER]]`、`[[REQUIREMENT]]`、`[[REQUIREMENTS_DOC]]`、`[[DEVELOPMENT_FLOW]]`、`[[DOCUMENTS]]`、`[[STYLE_PROMPT]]`、`[[UI_BASELINE]]`、`[[HTML]]`、`[[ISSUES]]`。这样模板正文里的 `{ }` 不会被误解析。
-- 模板清单：`requirements_prompt`、`requirements_revision_prompt`、`requirements_clarify_prompt`、`requirements_section_revision_prompt`、`development_flow_prompt`(+`_revision`/`_section_revision`)、`document_split_prompt`(+`_revision`/`_section_revision`)、`style_prompt`(+`_revision`/`_section_revision`)、`frontend_build_prompt`、`frontend_critic_prompt`、`frontend_repair_prompt`、`frontend_project_prompt`、`frontend_project_repair_prompt`。
+  - 容器工程 service（`frontend_project_service` / `backend_project_service` / `middleware_service` / `figma_slice_service`，含 JSX/代码 `{ }`）与 fill 模板用 **`str.replace`/`_fill`** → 占位符如 `[[CONTEXT_LEDGER]]`、`[[REQUIREMENT]]`、`[[REQUIREMENTS_DOC]]`、`[[DEVELOPMENT_FLOW]]`、`[[DOCUMENTS]]`、`[[STYLE_PROMPT]]`、`[[UI_BASELINE]]`、`[[FIGMA_DESIGN]]`、`[[CONTRACT]]`。这样模板正文里的 `{ }` 不会被误解析。**fill 模板里每个 `[[KEY]]` 只能出现一次**（`_fill` 是 replace-all，重复会让 prompt 翻倍 → 容器超时降级，`validate_code_prompts.py` 已加检查）。
+- 模板清单（当前 `backend/prompts/code/`）：
+  - 文本阶段（`.format`）：`requirements_prompt`(+`_revision`/`_section_revision`)、`requirements_clarify_prompt`、`development_flow_prompt`(+`_revision`/`_section_revision`)、`document_split_prompt`(+`_revision`)、`document_section_revision_prompt`、`style_prompt`(+`_revision`/`_section_revision`)、`consistency_gate_prompt`（AI 一致性闸，已抽到 prompt store）。
+  - 容器工程（fill）：`frontend_project_prompt`、`frontend_project_repair_prompt`、`frontend_project_critic_prompt`、`backend_project_prompt`、`backend_project_repair_prompt`、`backend_project_critic_prompt`、`middleware_prompt`、`contract_synthesis_prompt`（`.format`，产 OpenAPI+中间件清单 JSON）、`figma_slice_prompt`、`html_to_figma_ir_prompt`。
+  - **已删**（随单文件流程）：`frontend_build_prompt`、`frontend_critic_prompt`、`frontend_repair_prompt`、`*_from_figma`。
+  - ⚠️ 运行时 prompt 从 MongoDB `prompts` collection 读，改 `.txt` **不会自动生效**：须 `scripts/sync_code_prompts.py` 同步进 Mongo（`seed_defaults()` 只插缺失 key，从不覆盖已存文档）。改后过 `scripts/validate_code_prompts.py` + `tests/test_code_prompts.py` CI 守护。
 - **prompt_library**（`services/prompt_library/internet_roles.py`）：角色前缀库。`compose_recipe_prompt(recipe_id)` 把一组角色拼成 `{system_prefix}`；当前用到的 recipe：`product_requirement`（需求/风格/澄清）、`engineering_implementation`（流程/文档）。`compose_system_prompt(primary, secondary, ...)` 供 `/prompt-prefixes/compose` 端点组装完整 system prompt（base 前缀 + 角色 + 输出契约）。`route_prefixes(task)` 确定性路由任务到角色。
 - JSON 解析健壮性（`generation_service`）：`_strip_code_fence`（只剥整体围栏，不误伤内部代码块）、`_loads_tolerant`（`strict=False` + 尾逗号修复重试）、`_extract_json_objects`（截断时逐对象抢救）。
 
@@ -314,8 +356,13 @@ UI-baseline 确认（`status=ui_confirmed`）之后才生成前端。两个 work
 | `AI_TEXT_READ_TIMEOUT` | Claude 单请求读超时(s) | 120 |
 | `OPENAI_API_KEY` / `AI_IMAGE_*` | 图像 provider（预览图）| — |
 | `CODE_PREVIEW_SETTLE_SECONDS` | 预览图逐张间隔(s, 0–30) | 2.0 |
-| `PRICE_CODE_FULL` / `PRICE_CODE_CONTEXT_VERIFY` / `PRICE_CODE_FRONTEND` / `PRICE_CODE_FRONTEND_PROJECT` / `PRICE_CODE_SECTION_REVISE` | 各操作积分单价 | 0 |
-| `FE_AGENT_IMAGE` | 容器镜像 | `fe-agent:latest` |
+| `AGENT_MAX_WORKERS` | runtime 线程池上限（全进程并发 run）| 8 |
+| `AGENT_MAX_CONCURRENT_RUNS` | 每用户活跃 run 上限 | 6 |
+| `PRICE_CODE_FULL` / `_CONTEXT_VERIFY` / `_FRONTEND_PROJECT` / `_SECTION_REVISE` / `_FIGMA_SLICE` / `_CANVAS_RUN` / `_CONTRACT_SYNTHESIS` / `_BACKEND_PROJECT` / `_MIDDLEWARE` / `_FULLSTACK_DEPLOY` | 各操作积分单价（见 §9）| 0 |
+| `FE_AGENT_IMAGE` | 前端容器镜像 | `fe-agent:latest` |
+| `BE_AGENT_IMAGE` | 后端容器镜像（🆕 全栈）| `be-agent:latest` |
+| `CODEX_TIMEOUT` | Figma 切片 Codex 容器超时(s) | 300（生产 compose 设 900）|
+| `APP_NETWORK` / `APP_BACKEND_PORT` | 🆕 全栈：生成后端容器接入的 compose 网络 / 后端容器内监听端口 | `ai-creative-studio-net` / 8080 |
 | `DOCKER_BIN` | docker 可执行 | `docker` |
 | `FE_AGENT_TIMEOUT/REPAIR_TIMEOUT/NPM_TIMEOUT/BUILD_TIMEOUT/TOTAL_TIMEOUT` | 容器各阶段超时(s) | 720/300/240/180/2400 |
 
@@ -340,7 +387,7 @@ UI-baseline 确认（`status=ui_confirmed`）之后才生成前端。两个 work
 3. **加 stage 字段/产物**：参考另一个 stage 的既有写法（写回 `CodeProject` → `safe_record_stage_version` → step.add_artifact → ledger.merge → 校验）。
 4. **加 AI provider**：实现 `AIProvider` 两方法（不支持的能力返回 `success=False` 不抛），在 `factory._create_provider` 挂分支，别绕过 capability 路由直接 new。
 5. **改计费**：只动 `pricing.py` 常量或环境变量，别把成本散落各处。
-6. **容器前端生成上线前**：确认部署环境能 `docker run`，镜像 `fe-agent:latest` 已构建，`ANTHROPIC_API_KEY` 在后端进程可见。
+6. **容器生成上线前**：确认部署环境能 `docker run`，`ANTHROPIC_API_KEY` 在后端进程可见，并 `docker compose --profile setup build` 预构建 `fe-agent` / `be-agent`（全栈）/ `slicer-agent`（Figma 切片）镜像；全栈部署还要求平台 backend 与生成的后端容器同在 compose 网络（`APP_NETWORK`）。
 
 ---
 
@@ -368,15 +415,14 @@ UI-baseline 确认（`status=ui_confirmed`）之后才生成前端。两个 work
 - `q.get(timeout=15)` keepalive 硬编码；长连接可能被代理中断，靠客户端 reconnect。
 
 ### 运行时
-- `ThreadPoolExecutor(max_workers=4)` 是全进程硬上限：4 个长 run 会排队；stalled 流靠 Claude 超时释放槽（已加），但容器前端生成可跑很久。
+- `ThreadPoolExecutor(max_workers=8)`（env `AGENT_MAX_WORKERS`）是全进程硬上限：超出的长 run 会排队；stalled 流靠 Claude 超时释放槽（已加），但容器工程生成可跑很久。**全栈一次起 3 个并发容器构建 run**，对线程池/宿主 Docker 压力更大，部署前要确保 worker 与宿主资源充裕。
 - executor 无优雅 shutdown，进程退出不等在跑的 run。
 - 容器前端生成 hard 依赖宿主 Docker + 镜像 + key；CLI 绕过 provider 抽象，成本/用量靠 CLI 自报。`bypassPermissions` 在沙箱内运行，安全性依赖容器隔离（非 root node 用户、仅挂 `/out`、`--rm`、`connect-src 'none'` 预览 CSP）。
 
 ### 文档偏差（接手前务必知道）
-- **`code_frontend_generation` ≠ Sandpack/React+TS**：实为单文件 HTML，且已被容器多文件工程取代为默认；CLAUDE.md 此处过时。
-- **CLAUDE.md 只列了两个前端 workflow**，实际有三个（漏了 `code_frontend_project_generation`，它才是当前默认）。
-- `README.md`/`AGENTS.md` 整体落后（端口、默认 provider、域覆盖均不准），别依赖。
-- CLAUDE.md 未提 `CodeStageVersion`（分阶段版本历史）这张表。
+- **CLAUDE.md 已对齐当前代码**：单文件流程移除、`code_canvas_generation`/`code_figma_slice_generation`、BMAD prompt 重构均已写入，不再有前述前端 workflow 偏差。
+- **`README.md`/`AGENTS.md` 整体落后**（端口、默认 provider、域覆盖均不准，且只描述 PPT/RedBook），别依赖——以本文与 CLAUDE.md 为准。
+- **全栈生成（后端/中间件/部署）已落代码并通过单测 + 实环境部署冒烟**：7 个 workflow 里的后 3 个、`models/code/fullstack.py`、`fullstack_routes.py`、`be-agent` 镜像、前端 `fullstackStore`/`CodeFullstackPanel` 均已实现并接线，CLAUDE.md 已更新为 7-workflow 构成。设计权威见 `docs/code-fullstack-generation.md`。**注意:`tests/test_fullstack_pipeline.py` 只覆盖纯逻辑（provider mock + sqlite 分支）——`docker build/run`、真实 postgres 建库、健康检查、反代转发等副作用路径未进单测,上线前须在目标 compose 栈内做端到端验证**（已在开发环境用最小后端镜像验证「build → 共享网运行 → 容器名 DNS 健康检查 → DATABASE_URL 注入」这一部署原语可用）。
 
 ---
 
@@ -386,16 +432,17 @@ UI-baseline 确认（`status=ui_confirmed`）之后才生成前端。两个 work
 |---|---|
 | 主流程 7 步 | `backend/services/agent/workflows/code_workflow.py` |
 | 容器前端生成 | `backend/services/agent/workflows/code_frontend_project_workflow.py` + `backend/services/code/frontend_project_service.py` |
-| 单文件 HTML（遗留）| `backend/services/agent/workflows/code_frontend_workflow.py` + `backend/services/code/frontend_build_service.py` |
+| 全栈：后端/中间件/部署（🆕）| `workflows/code_{backend_project,middleware,fullstack_deploy}_workflow.py` + `services/code/{backend_project_service,middleware_service,deploy_service}.py` + `services/code/fullstack/contract_service.py` |
+| 画布 / Figma 切片 | `workflows/code_canvas_workflow.py`+`services/agent/canvas_nodes.py` / `workflows/code_figma_slice_workflow.py`+`services/code/figma_slice_service.py` |
 | 文本生成/解析/澄清/局部修订 | `backend/services/code/generation_service.py` |
 | 版本历史/回滚 | `backend/services/code/version_service.py` |
 | 上下文账本 / 校验 | `backend/services/agent/context_ledger.py` / `context_verifier.py` |
 | 运行底座 | `backend/services/agent/{runtime,recorder,bus,files,schemas}.py` |
-| HTTP | `backend/routes/code/project_routes.py` / `backend/routes/agent_routes.py` |
+| HTTP | `backend/routes/code/{project_routes,fullstack_routes,preview_routes,figma_routes}.py` / `backend/routes/agent_routes.py` |
 | 计费 | `backend/services/pricing.py` / `backend/services/credit_service.py` |
 | 角色提示词 | `backend/services/prompt_library/internet_roles.py` |
-| 模型 | `backend/models/code/{project,stage_version}.py` / `backend/models/agent/*` |
-| 前端 | `frontend/src/pages/code/CodeStudio.tsx` / `frontend/src/stores/{codeStore,agentStore}.ts` / `frontend/src/api/{code,agent}.ts` / `frontend/src/components/{code,agent}/*` |
-| 既有文档 | `docs/agent-context-ledger.md` / `docs/requirements-clarify-spec.md` |
+| 模型 | `backend/models/code/{project,stage_version,fullstack}.py` / `backend/models/agent/*` |
+| 前端 | `frontend/src/pages/code/CodeStudio.tsx` / `frontend/src/stores/{codeStore,agentStore,fullstackStore}.ts` / `frontend/src/api/{code,agent,fullstack}.ts` / `frontend/src/components/{code,agent}/*` |
+| 既有文档 | `docs/agent-context-ledger.md` / `docs/requirements-clarify-spec.md` / `docs/code-fullstack-generation.md` / `docs/figma-ir-spec.md` |
 </content>
 </invoke>

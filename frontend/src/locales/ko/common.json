@@ -18,6 +18,7 @@
       "redbook": "RedBook"
     },
     "newSession": "새 세션",
+    "currentSession": "현재 세션",
     "recentSessions": "최근",
     "viewAll": "전체 보기",
     "noSessions": "세션 없음",

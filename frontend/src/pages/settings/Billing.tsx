@@ -28,14 +28,14 @@ export function Billing() {
     },
     {
       id: "pro",
-      price: 49,
+      price: 449,
       credits: 300,
       popular: true,
       icon: Crown,
     },
     {
       id: "team",
-      price: 149,
+      price: 1149,
       credits: 1000,
       icon: CreditCard,
     },

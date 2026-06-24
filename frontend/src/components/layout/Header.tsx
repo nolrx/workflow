@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 import { Bell, Menu, User } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -10,7 +11,7 @@ interface HeaderProps {
 export function Header({ title, onMenuClick }: HeaderProps) {
   const { t } = useTranslation("common")
   return (
-    <header className="z-30 flex h-16 shrink-0 items-center justify-between border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60 lg:px-6">
+    <header className="z-40 flex h-16 shrink-0 items-center justify-between border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60 lg:px-6">
       <div className="flex items-center gap-3">
         <Button
           variant="ghost"
@@ -21,7 +22,20 @@ export function Header({ title, onMenuClick }: HeaderProps) {
         >
           <Menu className="h-5 w-5" />
         </Button>
-        {title && <h1 className="text-lg font-semibold">{title}</h1>}
+
+        <Link to="/" className="flex items-center gap-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+            <span className="text-sm font-bold">{t("brand.name")}</span>
+          </div>
+          <span className="font-semibold">{t("brand.subtitle")}</span>
+        </Link>
+
+        {title && (
+          <>
+            <div className="hidden h-6 w-px bg-border lg:block" />
+            <h1 className="hidden text-lg font-semibold lg:block">{title}</h1>
+          </>
+        )}
       </div>
 
       <div className="flex items-center gap-2">

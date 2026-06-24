@@ -42,5 +42,14 @@
     "downloadSource": "下载源码",
     "downloadRepaired": "下载修复版",
     "downloadRepairedCount": "修复版源码({{count}})",
-    "repairedTooltip": "部署时自动修复了 {{count}} 个后端文件以贴合契约——下载修复版源码(线上运行的正是这一版)。"
+    "repairedTooltip": "部署时自动修复了 {{count}} 个后端文件以贴合契约——下载修复版源码(线上运行的正是这一版)。",
+    "git": {
+        "resync": "重新推送",
+        "synced": "已推送到 GitHub",
+        "syncFailed": "推送到 GitHub 失败",
+        "copied": "已复制",
+        "copy": "复制",
+        "branchHint": "平台每次以已验证快照覆盖 {{main}} 分支;二次开发请在 {{dev}} 分支上进行。",
+        "devNote": "{{dev}} 分支归你所有——平台从不触碰,你的改动不会被覆盖。"
+    }
 }

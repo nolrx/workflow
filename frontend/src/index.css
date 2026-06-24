@@ -390,24 +390,30 @@ button:not(:disabled),
 }
 
 /* Smooth dialog overlay + content animations.
-   Only opacity and scale are animated so the existing centering transform
-   (left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2) stays intact. */
+   Centering comes from Tailwind's translate-x/y utilities, which in Tailwind v4
+   compile to the independent `translate:` property. We therefore animate the
+   independent `scale:` property (NOT `transform`) so the scale composes with that
+   translate instead of replacing it — the dialog scales about its own centre and
+   stays centred.
+   We deliberately avoid `will-change` and `forwards`: pinning a permanent
+   compositor layer + residual transform on the content reordered it behind the
+   overlay (the modal looked like it never popped up) and swallowed the first
+   wheel-scroll inside the style list. Without them the content settles into its
+   natural, layer-free resting state (opacity 1 / no scale) once the entrance ends. */
 .animated-dialog-overlay[data-state="open"] {
-  animation: dialog-overlay-in 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: dialog-overlay-in 0.28s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .animated-dialog-overlay[data-state="closed"] {
-  animation: dialog-overlay-out 0.2s cubic-bezier(0.4, 0, 1, 1) forwards;
+  animation: dialog-overlay-out 0.2s cubic-bezier(0.4, 0, 1, 1);
 }
 
 .animated-dialog-content[data-state="open"] {
-  animation: dialog-content-in 0.32s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  will-change: transform, opacity;
+  animation: dialog-content-in 0.32s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .animated-dialog-content[data-state="closed"] {
-  animation: dialog-content-out 0.2s cubic-bezier(0.4, 0, 1, 1) forwards;
-  will-change: transform, opacity;
+  animation: dialog-content-out 0.2s cubic-bezier(0.4, 0, 1, 1);
 }
 
 @keyframes dialog-overlay-in {
@@ -431,22 +437,22 @@ button:not(:disabled),
 @keyframes dialog-content-in {
   from {
     opacity: 0;
-    transform: scale3d(0.96, 0.96, 1);
+    scale: 0.96;
   }
   to {
     opacity: 1;
-    transform: scale3d(1, 1, 1);
+    scale: 1;
   }
 }
 
 @keyframes dialog-content-out {
   from {
     opacity: 1;
-    transform: scale3d(1, 1, 1);
+    scale: 1;
   }
   to {
     opacity: 0;
-    transform: scale3d(0.98, 0.98, 1);
+    scale: 0.98;
   }
 }
 

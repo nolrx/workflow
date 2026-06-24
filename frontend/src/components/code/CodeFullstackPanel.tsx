@@ -28,6 +28,7 @@ import { toast } from "sonner"
 
 import { agentApi, type AgentRunStatus, type AgentStepStatus } from "@/api/agent"
 import { tokenManager } from "@/api/client"
+import { GitHubDeliveryCard } from "@/components/code/GitHubDeliveryCard"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
@@ -453,6 +454,7 @@ export function CodeFullstackPanel() {
               {t("apiBase", { base: deployment.api_base_path })}
             </p>
           )}
+          {project?.id && <GitHubDeliveryCard projectId={project.id} />}
         </div>
       )}
     </div>

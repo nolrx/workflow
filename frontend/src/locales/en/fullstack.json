@@ -42,5 +42,14 @@
     "downloadSource": "Download source",
     "downloadRepaired": "Download fixed",
     "downloadRepairedCount": "Fixed source ({{count}})",
-    "repairedTooltip": "Deploy auto-fixed {{count}} backend file(s) to match the contract — download the repaired source (this is what the running app was built from)."
+    "repairedTooltip": "Deploy auto-fixed {{count}} backend file(s) to match the contract — download the repaired source (this is what the running app was built from).",
+    "git": {
+        "resync": "Re-push",
+        "synced": "Pushed to GitHub",
+        "syncFailed": "Push to GitHub failed",
+        "copied": "Copied",
+        "copy": "Copy",
+        "branchHint": "The platform overwrites the {{main}} branch with each validated snapshot; do your secondary development on the {{dev}} branch.",
+        "devNote": "The {{dev}} branch is yours — the platform never touches it, so your changes are never overwritten."
+    }
 }

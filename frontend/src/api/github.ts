@@ -30,6 +30,21 @@ export interface GitHubRepo {
   last_status: string | null
   created_at?: string | null
   updated_at?: string | null
+  // The branch the platform forks (once) for secondary development + a clone URL.
+  dev_branch?: string | null
+  clone_url?: string | null
+}
+
+export interface GitHubSyncResult {
+  status: string
+  repo_url?: string | null
+  full_name?: string
+  branch?: string
+  commit_sha?: string
+  files?: number
+  dev_branch?: string
+  skipped?: { path: string; size: number }[]
+  error?: string
 }
 
 export interface GitHubPush {
@@ -74,5 +89,12 @@ export const githubApi = {
       `/code/github/projects/${projectId}/pushes`
     )
     return response.data.pushes
+  },
+  // Idempotent self-service re-push (reuses the auto-sync path server-side).
+  syncProject: async (projectId: string): Promise<GitHubSyncResult> => {
+    const response = await api.post<Envelope<GitHubSyncResult>>(
+      `/code/github/projects/${projectId}/sync`
+    )
+    return response.data
   },
 }

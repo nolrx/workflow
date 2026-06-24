@@ -42,5 +42,14 @@
     "downloadSource": "소스 다운로드",
     "downloadRepaired": "수정본 다운로드",
     "downloadRepairedCount": "수정본 소스 ({{count}})",
-    "repairedTooltip": "배포 시 계약에 맞추기 위해 백엔드 파일 {{count}}개를 자동 수정했습니다 — 수정본 소스를 다운로드하세요(실행 중인 앱은 이 버전으로 빌드되었습니다)."
+    "repairedTooltip": "배포 시 계약에 맞추기 위해 백엔드 파일 {{count}}개를 자동 수정했습니다 — 수정본 소스를 다운로드하세요(실행 중인 앱은 이 버전으로 빌드되었습니다).",
+    "git": {
+        "resync": "다시 푸시",
+        "synced": "GitHub에 푸시했습니다",
+        "syncFailed": "GitHub 푸시에 실패했습니다",
+        "copied": "복사됨",
+        "copy": "복사",
+        "branchHint": "플랫폼은 검증된 스냅샷으로 {{main}} 브랜치를 매번 덮어씁니다. 2차 개발은 {{dev}} 브랜치에서 진행하세요.",
+        "devNote": "{{dev}} 브랜치는 사용자의 것입니다 — 플랫폼이 건드리지 않으므로 변경 사항이 덮어써지지 않습니다."
+    }
 }

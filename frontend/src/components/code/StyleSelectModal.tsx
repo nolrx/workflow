@@ -112,7 +112,7 @@ export function StyleSelectModal({ open, onOpenChange }: StyleSelectModalProps) 
                 {t("style.emptySearch")}
               </div>
             ) : (
-              <div className="grid max-h-[40vh] gap-3 overflow-y-auto pr-1 sm:grid-cols-2">
+              <div className="grid max-h-[40vh] gap-3 overflow-y-auto overscroll-contain pr-1 sm:grid-cols-2">
                 {filteredStyles.map((style) => {
                   const checked = draftIds.includes(style.id)
                   return (

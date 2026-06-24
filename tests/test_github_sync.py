@@ -1,10 +1,15 @@
 """
 Unit tests for GitHub auto-sync assembly + push (no network, no DB).
 
-Covers the deterministic file-set layout (`collect_project_files`), the Git Data
-API call sequence of a full-snapshot push (`push_snapshot`), and that
-`autosync_after_run` is a clean no-op when the integration is unconfigured.
+Covers the deterministic full-stack file-set layout (`collect_project_files`),
+the zip unpack prefixing + oversized-skip reporting, the deploy-validated backend
+preference, the Git Data API call sequence of a full-snapshot push
+(`push_snapshot`), the idempotent secondary-dev branch fork (`_ensure_dev_branch`),
+the deploy-aware commit message, and that `autosync_after_run` is a clean no-op
+when the integration is unconfigured.
 """
+import io
+import zipfile
 from types import SimpleNamespace
 
 from backend.services.code.github import sync_service
@@ -27,6 +32,15 @@ def _fake_project(**overrides):
     return SimpleNamespace(documents=SimpleNamespace(all=lambda: docs), **defaults)
 
 
+def _patch_collectors(monkeypatch, *, frontend=None, backend=None, middleware=None, contract=None, dist=None):
+    """Isolate collect_project_files from the DB by stubbing every component collector."""
+    monkeypatch.setattr(sync_service, "_collect_frontend_source", lambda pid, skipped=None: dict(frontend or {}))
+    monkeypatch.setattr(sync_service, "_collect_backend_source", lambda pid, skipped=None: dict(backend or {}))
+    monkeypatch.setattr(sync_service, "_collect_middleware", lambda pid: dict(middleware or {}))
+    monkeypatch.setattr(sync_service, "_collect_contract", lambda pid: dict(contract or {}))
+    monkeypatch.setattr(sync_service, "_collect_dist", lambda pid: dict(dist or {}))
+
+
 # --- naming ------------------------------------------------------------------
 def test_repo_name_is_slugged_and_suffixed(monkeypatch):
     monkeypatch.delenv("GITHUB_REPO_PREFIX", raising=False)
@@ -40,10 +54,76 @@ def test_repo_name_prefix(monkeypatch):
     assert name.startswith("studio-")
 
 
-# --- file collection ---------------------------------------------------------
+# --- zip unpack: prefixing + oversized reporting -----------------------------
+def test_unzip_prefixes_and_reports_oversized(monkeypatch, tmp_path):
+    monkeypatch.setattr(sync_service, "upload_root", lambda: tmp_path)
+    monkeypatch.setattr(sync_service, "_MAX_FILE_BYTES", 5)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("main.py", b"ok")  # 2 bytes -> kept
+        zf.writestr("big.bin", b"x" * 20)  # 20 bytes -> skipped
+    (tmp_path / "be.zip").write_bytes(buf.getvalue())
+
+    artifact = SimpleNamespace(id="a1", storage_path="be.zip")
+    skipped: list = []
+    files = sync_service._unzip_artifact_files(artifact, prefix="backend/", skipped=skipped)
+
+    assert files == {"backend/main.py": b"ok"}
+    assert skipped == [{"path": "backend/big.bin", "size": 20}]
+
+
+def test_unzip_missing_artifact_is_empty(monkeypatch, tmp_path):
+    monkeypatch.setattr(sync_service, "upload_root", lambda: tmp_path)
+    assert sync_service._unzip_artifact_files(None, prefix="backend/", skipped=None) == {}
+    art = SimpleNamespace(id="a1", storage_path="nope.zip")
+    assert sync_service._unzip_artifact_files(art, prefix="backend/", skipped=None) == {}
+
+
+# --- backend prefers the deploy-validated (repaired) source -------------------
+def test_backend_prefers_repaired_source(monkeypatch):
+    seen = []
+
+    def fake_latest(pid, drt):
+        seen.append(drt)
+        return SimpleNamespace(id=drt) if drt == "code_backend_project_repaired_zip" else None
+
+    captured = {}
+
+    def fake_unzip(artifact, *, prefix, skipped=None):
+        captured["artifact"] = artifact
+        captured["prefix"] = prefix
+        return {f"{prefix}main.py": b"x"}
+
+    monkeypatch.setattr(sync_service, "_latest_artifact", fake_latest)
+    monkeypatch.setattr(sync_service, "_unzip_artifact_files", fake_unzip)
+
+    out = sync_service._collect_backend_source("p1")
+    assert seen[0] == "code_backend_project_repaired_zip"  # repaired queried first
+    assert captured["artifact"].id == "code_backend_project_repaired_zip"
+    assert captured["prefix"] == "backend/"
+    assert "backend/main.py" in out
+
+
+def test_backend_falls_back_to_generation_source(monkeypatch):
+    def fake_latest(pid, drt):
+        return SimpleNamespace(id=drt) if drt == "code_backend_project_zip" else None
+
+    captured = {}
+
+    def fake_unzip(artifact, *, prefix, skipped=None):
+        captured["artifact"] = artifact
+        return {f"{prefix}app.py": b"x"}
+
+    monkeypatch.setattr(sync_service, "_latest_artifact", fake_latest)
+    monkeypatch.setattr(sync_service, "_unzip_artifact_files", fake_unzip)
+
+    sync_service._collect_backend_source("p1")
+    assert captured["artifact"].id == "code_backend_project_zip"
+
+
+# --- file collection / layout ------------------------------------------------
 def test_collect_docs_and_generated_readme(monkeypatch):
-    monkeypatch.setattr(sync_service, "_collect_frontend_source", lambda pid: {})
-    monkeypatch.setattr(sync_service, "_collect_dist", lambda pid: {})
+    _patch_collectors(monkeypatch)
     docs = [
         SimpleNamespace(order_index=0, title="API 设计", content="api doc"),
         SimpleNamespace(order_index=1, title="Data Model", content="data doc"),
@@ -56,29 +136,69 @@ def test_collect_docs_and_generated_readme(monkeypatch):
     assert "docs/ui-baseline.md" not in files  # None field omitted
     assert any(p.startswith("docs/00-") for p in files)
     assert any(p.startswith("docs/01-data-model") for p in files)
-    # No source -> a README is generated.
+    # A README + .gitignore are always generated for the monorepo root.
     assert b"My Cool App" in files["README.md"]
+    assert "node_modules/" in files[".gitignore"].decode()
 
 
-def test_collect_keeps_project_own_readme(monkeypatch):
-    source = {"package.json": b"{}", "src/App.tsx": b"x", "README.md": b"project readme"}
-    monkeypatch.setattr(sync_service, "_collect_frontend_source", lambda pid: dict(source))
-    monkeypatch.setattr(sync_service, "_collect_dist", lambda pid: {})
-    files = sync_service.collect_project_files(_fake_project())
-
-    assert files["package.json"] == b"{}"
-    assert files["src/App.tsx"] == b"x"
-    # The project's own README wins over a generated one.
-    assert files["README.md"] == b"project readme"
-
-
-def test_collect_includes_dist(monkeypatch):
-    monkeypatch.setattr(sync_service, "_collect_frontend_source", lambda pid: {"index.tsx": b"x"})
-    monkeypatch.setattr(
-        sync_service, "_collect_dist", lambda pid: {"dist/index.html": b"<html>"}
+def test_collect_fullstack_layout(monkeypatch):
+    _patch_collectors(
+        monkeypatch,
+        frontend={"frontend/package.json": b"{}", "frontend/src/App.tsx": b"x"},
+        backend={"backend/Dockerfile": b"FROM node", "backend/main.py": b"y"},
+        middleware={"db/init.sql": b"CREATE TABLE t();"},
+        contract={"contract/openapi.json": b"{}"},
     )
     files = sync_service.collect_project_files(_fake_project())
-    assert files["dist/index.html"] == b"<html>"
+
+    assert files["frontend/package.json"] == b"{}"
+    assert files["backend/Dockerfile"] == b"FROM node"
+    assert files["db/init.sql"]
+    assert files["contract/openapi.json"]
+    # README mentions the full-stack layout + the secondary-dev branch.
+    readme = files["README.md"].decode()
+    assert "frontend/" in readme and "backend/" in readme
+    assert sync_service.dev_branch_name() in readme
+
+
+def test_collect_dist_passthrough(monkeypatch):
+    _patch_collectors(
+        monkeypatch,
+        frontend={"frontend/index.tsx": b"x"},
+        dist={"frontend/dist/index.html": b"<html>"},
+    )
+    files = sync_service.collect_project_files(_fake_project())
+    assert files["frontend/dist/index.html"] == b"<html>"
+
+
+def test_dist_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("GITHUB_PUSH_DIST", raising=False)
+    assert sync_service._push_dist_enabled() is False
+    monkeypatch.setenv("GITHUB_PUSH_DIST", "true")
+    assert sync_service._push_dist_enabled() is True
+
+
+# --- commit message ----------------------------------------------------------
+def test_commit_message_non_deploy():
+    msg = sync_service._commit_message(_fake_project(), "code_full_generation", "runid12345")
+    assert msg.startswith("chore: sync code_full_generation")
+    assert "session proj1234" in msg
+
+
+def test_commit_message_deploy_includes_image_tag(monkeypatch):
+    fake_dep = SimpleNamespace(image_tag="app-deadbeef:itest1")
+
+    class _Q:
+        def filter_by(self, **kw):
+            return self
+
+        def first(self):
+            return fake_dep
+
+    monkeypatch.setattr(sync_service, "CodeDeployment", SimpleNamespace(query=_Q()))
+    msg = sync_service._commit_message(_fake_project(), "code_fullstack_deploy", "runid12345")
+    assert msg.startswith("deploy:")
+    assert "app-deadbeef:itest1" in msg
 
 
 # --- push snapshot -----------------------------------------------------------
@@ -121,7 +241,7 @@ def _link():
 
 def test_push_snapshot_empty_repo_creates_ref():
     client = _FakeClient(existing_ref=None)
-    files = {"README.md": b"hi", "src/a.ts": b"x"}
+    files = {"README.md": b"hi", "frontend/src/a.ts": b"x"}
     sha = sync_service.push_snapshot(client, _link(), files, "msg")
 
     assert sha == "commit-sha"
@@ -144,6 +264,33 @@ def test_push_snapshot_existing_repo_updates_ref():
     commit = next(c for c in client.calls if c[0] == "create_commit")
     assert commit[2] == ["base-sha"]  # parented on the existing head
     assert any(c[0] == "update_ref" and c[1] == "heads/main" for c in client.calls)
+    assert not any(c[0] == "create_ref" for c in client.calls)
+
+
+def test_push_snapshot_custom_branch():
+    client = _FakeClient(existing_ref=None)
+    sync_service.push_snapshot(client, _link(), {"a": b"x"}, "msg", branch="release")
+    assert any(c == ("get_ref", "heads/release") for c in client.calls)
+    assert any(c[0] == "create_ref" and c[1] == "refs/heads/release" for c in client.calls)
+
+
+# --- secondary-dev branch ----------------------------------------------------
+def test_ensure_dev_branch_creates_when_absent(monkeypatch):
+    monkeypatch.delenv("GITHUB_DEV_BRANCH", raising=False)
+    client = _FakeClient(existing_ref=None)
+    branch = sync_service._ensure_dev_branch(client, _link(), "sha123")
+    assert branch == "dev"
+    assert any(
+        c[0] == "create_ref" and c[1] == "refs/heads/dev" and c[2] == "sha123" for c in client.calls
+    )
+
+
+def test_ensure_dev_branch_idempotent_never_overwrites(monkeypatch):
+    monkeypatch.delenv("GITHUB_DEV_BRANCH", raising=False)
+    client = _FakeClient(existing_ref={"object": {"sha": "old"}})
+    branch = sync_service._ensure_dev_branch(client, _link(), "sha123")
+    assert branch == "dev"
+    # Already exists -> we must NOT create/overwrite it (preserve user edits).
     assert not any(c[0] == "create_ref" for c in client.calls)
 
 

@@ -1,11 +1,13 @@
 """
 GitHub integration routes (Code domain) — mounted at ``/api/code/github``.
 
-Read-only surface (sync itself is automatic, fired by the agent runtime when a
-``code_*`` run completes — there is no manual push endpoint):
+Sync itself is automatic (fired by the agent runtime when a ``code_*`` run
+completes); the POST endpoint below is an idempotent self-service re-push that
+reuses the same path, not a second commit logic.
 - ``GET /status`` — whether the org-level GitHub App is configured + reachable.
 - ``GET /projects/<id>/repo`` — the session's repo link + latest push summary.
 - ``GET /projects/<id>/pushes`` — push history for the session.
+- ``POST /projects/<id>/sync`` — manually (re)push the session's deliverables.
 """
 import logging
 
@@ -13,7 +15,7 @@ from flask import Blueprint
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from backend.models.code import CodeProject, GitHubPushLog, GitHubRepoLink
-from backend.services.code.github import app_auth
+from backend.services.code.github import app_auth, sync_service
 from backend.services.code.github.client import GitHubError
 from backend.utils.response import error_response, success_response
 
@@ -64,11 +66,18 @@ def get_project_repo(project_id: str):
         .order_by(GitHubPushLog.created_at.desc())
         .first()
     )
+    repo = None
+    if link:
+        repo = link.to_dict()
+        # Surface secondary-dev guidance: the dev branch the platform forks after a
+        # successful deploy (never overwritten) + a clone URL for the UI.
+        repo["dev_branch"] = sync_service.dev_branch_name()
+        repo["clone_url"] = (link.html_url + ".git") if link.html_url else None
     return success_response(
         {
             "configured": app_auth.is_configured(),
             "linked": bool(link),
-            "repo": link.to_dict() if link else None,
+            "repo": repo,
             "last_push": last_push.to_dict() if last_push else None,
         }
     )
@@ -89,3 +98,25 @@ def list_project_pushes(project_id: str):
         .all()
     )
     return success_response({"pushes": [push.to_dict() for push in pushes]})
+
+
+@github_bp.route("/projects/<project_id>/sync", methods=["POST"])
+@jwt_required()
+def sync_project_repo(project_id: str):
+    """Manually (re)push the session's deliverables — an idempotent self-service
+    retry that reuses the auto-sync path (no second commit logic)."""
+    project = _get_owned_project(project_id)
+    if not project:
+        return error_response("NOT_FOUND", "项目不存在", 404)
+    if not app_auth.is_configured():
+        return error_response("GITHUB_NOT_CONFIGURED", "GitHub 集成未配置", 400)
+
+    result = sync_service.sync_project(project)
+    status = result.get("status")
+    if status == "failed":
+        return error_response("GITHUB_API_ERROR", result.get("error") or "推送到 GitHub 失败", 502)
+    if status == "skipped":
+        return error_response("VALIDATION_ERROR", "当前会话没有可同步的产物", 400)
+    if status == "unconfigured":
+        return error_response("GITHUB_NOT_CONFIGURED", "GitHub 集成未配置", 400)
+    return success_response(result, "已推送到 GitHub")

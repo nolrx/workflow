@@ -30,11 +30,26 @@ let activeRunId: string | null = null
 const TERMINAL_RUN_STATUSES = new Set(["completed", "partial", "failed", "cancelled"])
 // Guards the post-run balance refresh so it fires once per run reaching a terminal state.
 let creditRefreshedRunId: string | null = null
+// Auto-reconnect budget for a live stream that drops while the run is still
+// running (e.g. the backend restarting mid-run — its worker resumes the run from
+// the persisted phase, and the client should pick the stream back up rather than
+// strand the user on a stale snapshot until they reload). Reset whenever a stream
+// successfully delivers an event, so only a genuinely stuck loop is bounded.
+let streamRetry = 0
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+const MAX_STREAM_RETRIES = 40
 
 function clearRefreshTimer() {
   if (refreshTimer) {
     clearTimeout(refreshTimer)
     refreshTimer = null
+  }
+}
+
+function clearReconnectTimer() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
   }
 }
 
@@ -115,9 +130,31 @@ export const useAgentStore = create<AgentState>()((set, get) => {
     refreshTimer = setTimeout(() => void refresh(runId), 350)
   }
 
+  // A live stream dropped without a clean terminal end (most likely the backend
+  // restarting). Reconnect — but only for the still-bound, still-running run, and
+  // with a bounded, backing-off budget so a permanently-down backend doesn't spin.
+  // The server's worker resumes the run from its persisted phase; this re-subscribe
+  // (from the last sequence we hold) picks the continued events back up.
+  const maybeReconnect = (runId: string) => {
+    if (runId !== activeRunId) return
+    const run = get().run
+    if (run && TERMINAL_RUN_STATUSES.has(run.status)) {
+      streamRetry = 0
+      return
+    }
+    if (streamRetry >= MAX_STREAM_RETRIES) return
+    streamRetry += 1
+    const delay = Math.min(1000 * streamRetry, 5000)
+    clearReconnectTimer()
+    reconnectTimer = setTimeout(() => {
+      if (runId === activeRunId) void stream(runId)
+    }, delay)
+  }
+
   const stream = async (runId: string) => {
     streamAbort?.abort()
     streamAbort = new AbortController()
+    clearReconnectTimer()
     set({ isStreaming: true })
 
     const token = tokenManager.getAccessToken()
@@ -136,6 +173,7 @@ export const useAgentStore = create<AgentState>()((set, get) => {
       if (!response.ok || !response.body) {
         set({ isStreaming: false })
         await refresh(runId)
+        maybeReconnect(runId)
         return
       }
 
@@ -164,6 +202,8 @@ export const useAgentStore = create<AgentState>()((set, get) => {
 
           if (eventType === "done") {
             clearRefreshTimer()
+            clearReconnectTimer()
+            streamRetry = 0
             set({ isStreaming: false })
             await refresh(runId)
             return
@@ -192,9 +232,13 @@ export const useAgentStore = create<AgentState>()((set, get) => {
           try {
             const event = JSON.parse(dataStr) as AgentEvent
             mergeEvents([event])
+            // A delivered event means the stream is healthy — refresh the budget so
+            // a later drop gets a full reconnect allowance.
+            streamRetry = 0
             scheduleRefresh(runId)
             if (event.event_type === "run_completed") {
               clearRefreshTimer()
+              clearReconnectTimer()
               set({ isStreaming: false })
               await refresh(runId)
               return
@@ -206,10 +250,12 @@ export const useAgentStore = create<AgentState>()((set, get) => {
       }
       set({ isStreaming: false })
       await refresh(runId)
+      maybeReconnect(runId)
     } catch (error) {
       if ((error as Error).name !== "AbortError") {
         set({ isStreaming: false })
         await refresh(runId)
+        maybeReconnect(runId)
       }
     }
   }
@@ -337,7 +383,9 @@ export const useAgentStore = create<AgentState>()((set, get) => {
       creditRefreshedRunId = null
       streamAbort?.abort()
       streamAbort = null
+      streamRetry = 0
       clearRefreshTimer()
+      clearReconnectTimer()
       set({
         run: null,
         events: [],

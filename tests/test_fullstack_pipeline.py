@@ -245,29 +245,39 @@ def test_render_middleware_empty():
     assert _render_middleware({}) == ""
 
 
-def test_reconcile_orphaned_runs(app):
-    """RUNNING/QUEUED runs (orphaned by a restart) are failed; PAUSED/terminal kept."""
-    from backend.models.agent import AgentRun, AgentRunStatus
-    from backend.services.agent.runtime import reconcile_orphaned_runs
+def test_reconcile_orphaned_runs(app, monkeypatch):
+    """On restart: a resumable run is re-dispatched (continues from its persisted
+    phase), a crashed deploy is failed (side-effectful — not auto-resumed), and
+    PAUSED/terminal runs are left untouched. (Detailed routing: test_agent_resume.)"""
+    from datetime import datetime
 
-    def mk(status):
+    from backend.models.agent import AgentRun, AgentRunStatus
+    from backend.services.agent import runtime as rt
+
+    started: list[str] = []
+    monkeypatch.setattr(rt.agent_runtime, "start", lambda app, run_id: started.append(run_id))
+
+    def mk(workflow, status):
         run = AgentRun(
-            user_id="u1", domain="code", workflow="code_full_generation",
-            status=status, credit_reserved=0,
+            user_id="u1", domain="code", workflow=workflow,
+            status=status, credit_reserved=0, started_at=datetime.utcnow(),
         )
         db.session.add(run)
         db.session.commit()
         return run.id
 
-    running = mk(AgentRunStatus.RUNNING)
-    queued = mk(AgentRunStatus.QUEUED)
-    paused = mk(AgentRunStatus.PAUSED)
-    completed = mk(AgentRunStatus.COMPLETED)
+    resumable = mk("code_full_generation", AgentRunStatus.RUNNING)
+    deploy = mk("code_fullstack_deploy", AgentRunStatus.RUNNING)
+    paused = mk("code_full_generation", AgentRunStatus.PAUSED)
+    completed = mk("code_full_generation", AgentRunStatus.COMPLETED)
 
-    n = reconcile_orphaned_runs(app)
-    assert n == 2
-    assert db.session.get(AgentRun, running).status == AgentRunStatus.FAILED
-    assert db.session.get(AgentRun, queued).status == AgentRunStatus.FAILED
+    n = rt.reconcile_orphaned_runs(app)
+    assert n == 2  # the two RUNNING rows were handled (one resumed, one failed)
+    db.session.expire_all()
+    assert db.session.get(AgentRun, resumable).status == AgentRunStatus.RUNNING
+    assert resumable in started  # re-dispatched, not lost
+    assert db.session.get(AgentRun, deploy).status == AgentRunStatus.FAILED
+    assert deploy not in started  # side-effectful: not auto-resumed
     assert db.session.get(AgentRun, paused).status == AgentRunStatus.PAUSED
     assert db.session.get(AgentRun, completed).status == AgentRunStatus.COMPLETED
 

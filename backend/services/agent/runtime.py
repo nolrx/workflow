@@ -19,6 +19,8 @@ from backend.models.agent import (
     AgentEventType,
     AgentRun,
     AgentRunStatus,
+    AgentStep,
+    AgentStepStatus,
 )
 from backend.services.agent.bus import event_bus
 from backend.services.agent.recorder import RunRecorder
@@ -49,58 +51,181 @@ def _run_produced_nothing(run_id: str) -> bool:
     return AgentArtifact.query.filter_by(run_id=run_id).count() == 0
 
 
+# --- Resume-across-restart policy --------------------------------------------
+# Which workflows a restart should RESUME (continue from their persisted state)
+# instead of failing. Two strategies, by how the workflow persists progress:
+#   • RESUME_AS_RETRY — the workflow keeps a per-stage cursor and writes each
+#     stage's output to durable storage (CodeProject docs, ledger, AgentSteps).
+#     It already knows how to re-run from an interrupted stage and reuse the
+#     completed ones: we drive it through the existing one-shot ``retry``
+#     directive, so restart-resume reuses the exact same, tested machinery as a
+#     user-initiated retry.
+#   • RESUME_FROM_SCRATCH — a short linear pipeline whose intermediate state
+#     lives only in memory between steps (the built files aren't persisted until
+#     the publish step). The in-flight container build can't be recovered, so the
+#     only correct resume is to re-run the whole run from step 1. The workflow
+#     ignores the resume directive and naturally restarts; we just keep its run
+#     row alive instead of failing it.
+RESUME_AS_RETRY = {"code_full_generation"}
+RESUME_FROM_SCRATCH = {
+    "code_frontend_project_generation",
+    "code_backend_project_generation",
+    "code_middleware_provisioning",
+}
+_RESUMABLE = RESUME_AS_RETRY | RESUME_FROM_SCRATCH
+# Everything else (notably ``code_fullstack_deploy``) is NOT auto-resumed: a crash
+# mid-deploy leaves external side effects half-applied (built image, started
+# container, provisioned database) that a blind re-run could compound, so it is
+# failed + refunded and the user re-triggers it explicitly (deploy is idempotent
+# on re-trigger — it tears down any stale container and rebuilds).
+
+# Cap auto-resumes so a crash-loop can't re-run (potentially expensive) work
+# forever: after this many restart-resumes a run is failed instead. Tracked in
+# the run's CONFIG (``_resume_count``) rather than progress, because the
+# from-scratch workflows overwrite the whole progress blob on their first step.
+MAX_RESUME_ATTEMPTS = int(os.getenv("AGENT_MAX_RESUME_ATTEMPTS", "3"))
+
+
+def _resume_count(run: AgentRun) -> int:
+    try:
+        return int((run.get_config() or {}).get("_resume_count", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _fail_running_steps(run_id: str, message: str) -> None:
+    """Mark steps left RUNNING by the dead worker as failed.
+
+    Keeps the timeline honest (an interrupted step shows as failed, not a
+    perpetual spinner) and makes ``code_full_generation``'s retry stage-derivation
+    deterministic — it reads the latest FAILED step to decide where to resume.
+    """
+    for step in AgentStep.query.filter_by(run_id=run_id, status=AgentStepStatus.RUNNING).all():
+        step.status = AgentStepStatus.FAILED
+        step.error_message = message
+        step.completed_at = datetime.utcnow()
+
+
+def _fail_orphaned_run(run: AgentRun, message: str) -> None:
+    """Mark an orphaned run failed, refunding the reservation if it produced nothing."""
+    run_id = run.id
+    _fail_running_steps(run_id, message)
+    run.status = AgentRunStatus.FAILED
+    run.error_message = message
+    run.completed_at = datetime.utcnow()
+    if run.credit_reserved and _run_produced_nothing(run_id):
+        try:
+            refund_credits(
+                run.user_id, run.credit_reserved, "agent_run", "agent_run", run_id,
+                description=f"refund interrupted {run.workflow}", team_id=run.team_id,
+            )
+            run.credit_used = 0
+        except Exception:  # noqa: BLE001
+            logger.error("Refund failed for orphaned run %s", run_id, exc_info=True)
+            run.credit_used = run.credit_reserved
+    db.session.commit()
+    # Emit terminal events so any open SSE / polling client settles instead of
+    # spinning on a perpetually-"running" run.
+    try:
+        recorder = RunRecorder(run_id, event_bus)
+        recorder.emit(
+            AgentEventType.ERROR, level=AgentEventLevel.ERROR, message="服务重启，运行被中断",
+        )
+        recorder.emit(
+            AgentEventType.RUN_COMPLETED, message="工作流结束",
+            payload={"status": AgentRunStatus.FAILED},
+        )
+    except Exception:  # noqa: BLE001
+        logger.error("Failed to emit terminal events for orphaned run %s", run_id, exc_info=True)
+
+
+def _resume_orphaned_run(app, run: AgentRun) -> None:
+    """Re-dispatch an interrupted run so it continues from its persisted state.
+
+    For a run that never started (still QUEUED, no worker had picked it up) this
+    is just a fresh dispatch. For a run that was mid-flight (RUNNING) we fail its
+    interrupted step, hand cursor-aware workflows a one-shot ``retry`` directive,
+    and re-submit — keeping the SAME run id so a reconnecting client's stream and
+    history stay continuous.
+    """
+    run_id = run.id
+    never_started = run.started_at is None  # QUEUED row a worker never reached
+
+    cfg = run.get_config()
+    cfg["_resume_count"] = _resume_count(run) + 1
+    if not never_started and run.workflow in RESUME_AS_RETRY:
+        # Resume from the interrupted stage, reusing every completed stage. The
+        # workflow consumes (and clears) this one-shot directive on launch.
+        cfg["_resume"] = {"action": "retry", "stage": None, "reason": "service_restart"}
+    run.set_config(cfg)
+
+    if not never_started:
+        _fail_running_steps(run_id, "服务重启中断")
+        run.status = AgentRunStatus.RUNNING  # keep ACTIVE; started_at stays set
+    db.session.commit()
+
+    # Narrate to any reconnecting client. A never-started run will emit its own
+    # RUN_STARTED when the worker picks it up, so only resumes need a marker.
+    if not never_started:
+        try:
+            recorder = RunRecorder(run_id, event_bus)
+            recorder.emit(
+                AgentEventType.PROGRESS,
+                message="服务已重启，正在从中断处自动继续运行",
+                payload={"resumed": True, "resume_count": cfg["_resume_count"]},
+            )
+        except Exception:  # noqa: BLE001
+            logger.error("Failed to emit resume event for run %s", run_id, exc_info=True)
+
+    agent_runtime.start(app, run_id)
+
+
 def reconcile_orphaned_runs(app) -> int:
-    """Fail runs left RUNNING/QUEUED by a dead worker (e.g. a process restart).
+    """Resume — or, when unsafe, fail — runs orphaned by a dead worker on restart.
 
     Called once at startup. The background executor lives in-process, so when the
     process is replaced any in-flight run loses its worker and would otherwise
     hang ``running`` forever — and, counting as ACTIVE, it blocks the user from
-    re-running via the idempotent endpoints. A freshly-started process has no
-    in-flight runs of its own, so every RUNNING/QUEUED row is by definition
-    orphaned and safe to fail here (this deployment runs a single gunicorn
-    worker, so there is no peer process still driving them). PAUSED runs are left
-    alone — they await user input, not a worker. Refunds the reservation when the
-    run produced nothing. Returns how many were reconciled.
+    re-running. A freshly-started process has no in-flight runs of its own, so
+    every RUNNING/QUEUED row is by definition orphaned (this deployment runs a
+    single gunicorn worker, so there is no peer process still driving them).
+
+    Resumable workflows (see ``_RESUMABLE``) are RE-DISPATCHED to continue from
+    their persisted phase, so a restart no longer loses the user's running state.
+    Non-resumable runs, and any run that has already exhausted its resume budget
+    (crash-loop guard), are failed + refunded instead. PAUSED runs are left alone
+    — they await user input, not a worker. Returns how many rows were handled.
     """
     with app.app_context():
         orphans = AgentRun.query.filter(
             AgentRun.status.in_([AgentRunStatus.RUNNING, AgentRunStatus.QUEUED])
         ).all()
-        count = 0
+        resumed = 0
+        failed = 0
         for run in orphans:
-            run_id = run.id
-            run.status = AgentRunStatus.FAILED
-            run.error_message = "服务重启导致运行中断，请重新发起。"
-            run.completed_at = datetime.utcnow()
-            if run.credit_reserved and _run_produced_nothing(run_id):
-                try:
-                    refund_credits(
-                        run.user_id, run.credit_reserved, "agent_run", "agent_run", run_id,
-                        description=f"refund interrupted {run.workflow}", team_id=run.team_id,
-                    )
-                    run.credit_used = 0
-                except Exception:  # noqa: BLE001
-                    logger.error("Refund failed for orphaned run %s", run_id, exc_info=True)
-                    run.credit_used = run.credit_reserved
-            db.session.commit()
-            # Emit terminal events so any open SSE / polling client settles instead
-            # of spinning on a perpetually-"running" run.
             try:
-                recorder = RunRecorder(run_id, event_bus)
-                recorder.emit(
-                    AgentEventType.ERROR, level=AgentEventLevel.ERROR,
-                    message="服务重启，运行被中断",
-                )
-                recorder.emit(
-                    AgentEventType.RUN_COMPLETED, message="工作流结束",
-                    payload={"status": AgentRunStatus.FAILED},
-                )
-            except Exception:  # noqa: BLE001
-                logger.error("Failed to emit terminal events for orphaned run %s", run_id, exc_info=True)
-            count += 1
-        if count:
-            logger.info("Reconciled %d orphaned agent run(s) on startup", count)
-        return count
+                never_started = run.started_at is None
+                resumable = never_started or run.workflow in _RESUMABLE
+                if resumable and _resume_count(run) < MAX_RESUME_ATTEMPTS:
+                    _resume_orphaned_run(app, run)
+                    resumed += 1
+                else:
+                    reason = (
+                        "服务多次重启，已停止自动续跑，请重新发起。"
+                        if resumable
+                        else "服务重启导致运行中断，请重新发起。"
+                    )
+                    _fail_orphaned_run(run, reason)
+                    failed += 1
+            except Exception:  # noqa: BLE001 — one bad row must not abort reconciliation
+                logger.error("Failed to reconcile orphaned run %s", run.id, exc_info=True)
+                db.session.rollback()
+        if resumed or failed:
+            logger.info(
+                "Reconciled orphaned agent runs on startup: %d resumed, %d failed",
+                resumed, failed,
+            )
+        return resumed + failed
 
 
 class AgentRuntime:

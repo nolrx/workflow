@@ -22,6 +22,10 @@ export type Lane = "frontend" | "backend" | "middleware" | "deploy"
 export const GEN_LANES: Lane[] = ["frontend", "backend", "middleware"]
 
 const TERMINAL = new Set(["completed", "partial", "failed", "cancelled"])
+// Auto-reconnect budget per lane for a live stream that drops while its run is
+// still going (e.g. the backend restarting mid-build — the worker resumes the run
+// from its persisted phase, and the lane should pick the stream back up).
+const MAX_STREAM_RETRIES = 40
 
 interface LaneState {
   runId: string | null
@@ -39,6 +43,11 @@ const aborts: Record<Lane, AbortController | null> = {
 const timers: Record<Lane, ReturnType<typeof setTimeout> | null> = {
   frontend: null, backend: null, middleware: null, deploy: null,
 }
+// Pending reconnect timer + remaining retry budget, per lane.
+const reconnects: Record<Lane, ReturnType<typeof setTimeout> | null> = {
+  frontend: null, backend: null, middleware: null, deploy: null,
+}
+const retries: Record<Lane, number> = { frontend: 0, backend: 0, middleware: 0, deploy: 0 }
 let boundProject: string | null = null
 
 interface FullstackState {
@@ -108,9 +117,31 @@ export const useFullstackStore = create<FullstackState>()((set, get) => {
     }
   }
 
+  // A lane's live stream dropped without a clean terminal end (most likely the
+  // backend restarting). Reconnect — only for the still-bound, still-running run,
+  // with a bounded backing-off budget. The worker resumes the run server-side; this
+  // re-subscribe (from the last sequence held) picks the continued events back up.
+  const maybeReconnect = (lane: Lane, runId: string) => {
+    if (get().projectId !== boundProject || get().lanes[lane].runId !== runId) return
+    const run = get().lanes[lane].run
+    if (run && TERMINAL.has(run.status)) {
+      retries[lane] = 0
+      return
+    }
+    if (retries[lane] >= MAX_STREAM_RETRIES) return
+    retries[lane] += 1
+    const delay = Math.min(1000 * retries[lane], 5000)
+    if (reconnects[lane]) clearTimeout(reconnects[lane] as ReturnType<typeof setTimeout>)
+    reconnects[lane] = setTimeout(() => {
+      if (get().lanes[lane].runId === runId) void stream(lane, runId)
+    }, delay)
+  }
+
   const stream = async (lane: Lane, runId: string) => {
     aborts[lane]?.abort()
     aborts[lane] = new AbortController()
+    if (reconnects[lane]) clearTimeout(reconnects[lane] as ReturnType<typeof setTimeout>)
+    reconnects[lane] = null
     setLane(lane, { isStreaming: true })
     const token = tokenManager.getAccessToken()
     const lastSeq = get().lanes[lane].events.reduce((m, e) => Math.max(m, e.sequence), 0)
@@ -123,6 +154,7 @@ export const useFullstackStore = create<FullstackState>()((set, get) => {
       if (!response.ok || !response.body) {
         setLane(lane, { isStreaming: false })
         await refresh(lane, runId)
+        maybeReconnect(lane, runId)
         return
       }
       const reader = response.body.getReader()
@@ -145,6 +177,7 @@ export const useFullstackStore = create<FullstackState>()((set, get) => {
             else if (line.startsWith("data:")) dataStr += line.slice(5).trim()
           }
           if (eventType === "done") {
+            retries[lane] = 0
             setLane(lane, { isStreaming: false })
             await refresh(lane, runId)
             return
@@ -153,8 +186,10 @@ export const useFullstackStore = create<FullstackState>()((set, get) => {
           try {
             const event = JSON.parse(dataStr) as AgentEvent
             mergeEvents(lane, [event])
+            retries[lane] = 0 // healthy stream — refresh the reconnect budget
             scheduleRefresh(lane, runId)
             if (event.event_type === "run_completed") {
+              retries[lane] = 0
               setLane(lane, { isStreaming: false })
               await refresh(lane, runId)
               return
@@ -166,10 +201,12 @@ export const useFullstackStore = create<FullstackState>()((set, get) => {
       }
       setLane(lane, { isStreaming: false })
       await refresh(lane, runId)
+      maybeReconnect(lane, runId)
     } catch (error) {
       if ((error as Error).name !== "AbortError") {
         setLane(lane, { isStreaming: false })
         await refresh(lane, runId)
+        maybeReconnect(lane, runId)
       }
     }
   }
@@ -187,6 +224,9 @@ export const useFullstackStore = create<FullstackState>()((set, get) => {
       aborts[lane] = null
       if (timers[lane]) clearTimeout(timers[lane] as ReturnType<typeof setTimeout>)
       timers[lane] = null
+      if (reconnects[lane]) clearTimeout(reconnects[lane] as ReturnType<typeof setTimeout>)
+      reconnects[lane] = null
+      retries[lane] = 0
     }
     set({
       projectId: null,

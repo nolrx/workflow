@@ -1044,10 +1044,18 @@ def run_code_workflow(ctx, recorder) -> dict:
             or prev_progress.get("current_step")
             or "requirements"
         )
+        # The same primitive backs a user-initiated retry and an automatic
+        # restart-resume (reconcile_orphaned_runs hands us this directive with
+        # reason="service_restart"); narrate them distinctly on the timeline.
+        _restarted = resume.get("reason") == "service_restart"
         recorder.emit(
             AgentEventType.REVIEW_RESOLVED,
-            message=f"重试「{retry_stage}」阶段",
-            payload={"stage": retry_stage, "retry": True},
+            message=(
+                f"服务重启，从「{retry_stage}」阶段自动续跑"
+                if _restarted
+                else f"重试「{retry_stage}」阶段"
+            ),
+            payload={"stage": retry_stage, "retry": True, "resumed": _restarted},
         )
         # planner failed → nothing usable downstream; restart from project creation.
         if retry_stage == "planner":

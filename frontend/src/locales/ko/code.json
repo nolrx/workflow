@@ -108,10 +108,16 @@
     }
   },
   "stepper": {
+    "view": "{{stage}} 보기",
     "retry": "이 단계 재시도",
     "retryFailed": "재시도에 실패했습니다. 잠시 후 다시 시도해 주세요"
   },
   "conversation": {
+    "jumpToActive": "{{stage}}(으)로 이동",
+    "stageDone": "이 단계는 확정되었습니다 · 위 카드에서 바로 편집할 수 있습니다",
+    "stageLocked": "이 단계는 아직 시작되지 않았습니다",
+    "restart": "요구사항 단계로 돌아가 다시 시작",
+    "windowEmpty": "이 단계에는 아직 내용이 없습니다",
     "title": "대화",
     "intro": "만들고 싶은 제품을 설명해 주세요. 먼저 요구사항 문서를 작성하고, 각 단계마다 확인을 받은 뒤 진행합니다.",
     "generating": "생성 중…",

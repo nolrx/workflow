@@ -1,6 +1,17 @@
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { AlertTriangle, Bot, Check, ListChecks, Loader2, Plus, Send, Sparkles } from "lucide-react"
+import {
+  AlertTriangle,
+  ArrowRight,
+  Bot,
+  Check,
+  ListChecks,
+  Loader2,
+  Lock,
+  Plus,
+  Send,
+  Sparkles,
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { LiveStageCard } from "@/components/code/LiveStageCard"
@@ -8,6 +19,12 @@ import { selectRequirementsQuestions } from "@/components/code/clarify"
 import { RequirementsClarifyDialog } from "@/components/code/RequirementsClarifyDialog"
 import { StageArtifactCard, type ArtifactStage } from "@/components/code/StageArtifactCard"
 import { StyleSelectGate } from "@/components/code/StyleSelectGate"
+import {
+  DISPLAY_STAGES,
+  deriveStageNav,
+  displayStageOf,
+  type DisplayStage,
+} from "@/components/code/stages"
 import { useStickToBottom } from "@/hooks/use-stick-to-bottom"
 import {
   deriveConversation,
@@ -16,6 +33,10 @@ import {
 } from "@/stores/agentStore"
 
 interface ConversationRailProps {
+  /** The stage window currently shown — only this stage's transcript is rendered. */
+  viewStage: DisplayStage
+  /** Switch the visible stage window (used by the "jump to current step" button). */
+  onSelectStage: (stage: DisplayStage) => void
   requirementDraft: string
   onRequirementChange: (value: string) => void
   onStart: () => void
@@ -30,6 +51,19 @@ const LIVE_STAGE: Record<string, { variant: "text" | "thinking"; tab: ArtifactSt
   flow: { variant: "text", tab: "flow" },
   documents: { variant: "thinking", tab: "documents" },
   style: { variant: "text", tab: "style" },
+}
+
+/**
+ * Which stage window a transcript message belongs to. Most messages carry their
+ * stage; the opening requirement lands in `requirements`, the run-completed
+ * marker in `app`, and run-level errors are stage-less (null) so they stay
+ * visible in every window.
+ */
+function messageStage(message: ConversationMessage): DisplayStage | null {
+  if (message.kind === "requirement") return "requirements"
+  if (message.kind === "completed") return "app"
+  if (message.kind === "error") return null
+  return displayStageOf(message.stage)
 }
 
 function Avatar({ role }: { role: ConversationMessage["role"] }) {
@@ -83,14 +117,18 @@ function Message({ message }: { message: ConversationMessage }) {
 }
 
 /**
- * Single-column conversational Code workspace. The transcript is event-sourced
- * (opening requirement, each reviewed stage, adjustments, confirmations); each
- * reviewed stage renders as an inline collapsible artifact card (the live
- * preview folded into the chat). While a step streams, its output shows in an
- * auto-expanded live card; once the run finishes, the app-preview card is
- * appended. A state-aware composer sits at the bottom.
+ * Windowed conversational Code workspace. The transcript is event-sourced
+ * (opening requirement, each reviewed stage, adjustments, confirmations) and
+ * sliced to a single stage at a time: only `viewStage`'s messages, its artifact
+ * card, and its live output are shown, so the user stays on one step. The
+ * composer at the bottom is contextual to that window — the review controls only
+ * appear on the stage that is actually awaiting confirmation; on a settled or
+ * not-yet-live window it shows a quiet status and, when work is waiting on
+ * another stage, a one-tap jump to it.
  */
 export function ConversationRail({
+  viewStage,
+  onSelectStage,
   requirementDraft,
   onRequirementChange,
   onStart,
@@ -124,9 +162,19 @@ export function ConversationRail({
   const runningStep = run?.steps?.find((step) => step.status === "running")
   const liveText = runningStep ? streamingByStep[runningStep.id] ?? "" : null
 
+  // Stage-relative view state: where the live position is, whether THIS window is
+  // the one awaiting confirmation, and whether work is waiting elsewhere.
+  const nav = deriveStageNav(run)
+  const activeStage = nav.activeStage
+  const reviewDisplayStage = displayStageOf(reviewStage)
+  const isViewingActiveGate = isPaused && reviewDisplayStage === viewStage
+  const viewIdx = DISPLAY_STAGES.indexOf(viewStage)
+  const isFutureStage = viewIdx > nav.maxReachedIdx
+  const canJump = !!activeStage && activeStage !== viewStage && (isPaused || isBusy)
+
   // When the review gate advances, focus the new stage and auto-collapse the
-  // now-settled ones (the "auto-collapse once done" behaviour). Manual toggles
-  // within a gate persist because the effect only fires when the gate changes.
+  // now-settled ones. Manual toggles within a gate persist because the effect
+  // only fires when the gate changes.
   const prevReview = useRef<string | null>(null)
   useEffect(() => {
     if (reviewStage && reviewStage !== prevReview.current) {
@@ -143,7 +191,9 @@ export function ConversationRail({
       event.event_type === "step_awaiting_review" &&
       (event.payload?.stage as string | undefined) === "requirements"
   ).length
-  const showClarify = isPaused && reviewStage === "requirements" && clarifyCount > 0
+  // The clarification only belongs to the requirements window.
+  const showClarify =
+    isPaused && reviewStage === "requirements" && viewStage === "requirements" && clarifyCount > 0
   // Auto-open the questionnaire once per (run, requirements round). Keying on the
   // run id means it re-opens for a new revise round AND for a different run (this
   // component stays mounted across run switches, e.g. 新建会话), while a manual
@@ -156,7 +206,13 @@ export function ConversationRail({
     setClarifyOpen(true)
   }
 
-  const scrollRef = useStickToBottom(messages.length + (liveText?.length ?? 0))
+  // Only this window's messages (plus stage-less run-level notes, e.g. errors).
+  const visibleMessages = messages.filter((message) => {
+    const stage = messageStage(message)
+    return stage === null || stage === viewStage
+  })
+
+  const scrollRef = useStickToBottom(visibleMessages.length + (liveText?.length ?? 0))
 
   const applyClarify = (compiled: string) => {
     onRevise(compiled)
@@ -194,7 +250,8 @@ export function ConversationRail({
       ) {
         const artifactStage = stage as ArtifactStage
         const state = isPaused && reviewStage === stage ? "review" : "done"
-        const open = openStages[stage] ?? state === "review"
+        // In its own dedicated window the card defaults open (it is the focus).
+        const open = openStages[stage] ?? true
         return (
           <StageArtifactCard
             key={message.id}
@@ -219,46 +276,25 @@ export function ConversationRail({
   }
 
   const liveMeta = runningStep ? LIVE_STAGE[runningStep.agent_key] : undefined
+  const showLiveCard = !!runningStep && displayStageOf(runningStep.agent_key) === viewStage
   const appOpen = openStages.app ?? true
 
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-3 sm:px-4 sm:py-4">
-        {!run && (
-          <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-            <Sparkles className="mb-2 h-4 w-4 text-primary" />
-            {t("conversation.intro")}
-          </div>
-        )}
+  const jumpButton = canJump && activeStage && (
+    <Button
+      variant="secondary"
+      className="w-full"
+      onClick={() => onSelectStage(activeStage)}
+    >
+      {t("conversation.jumpToActive", { stage: t(`workspace.tabs.${activeStage}`) })}
+      <ArrowRight className="ml-2 h-4 w-4" />
+    </Button>
+  )
 
-        {messages.map(renderItem)}
-
-        {/* Live, streaming step folded into the conversation. */}
-        {runningStep && (
-          <LiveStageCard
-            title={
-              liveMeta
-                ? t("conversation.generatingStage", { stage: t(`workspace.tabs.${liveMeta.tab}`) })
-                : t("conversation.generating")
-            }
-            variant={liveMeta?.variant ?? "spinner"}
-            text={liveMeta?.variant === "text" ? liveText ?? "" : ""}
-          />
-        )}
-
-        {/* Once the build finishes, the previewable app is the final inline card. */}
-        {isCompleted && (
-          <StageArtifactCard
-            stage="app"
-            state="done"
-            open={appOpen}
-            onToggle={() => setOpenStages((prev) => ({ ...prev, app: !appOpen }))}
-          />
-        )}
-      </div>
-
-      <div className="mt-3 border-t px-3 py-3 sm:px-4">
-        {!run || isFailed ? (
+  const renderFooter = () => {
+    // Fresh or failed run: the requirements window is the launch pad.
+    if (!run || isFailed) {
+      if (viewStage === "requirements") {
+        return (
           <div className="space-y-2">
             {isFailed && (
               <p className="text-xs text-destructive">
@@ -273,73 +309,182 @@ export function ConversationRail({
               className="resize-none text-sm"
               disabled={isBusy}
             />
-            <Button className="w-full" onClick={onStart} disabled={!requirementDraft.trim() || isBusy}>
+            <Button
+              className="w-full"
+              onClick={onStart}
+              disabled={!requirementDraft.trim() || isBusy}
+            >
               <Bot className="mr-2 h-4 w-4" />
               {isFailed ? t("conversation.retry") : t("conversation.start")}
             </Button>
           </div>
-        ) : isBusy ? (
-          <div className="flex items-center justify-center gap-2 py-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            {t("conversation.running")}
-          </div>
-        ) : isPaused && reviewStage === "style_select" ? (
-          <StyleSelectGate />
-        ) : isPaused ? (
+        )
+      }
+      // A failed run viewed on a later stage: the per-stage retry lives on the
+      // stepper (red node); send the user back to the launch pad to start over.
+      if (isFailed) {
+        return (
           <div className="space-y-2">
-            {showClarify && (
-              <Button
-                variant="secondary"
-                className="w-full"
-                onClick={() => setClarifyOpen(true)}
-              >
-                <ListChecks className="mr-2 h-4 w-4" />
-                {t("clarify.openButton", { count: clarifyCount })}
-              </Button>
-            )}
-            <p className="text-xs font-medium text-muted-foreground">
-              {t("conversation.reviseLabel")}
+            <p className="text-xs text-destructive">
+              {run?.error_message || t("conversation.failed")}
             </p>
-            <Textarea
-              value={instruction}
-              onChange={(event) => setInstruction(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) submitRevise()
-              }}
-              placeholder={t("conversation.revisePlaceholder")}
-              rows={3}
-              className="resize-none text-sm"
-            />
-            <div className="flex flex-wrap gap-2">
-              <Button
-                variant="outline"
-                className="min-w-[8rem] flex-1"
-                onClick={submitRevise}
-                disabled={!instruction.trim()}
-              >
-                <Send className="mr-2 h-4 w-4" />
-                {t("conversation.revise")}
-              </Button>
-              <Button className="min-w-[8rem] flex-1" onClick={onApprove}>
-                <Check className="mr-2 h-4 w-4" />
-                {t("conversation.approve")}
-              </Button>
-            </div>
-          </div>
-        ) : isCompleted ? (
-          <div className="space-y-2">
-            <p className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <Check className="h-4 w-4 text-primary" />
-              {t("conversation.completedTitle")}
-            </p>
-            <p className="text-xs text-muted-foreground">{t("conversation.completedHint")}</p>
-            <Button variant="outline" className="w-full" onClick={onNewProject}>
-              <Plus className="mr-2 h-4 w-4" />
-              {t("conversation.newSession")}
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => onSelectStage("requirements")}
+            >
+              {t("conversation.restart")}
             </Button>
           </div>
-        ) : null}
+        )
+      }
+      return null
+    }
+
+    // This window is the one awaiting confirmation.
+    if (isViewingActiveGate) {
+      if (reviewStage === "style_select") return <StyleSelectGate />
+      return (
+        <div className="space-y-2">
+          {showClarify && (
+            <Button variant="secondary" className="w-full" onClick={() => setClarifyOpen(true)}>
+              <ListChecks className="mr-2 h-4 w-4" />
+              {t("clarify.openButton", { count: clarifyCount })}
+            </Button>
+          )}
+          <p className="text-xs font-medium text-muted-foreground">
+            {t("conversation.reviseLabel")}
+          </p>
+          <Textarea
+            value={instruction}
+            onChange={(event) => setInstruction(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) submitRevise()
+            }}
+            placeholder={t("conversation.revisePlaceholder")}
+            rows={3}
+            className="resize-none text-sm"
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              className="min-w-[8rem] flex-1"
+              onClick={submitRevise}
+              disabled={!instruction.trim()}
+            >
+              <Send className="mr-2 h-4 w-4" />
+              {t("conversation.revise")}
+            </Button>
+            <Button className="min-w-[8rem] flex-1" onClick={onApprove}>
+              <Check className="mr-2 h-4 w-4" />
+              {t("conversation.approve")}
+            </Button>
+          </div>
+        </div>
+      )
+    }
+
+    // This stage is mid-generation.
+    if (isBusy && viewStage === activeStage) {
+      return (
+        <div className="flex items-center justify-center gap-2 py-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          {t("conversation.running")}
+        </div>
+      )
+    }
+
+    // The build finished and we are on the app window.
+    if (isCompleted && viewStage === "app") {
+      return (
+        <div className="space-y-2">
+          <p className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <Check className="h-4 w-4 text-primary" />
+            {t("conversation.completedTitle")}
+          </p>
+          <p className="text-xs text-muted-foreground">{t("conversation.completedHint")}</p>
+          <Button variant="outline" className="w-full" onClick={onNewProject}>
+            <Plus className="mr-2 h-4 w-4" />
+            {t("conversation.newSession")}
+          </Button>
+        </div>
+      )
+    }
+
+    // Otherwise: a settled past window, or one not yet live. Quiet status + a jump
+    // to wherever work is actually waiting.
+    return (
+      <div className="space-y-2">
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          {isFutureStage ? (
+            <>
+              <Lock className="h-3.5 w-3.5 shrink-0" />
+              {t("conversation.stageLocked")}
+            </>
+          ) : (
+            <>
+              <Check className="h-3.5 w-3.5 shrink-0 text-primary" />
+              {t("conversation.stageDone")}
+            </>
+          )}
+        </p>
+        {jumpButton}
       </div>
+    )
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div
+        ref={scrollRef}
+        className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-3 sm:px-4 sm:py-4"
+      >
+        {!run && (
+          <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+            <Sparkles className="mb-2 h-4 w-4 text-primary" />
+            {t("conversation.intro")}
+          </div>
+        )}
+
+        {visibleMessages.map(renderItem)}
+
+        {/* Live, streaming step folded into its own stage window. */}
+        {showLiveCard && (
+          <LiveStageCard
+            title={
+              liveMeta
+                ? t("conversation.generatingStage", { stage: t(`workspace.tabs.${liveMeta.tab}`) })
+                : t("conversation.generating")
+            }
+            variant={liveMeta?.variant ?? "spinner"}
+            text={liveMeta?.variant === "text" ? liveText ?? "" : ""}
+          />
+        )}
+
+        {/* Once the build finishes, the previewable app is the app window's card. */}
+        {isCompleted && viewStage === "app" && (
+          <StageArtifactCard
+            stage="app"
+            state="done"
+            open={appOpen}
+            onToggle={() => setOpenStages((prev) => ({ ...prev, app: !appOpen }))}
+          />
+        )}
+
+        {/* Reachable but still-empty window (e.g. a stage just became live but has
+            produced nothing yet): keep the surface from looking broken. */}
+        {run &&
+          !isFutureStage &&
+          visibleMessages.length === 0 &&
+          !showLiveCard &&
+          !(isCompleted && viewStage === "app") && (
+            <div className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
+              {t("conversation.windowEmpty")}
+            </div>
+          )}
+      </div>
+
+      <div className="mt-3 border-t px-3 py-3 sm:px-4">{renderFooter()}</div>
 
       <RequirementsClarifyDialog
         open={clarifyOpen && clarifyCount > 0}

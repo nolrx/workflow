@@ -6,6 +6,7 @@ import { toast } from "sonner"
 import { AgentRunPanel } from "@/components/agent/AgentRunPanel"
 import { CodeStepper } from "@/components/code/CodeStepper"
 import { ConversationRail } from "@/components/code/ConversationRail"
+import { deriveStageNav, type DisplayStage } from "@/components/code/stages"
 import { FigmaExportDialog } from "@/components/code/FigmaExportDialog"
 import { FigmaImportDialog } from "@/components/code/FigmaImportDialog"
 import { GitHubRepoCard } from "@/components/code/GitHubRepoCard"
@@ -18,12 +19,13 @@ import { useAgentStore } from "@/stores/agentStore"
 import { useCodeStore } from "@/stores/codeStore"
 
 /**
- * Single-column conversational Code workspace: a stepper header tracks the
- * stages and the conversation below is the whole surface — the build is driven
- * through chat, and the live preview is folded into the transcript as inline,
- * collapsible artifact cards (streaming output, the UI-style picker with
- * thumbnails, and the app preview). The workflow pauses after each reviewed
- * document; the user approves or adjusts inline.
+ * Windowed conversational Code workspace: the stepper header is the navigation
+ * bar and each stage is its own conversation window — the rail below shows only
+ * the selected stage's transcript, artifact card and contextual composer, so the
+ * user stays focused on one step at a time. The view auto-follows the live
+ * position (a new review gate, a failure) but the user can click any reached
+ * stage to look back; work waiting elsewhere is one tap away. The build is still
+ * driven through chat and pauses after each reviewed document for approval.
  */
 export function CodeStudio() {
   const { t } = useTranslation("code")
@@ -46,6 +48,9 @@ export function CodeStudio() {
   const events = useAgentStore((state) => state.events)
 
   const [requirementInput, setRequirementInput] = useState("")
+  // Which stage window is shown. It auto-follows the live position (see below),
+  // but the user can navigate freely via the stepper.
+  const [viewStage, setViewStage] = useState<DisplayStage>("requirements")
 
   const { projectId } = useParams<{ projectId?: string }>()
   // Which session's agent run is currently bound to the workspace. Keyed by a ref
@@ -111,6 +116,20 @@ export function CodeStudio() {
     }
   }, [agentRun?.resource_id, agentRun?.status, reviewTick, loadProject])
 
+  // Auto-follow the live position: when the run advances to a new review gate,
+  // fails, or completes, snap the visible window to it. Tracked via a ref so the
+  // snap only happens when the position actually changes — manual navigation to
+  // an earlier window within the same position sticks (mirrors the per-card
+  // auto-focus pattern in the rail).
+  const focusStage = deriveStageNav(agentRun).focusStage
+  const prevFocusRef = useRef<DisplayStage | null>(null)
+  useEffect(() => {
+    if (focusStage !== prevFocusRef.current) {
+      setViewStage(focusStage)
+      prevFocusRef.current = focusStage
+    }
+  }, [focusStage])
+
   const handleStart = async () => {
     const requirement = requirementInput.trim()
     if (!requirement) {
@@ -154,11 +173,15 @@ export function CodeStudio() {
     boundRunResourceRef.current = null
     resetAgentRun()
     setRequirementInput("")
+    setViewStage("requirements")
   }
 
   // The preview thumbnails live in a right-hand rail that slides in once images
-  // exist (or are being generated) — no longer folded under the conversation.
-  const showThumbnails = (project?.preview_images?.length ?? 0) > 0 || activeAction === "preview"
+  // exist (or are being generated). Scoped to the style / app windows so they
+  // reinforce the focus of those steps rather than following the user everywhere.
+  const showThumbnails =
+    ((project?.preview_images?.length ?? 0) > 0 || activeAction === "preview") &&
+    (viewStage === "style" || viewStage === "app")
 
   // Figma belongs to the UI-generation stage: only surface it once the project
   // has reached the preview / UI-baseline stage, so it never clutters or
@@ -177,7 +200,7 @@ export function CodeStudio() {
         {/* Stage progress header */}
         <div className="flex flex-col gap-2 rounded-xl border bg-card px-3 py-2.5 sm:flex-row sm:items-center sm:gap-3 sm:px-4 sm:py-3">
           <div className="min-w-0 flex-1">
-            <CodeStepper />
+            <CodeStepper viewStage={viewStage} onSelect={setViewStage} />
           </div>
           <div className="flex shrink-0 items-center justify-end gap-2">
             {/* GitHub auto-sync status (read-only): repo link + latest push. Renders
@@ -217,6 +240,8 @@ export function CodeStudio() {
         <div className="flex min-h-0 flex-1 flex-col gap-3 lg:flex-row">
           <Card className="flex min-h-0 flex-1 flex-col overflow-hidden p-0">
             <ConversationRail
+              viewStage={viewStage}
+              onSelectStage={setViewStage}
               requirementDraft={requirementInput}
               onRequirementChange={setRequirementInput}
               onStart={handleStart}

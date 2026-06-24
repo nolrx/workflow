@@ -108,10 +108,16 @@
     }
   },
   "stepper": {
+    "view": "View {{stage}}",
     "retry": "Retry stage",
     "retryFailed": "Retry failed — please try again"
   },
   "conversation": {
+    "jumpToActive": "Go to {{stage}}",
+    "stageDone": "This step is confirmed · edit it in the card above",
+    "stageLocked": "This step hasn't started yet",
+    "restart": "Back to requirements to start over",
+    "windowEmpty": "Nothing here yet for this step",
     "title": "Conversation",
     "intro": "Describe the product you want to build. I'll draft the requirements first and check with you before each next step.",
     "generating": "Generating…",

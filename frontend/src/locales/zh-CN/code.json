@@ -108,10 +108,16 @@
     }
   },
   "stepper": {
+    "view": "查看「{{stage}}」",
     "retry": "重试此阶段",
     "retryFailed": "重试失败，请稍后再试"
   },
   "conversation": {
+    "jumpToActive": "前往「{{stage}}」",
+    "stageDone": "本阶段已确认 · 可在上方卡片中直接编辑",
+    "stageLocked": "本阶段尚未开始",
+    "restart": "返回需求阶段重新开始",
+    "windowEmpty": "本阶段暂无内容",
     "title": "对话",
     "intro": "描述你想做的产品，我会先生成需求文档，每一步都交你确认后再继续。",
     "generating": "正在生成…",

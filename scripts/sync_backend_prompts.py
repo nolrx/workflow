@@ -19,6 +19,10 @@ KEYS = [
     "code/backend_project_reinforce_prompt.txt",
     "code/backend_project_repair_prompt.txt",
     "code/backend_project_critic_prompt.txt",
+    # Fullstack schema-drift fix: the BE/MW generators must converge on ONE table
+    # layout (string/uuid PKs, created_at/updated_at, verbatim names).
+    "code/middleware_prompt.txt",
+    "code/contract_synthesis_prompt.txt",
 ]
 
 db = get_mongo_db()

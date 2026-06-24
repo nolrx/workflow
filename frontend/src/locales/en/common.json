@@ -18,6 +18,7 @@
       "redbook": "RedBook"
     },
     "newSession": "New session",
+    "currentSession": "Current session",
     "recentSessions": "Recent",
     "viewAll": "View all",
     "noSessions": "No sessions yet",
@@ -33,6 +34,7 @@
     "cancel": "Cancel",
     "delete": "Delete",
     "edit": "Edit",
+    "preview": "Preview",
     "create": "Create",
     "submit": "Submit",
     "back": "Back",
@@ -86,6 +88,7 @@
   },
   "a11y": {
     "notifications": "Notifications",
-    "profile": "Profile"
+    "profile": "Profile",
+    "openMenu": "Open menu"
   }
 }

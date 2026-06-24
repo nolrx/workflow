@@ -18,6 +18,7 @@
       "redbook": "RedBook"
     },
     "newSession": "새 세션",
+    "currentSession": "현재 세션",
     "recentSessions": "최근",
     "viewAll": "전체 보기",
     "noSessions": "세션 없음",
@@ -33,6 +34,7 @@
     "cancel": "취소",
     "delete": "삭제",
     "edit": "편집",
+    "preview": "미리보기",
     "create": "만들기",
     "submit": "제출",
     "back": "뒤로",
@@ -86,6 +88,7 @@
   },
   "a11y": {
     "notifications": "알림",
-    "profile": "프로필"
+    "profile": "프로필",
+    "openMenu": "메뉴 열기"
   }
 }

@@ -15,3 +15,6 @@ export { useTeamStore } from "./teamStore"
 export type { Team, TeamMember, TeamInvitation } from "./teamStore"
 
 export { useCodeStore } from "./codeStore"
+
+export { usePreferenceStore } from "./preferenceStore"
+export type { AppTheme } from "./preferenceStore"

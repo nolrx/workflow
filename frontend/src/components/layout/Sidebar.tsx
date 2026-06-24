@@ -8,6 +8,7 @@ import {
   CreditCard,
   ChevronDown,
   ScrollText,
+  CornerDownRight,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -28,13 +29,18 @@ interface SessionItem {
   href: string
 }
 
-export function Sidebar() {
+interface SidebarContentProps {
+  onNavigate?: () => void
+}
+
+export function SidebarContent({ onNavigate }: SidebarContentProps) {
   const location = useLocation()
   const navigate = useNavigate()
   const { t } = useTranslation()
 
   // Code-domain sessions (the "creation" entities double as sessions).
   const codeProjects = useCodeStore((s) => s.projects)
+  const currentProject = useCodeStore((s) => s.project)
   const fetchCodeProjects = useCodeStore((s) => s.fetchProjects)
 
   const balance = useCreditStore((s) => s.balance)
@@ -61,125 +67,168 @@ export function Sidebar() {
     // studio opens to a blank conversation (not the previous session's).
     useCodeStore.getState().setCurrentProject(null)
     useAgentStore.getState().reset()
+    onNavigate?.()
     navigate("/code")
   }
 
+  const currentSessionLabel =
+    currentProject?.title || currentProject?.requirement_input?.slice(0, 40) || untitled
+
   return (
-    <aside className="fixed left-0 top-0 z-40 h-screen w-64 border-r bg-card">
-      <div className="flex h-full flex-col">
-        {/* Logo */}
-        <div className="flex h-16 items-center border-b px-6">
-          <Link to="/" className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <span className="text-sm font-bold">{t("brand.name")}</span>
-            </div>
-            <span className="font-semibold">{t("brand.subtitle")}</span>
+    <>
+      {/* New session */}
+      <div className="p-3">
+        <Button
+          onClick={handleNewSession}
+          className="w-full justify-start gap-2 rounded-sm"
+        >
+          <Plus className="h-4 w-4" />
+          {t("sidebar.newSession")}
+        </Button>
+      </div>
+
+      {/* Prominent "return to current session" shortcut so users never get
+          stranded after navigating to settings/team/admin pages. */}
+      {currentProject && (
+        <div className="border-y bg-accent/40 px-3 py-3">
+          <div className="mb-1.5 flex items-center gap-2 text-xs font-medium uppercase text-muted-foreground">
+            <CornerDownRight className="h-3.5 w-3.5" />
+            {t("sidebar.currentSession")}
+          </div>
+          <Link
+            to={`/code/${currentProject.id}`}
+            onClick={onNavigate}
+            title={currentSessionLabel}
+            className={cn(
+              "block truncate border-l-2 py-1.5 pl-3 pr-2 text-sm font-medium transition-colors",
+              location.pathname.includes(currentProject.id)
+                ? "border-primary bg-primary/10 text-primary"
+                : "border-transparent hover:bg-accent hover:text-accent-foreground"
+            )}
+          >
+            {currentSessionLabel}
           </Link>
         </div>
+      )}
 
-        {/* Team Selector */}
-        <div className="border-b p-4">
-          <Button variant="outline" className="w-full justify-between">
-            <span className="truncate">{t("sidebar.personal")}</span>
-            <ChevronDown className="h-4 w-4 shrink-0" />
-          </Button>
+      {/* Recent sessions */}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="px-3 py-2 text-xs font-medium uppercase text-muted-foreground">
+          {t("sidebar.recentSessions")}
         </div>
-
-        {/* New session + session list */}
-        <div className="flex min-h-0 flex-1 flex-col p-3">
-          <Button onClick={handleNewSession} className="mb-3 w-full justify-start gap-2">
-            <Plus className="h-4 w-4" />
-            {t("sidebar.newSession")}
-          </Button>
-
-          <div className="mb-1 px-1 text-xs font-medium uppercase text-muted-foreground">
-            {t("sidebar.recentSessions")}
-          </div>
-
-          <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto">
-            {sessions.length === 0 ? (
-              <p className="px-2 py-3 text-sm text-muted-foreground">{t("sidebar.noSessions")}</p>
-            ) : (
-              sessions.map((session) => {
-                const isActive = location.pathname.includes(session.id)
-                return (
-                  <Link
-                    key={session.id}
-                    to={session.href}
-                    title={session.label}
-                    className={cn(
-                      "block truncate rounded-md px-3 py-2 text-sm transition-colors",
-                      isActive
-                        ? "bg-accent font-medium text-accent-foreground"
-                        : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                    )}
-                  >
-                    {session.label}
-                  </Link>
-                )
-              })
-            )}
-          </nav>
-
-          {/* Settings nav */}
-          <div className="mt-2 space-y-1 border-t pt-2">
-            {settingsNavItems.map((item) => {
-              const isActive = location.pathname === item.href
+        <nav className="space-y-0">
+          {sessions.length === 0 ? (
+            <p className="px-3 py-3 text-sm text-muted-foreground">
+              {t("sidebar.noSessions")}
+            </p>
+          ) : (
+            sessions.map((session) => {
+              const isActive = location.pathname.includes(session.id)
               return (
                 <Link
-                  key={item.href}
-                  to={item.href}
+                  key={session.id}
+                  to={session.href}
+                  title={session.label}
+                  onClick={onNavigate}
                   className={cn(
-                    "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                    "block truncate border-l-2 px-3 py-2 text-sm transition-colors",
                     isActive
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                      ? "border-primary bg-accent font-medium text-accent-foreground"
+                      : "border-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                   )}
                 >
-                  <item.icon className="h-4 w-4" />
-                  {t(item.titleKey)}
+                  {session.label}
                 </Link>
               )
-            })}
-            {isAdmin && (
-              <Link
-                to="/admin/prompts"
-                className={cn(
-                  "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                  location.pathname.startsWith("/admin")
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                )}
-              >
-                <ScrollText className="h-4 w-4" />
-                {t("admin:nav.prompts")}
-              </Link>
-            )}
-          </div>
-        </div>
+            })
+          )}
+        </nav>
+      </div>
 
-        {/* Credits Display (live balance) */}
-        <div className="border-t p-4">
-          <div className="rounded-lg bg-muted p-3">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium">{t("sidebar.credits")}</span>
-              <span className="text-sm text-muted-foreground">
-                {balance ? balance.balance : 0}
-                {balance?.monthly_allocation ? ` / ${balance.monthly_allocation}` : ""}
-              </span>
-            </div>
-            {balance?.monthly_allocation ? (
-              <div className="mt-2 h-2 overflow-hidden rounded-full bg-background">
-                <div
-                  className="h-full bg-primary transition-all"
-                  style={{
-                    width: `${Math.min(100, Math.round((balance.balance / balance.monthly_allocation) * 100))}%`,
-                  }}
-                />
-              </div>
-            ) : null}
-          </div>
+      {/* Settings nav */}
+      <div className="border-t">
+        {settingsNavItems.map((item) => {
+          const isActive = location.pathname === item.href
+          return (
+            <Link
+              key={item.href}
+              to={item.href}
+              onClick={onNavigate}
+              className={cn(
+                "flex items-center gap-3 border-l-2 px-4 py-2.5 text-sm font-medium transition-colors",
+                isActive
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+              )}
+            >
+              <item.icon className="h-4 w-4" />
+              {t(item.titleKey)}
+            </Link>
+          )
+        })}
+        {isAdmin && (
+          <Link
+            to="/admin/prompts"
+            onClick={onNavigate}
+            className={cn(
+              "flex items-center gap-3 border-l-2 px-4 py-2.5 text-sm font-medium transition-colors",
+              location.pathname.startsWith("/admin")
+                ? "border-primary bg-primary/10 text-primary"
+                : "border-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            )}
+          >
+            <ScrollText className="h-4 w-4" />
+            {t("admin:nav.prompts")}
+          </Link>
+        )}
+      </div>
+
+      {/* Team Selector */}
+      <div className="border-t p-3">
+        <Button
+          variant="ghost"
+          className="h-auto w-full justify-between rounded-none px-4 py-2.5"
+        >
+          <span className="flex items-center gap-3">
+            <Users className="h-4 w-4" />
+            <span className="truncate">{t("sidebar.personal")}</span>
+          </span>
+          <ChevronDown className="h-4 w-4 shrink-0" />
+        </Button>
+      </div>
+
+      {/* Credits Display (live balance) */}
+      <div className="border-t bg-muted p-4">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium">{t("sidebar.credits")}</span>
+          <span className="text-sm text-muted-foreground">
+            {balance ? balance.balance : 0}
+            {balance?.monthly_allocation ? ` / ${balance.monthly_allocation}` : ""}
+          </span>
         </div>
+        {balance?.monthly_allocation ? (
+          <div className="mt-2 h-2 bg-background">
+            <div
+              className="h-full bg-primary transition-all"
+              style={{
+                width: `${Math.min(
+                  100,
+                  Math.round((balance.balance / balance.monthly_allocation) * 100)
+                )}%`,
+              }}
+            />
+          </div>
+        ) : null}
+      </div>
+    </>
+  )
+}
+
+export function Sidebar() {
+  return (
+    <aside className="hidden h-full w-64 shrink-0 border-r bg-card lg:block">
+      <div className="flex h-full flex-col">
+        <SidebarContent />
       </div>
     </aside>
   )

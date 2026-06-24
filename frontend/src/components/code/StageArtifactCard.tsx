@@ -21,6 +21,7 @@ import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
+import { MarkdownPreview } from "@/components/code/MarkdownPreview"
 import { SelectionReviseTextarea } from "@/components/code/SelectionReviseTextarea"
 import { StageHistoryDialog } from "@/components/code/StageHistoryDialog"
 import { useCodeStore, type ReviseSectionArgs } from "@/stores/codeStore"
@@ -84,6 +85,17 @@ export function StageArtifactCard({ stage, open, onToggle, state = "idle" }: Sta
 
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null)
 
+  // View mode for Markdown document stages: default to rendered preview so the
+  // user can read formatted headings/lists, switch to edit to make changes.
+  const [viewMode, setViewMode] = useState<
+    Record<"requirements" | "flow" | "documents" | "style", "edit" | "preview">
+  >({
+    requirements: "preview",
+    flow: "preview",
+    documents: "preview",
+    style: "preview",
+  })
+
   // Inline partial revision: rewrite only the user-selected span (asynchronous),
   // toast the outcome, and hand the changed range back so the textarea highlights
   // exactly what moved.
@@ -135,25 +147,54 @@ export function StageArtifactCard({ stage, open, onToggle, state = "idle" }: Sta
     historyStage: "requirements" | "flow"
   ) => {
     if (!project || !value) return emptyState
+    const mode = viewMode[historyStage]
     return (
-      <div className="space-y-3">
-        <div className="flex justify-end">
+      <div className="space-y-3 sm:space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex gap-1">
+            <Button
+              variant={mode === "edit" ? "default" : "ghost"}
+              size="sm"
+              onClick={() =>
+                setViewMode((prev) => ({ ...prev, [historyStage]: "edit" }))
+              }
+            >
+              {tc("buttons.edit")}
+            </Button>
+            <Button
+              variant={mode === "preview" ? "default" : "ghost"}
+              size="sm"
+              onClick={() =>
+                setViewMode((prev) => ({ ...prev, [historyStage]: "preview" }))
+              }
+            >
+              {tc("buttons.preview")}
+            </Button>
+          </div>
           <StageHistoryDialog projectId={project.id} stage={historyStage} onRestored={setCurrentProject} />
         </div>
-        <SelectionReviseTextarea
-          value={value}
-          onChange={(event) => onDraft(event.target.value)}
-          rows={18}
-          className="font-mono text-sm"
-          disabled={isLoading}
-          onReviseSelection={(args) => handleReviseSection({ stage: historyStage }, args)}
-        />
-        <div className="flex justify-end">
-          <Button onClick={() => void onSave()} disabled={isLoading}>
-            {activeAction === "saveProject" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {tc("buttons.saveChanges")}
-          </Button>
-        </div>
+        {mode === "edit" ? (
+          <SelectionReviseTextarea
+            value={value}
+            onChange={(event) => onDraft(event.target.value)}
+            rows={18}
+            className="font-mono text-sm"
+            disabled={isLoading}
+            onReviseSelection={(args) => handleReviseSection({ stage: historyStage }, args)}
+          />
+        ) : (
+          <div className="rounded-lg bg-muted/50 p-3 sm:p-4">
+            <MarkdownPreview>{value}</MarkdownPreview>
+          </div>
+        )}
+        {mode === "edit" && (
+          <div className="flex justify-end">
+            <Button onClick={() => void onSave()} disabled={isLoading}>
+              {activeAction === "saveProject" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {tc("buttons.saveChanges")}
+            </Button>
+          </div>
+        )}
       </div>
     )
   }
@@ -197,11 +238,17 @@ export function StageArtifactCard({ stage, open, onToggle, state = "idle" }: Sta
                 <FileCode2 className="h-4 w-4 shrink-0 text-primary" />
                 <span className="truncate">{selectedDocument.title}</span>
               </div>
-              <Tabs defaultValue="content">
+              <Tabs defaultValue="preview">
                 <TabsList>
+                  <TabsTrigger value="preview">{t("documents.preview")}</TabsTrigger>
                   <TabsTrigger value="content">{t("documents.content")}</TabsTrigger>
                   <TabsTrigger value="prompt">{t("documents.promptExpert")}</TabsTrigger>
                 </TabsList>
+                <TabsContent value="preview">
+                  <div className="rounded-lg bg-muted/50 p-3 sm:p-4">
+                    <MarkdownPreview>{selectedDocument.content}</MarkdownPreview>
+                  </div>
+                </TabsContent>
                 <TabsContent value="content">
                   <SelectionReviseTextarea
                     value={selectedDocument.content}
@@ -251,8 +298,10 @@ export function StageArtifactCard({ stage, open, onToggle, state = "idle" }: Sta
 
   const renderStyle = () => {
     if (!project) return emptyState
+    const mode = viewMode.style
     return (
-      <div className="space-y-4">
+      <div className="space-y-4 sm:space-y-6">
+        {/* History */}
         <div className="flex flex-wrap justify-end gap-2">
           <StageHistoryDialog
             projectId={project.id}
@@ -261,9 +310,11 @@ export function StageArtifactCard({ stage, open, onToggle, state = "idle" }: Sta
             triggerLabel={t("versions.styleHistory")}
           />
         </div>
+
+        {/* Style selection */}
         <div className="grid gap-3 sm:grid-cols-2">
           {styles.map((style) => (
-            <Label key={style.id} className="flex cursor-pointer gap-3 rounded-md border p-3">
+            <Label key={style.id} className="flex cursor-pointer gap-3 rounded-md border bg-card p-3">
               <Checkbox
                 checked={selectedStyleIds.includes(style.id)}
                 onCheckedChange={() => toggleStyle(style.id)}
@@ -275,7 +326,9 @@ export function StageArtifactCard({ stage, open, onToggle, state = "idle" }: Sta
             </Label>
           ))}
         </div>
-        <div className="flex flex-wrap gap-3">
+
+        {/* Actions */}
+        <div className="flex flex-wrap gap-3 border-t border-dashed pt-4">
           <Button
             variant="outline"
             onClick={() => void generateStylePrompt()}
@@ -301,15 +354,46 @@ export function StageArtifactCard({ stage, open, onToggle, state = "idle" }: Sta
             {t("preview.generate")}
           </Button>
         </div>
-        <SelectionReviseTextarea
-          value={project.style_prompt || ""}
-          onChange={(event) => updateProjectDraft({ style_prompt: event.target.value })}
-          placeholder={t("style.placeholder")}
-          rows={8}
-          className="font-mono text-sm"
-          disabled={isLoading}
-          onReviseSelection={(args) => handleReviseSection({ stage: "style" }, args)}
-        />
+
+        {/* Style document editor / preview */}
+        <div className="rounded-lg bg-muted/50 p-3 sm:p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <span className="text-sm font-medium text-foreground">{t("style.documentTitle")}</span>
+            <div className="inline-flex rounded-md bg-muted p-1">
+              <Button
+                variant={mode === "edit" ? "secondary" : "ghost"}
+                size="sm"
+                className="rounded-sm"
+                onClick={() => setViewMode((prev) => ({ ...prev, style: "edit" }))}
+              >
+                {tc("buttons.edit")}
+              </Button>
+              <Button
+                variant={mode === "preview" ? "secondary" : "ghost"}
+                size="sm"
+                className="rounded-sm"
+                onClick={() => setViewMode((prev) => ({ ...prev, style: "preview" }))}
+              >
+                {tc("buttons.preview")}
+              </Button>
+            </div>
+          </div>
+          {mode === "edit" ? (
+            <SelectionReviseTextarea
+              value={project.style_prompt || ""}
+              onChange={(event) => updateProjectDraft({ style_prompt: event.target.value })}
+              placeholder={t("style.placeholder")}
+              rows={8}
+              className="font-mono text-sm"
+              disabled={isLoading}
+              onReviseSelection={(args) => handleReviseSection({ stage: "style" }, args)}
+            />
+          ) : (
+            <MarkdownPreview className="max-h-[40vh]">
+              {project.style_prompt || t("style.placeholder")}
+            </MarkdownPreview>
+          )}
+        </div>
         {/* Generated preview thumbnails now render in the right-hand rail
             (PreviewThumbnailPanel), not inline under the conversation. */}
       </div>

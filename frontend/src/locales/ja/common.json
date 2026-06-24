@@ -86,6 +86,7 @@
   },
   "a11y": {
     "notifications": "通知",
-    "profile": "プロフィール"
+    "profile": "プロフィール",
+    "openMenu": "メニューを開く"
   }
 }

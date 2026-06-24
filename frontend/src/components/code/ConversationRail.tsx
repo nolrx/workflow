@@ -223,7 +223,7 @@ export function ConversationRail({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
+      <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-3 sm:px-4 sm:py-4">
         {!run && (
           <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
             <Sparkles className="mb-2 h-4 w-4 text-primary" />
@@ -257,7 +257,7 @@ export function ConversationRail({
         )}
       </div>
 
-      <div className="mt-3 border-t px-4 py-3">
+      <div className="mt-3 border-t px-3 py-3 sm:px-4">
         {!run || isFailed ? (
           <div className="space-y-2">
             {isFailed && (

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { useParams } from "react-router-dom"
 import { useTranslation } from "react-i18next"
+import { Info } from "lucide-react"
 import { toast } from "sonner"
 import { AgentRunPanel } from "@/components/agent/AgentRunPanel"
 import { CodeStepper } from "@/components/code/CodeStepper"
@@ -174,11 +175,11 @@ export function CodeStudio() {
         }`}
       >
         {/* Stage progress header */}
-        <div className="flex items-center gap-3 rounded-xl border bg-card px-3 py-2.5 sm:px-4 sm:py-3">
+        <div className="flex flex-col gap-2 rounded-xl border bg-card px-3 py-2.5 sm:flex-row sm:items-center sm:gap-3 sm:px-4 sm:py-3">
           <div className="min-w-0 flex-1">
             <CodeStepper />
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-center justify-end gap-2">
             {/* GitHub auto-sync status (read-only): repo link + latest push. Renders
                 nothing until the session has a repo or a sync event. */}
             {project && <GitHubRepoCard projectId={project.id} />}
@@ -198,8 +199,14 @@ export function CodeStudio() {
                 <Badge variant={agentRun.status === "paused" ? "default" : "outline"}>
                   {ta(`status.${agentRun.status}`, { defaultValue: agentRun.status })}
                 </Badge>
-                <Button variant="ghost" size="sm" onClick={openPanel}>
-                  {ta("panel.viewDetail")}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 w-8 px-0 sm:h-9 sm:w-auto sm:px-3"
+                  onClick={openPanel}
+                >
+                  <Info className="h-4 w-4 sm:hidden" />
+                  <span className="hidden sm:inline">{ta("panel.viewDetail")}</span>
                 </Button>
               </>
             )}

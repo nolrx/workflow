@@ -149,7 +149,7 @@ export function StageArtifactCard({ stage, open, onToggle, state = "idle" }: Sta
     if (!project || !value) return emptyState
     const mode = viewMode[historyStage]
     return (
-      <div className="space-y-3">
+      <div className="space-y-3 sm:space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex gap-1">
             <Button
@@ -173,22 +173,20 @@ export function StageArtifactCard({ stage, open, onToggle, state = "idle" }: Sta
           </div>
           <StageHistoryDialog projectId={project.id} stage={historyStage} onRestored={setCurrentProject} />
         </div>
-        <div className="rounded-lg border bg-card p-4">
-          {mode === "edit" ? (
-            <SelectionReviseTextarea
-              value={value}
-              onChange={(event) => onDraft(event.target.value)}
-              rows={18}
-              className="font-mono text-sm"
-              disabled={isLoading}
-              onReviseSelection={(args) => handleReviseSection({ stage: historyStage }, args)}
-            />
-          ) : (
-            <div className="rounded-md bg-muted/50 p-4">
-              <MarkdownPreview>{value}</MarkdownPreview>
-            </div>
-          )}
-        </div>
+        {mode === "edit" ? (
+          <SelectionReviseTextarea
+            value={value}
+            onChange={(event) => onDraft(event.target.value)}
+            rows={18}
+            className="font-mono text-sm"
+            disabled={isLoading}
+            onReviseSelection={(args) => handleReviseSection({ stage: historyStage }, args)}
+          />
+        ) : (
+          <div className="rounded-lg bg-muted/50 p-3 sm:p-4">
+            <MarkdownPreview>{value}</MarkdownPreview>
+          </div>
+        )}
         {mode === "edit" && (
           <div className="flex justify-end">
             <Button onClick={() => void onSave()} disabled={isLoading}>
@@ -247,10 +245,8 @@ export function StageArtifactCard({ stage, open, onToggle, state = "idle" }: Sta
                   <TabsTrigger value="prompt">{t("documents.promptExpert")}</TabsTrigger>
                 </TabsList>
                 <TabsContent value="preview">
-                  <div className="rounded-lg border bg-card p-4">
-                    <div className="rounded-md bg-muted/50 p-4">
-                      <MarkdownPreview>{selectedDocument.content}</MarkdownPreview>
-                    </div>
+                  <div className="rounded-lg bg-muted/50 p-3 sm:p-4">
+                    <MarkdownPreview>{selectedDocument.content}</MarkdownPreview>
                   </div>
                 </TabsContent>
                 <TabsContent value="content">
@@ -304,7 +300,7 @@ export function StageArtifactCard({ stage, open, onToggle, state = "idle" }: Sta
     if (!project) return emptyState
     const mode = viewMode.style
     return (
-      <div className="space-y-6">
+      <div className="space-y-4 sm:space-y-6">
         {/* History */}
         <div className="flex flex-wrap justify-end gap-2">
           <StageHistoryDialog
@@ -332,7 +328,7 @@ export function StageArtifactCard({ stage, open, onToggle, state = "idle" }: Sta
         </div>
 
         {/* Actions */}
-        <div className="flex flex-wrap gap-3 border-t pt-4">
+        <div className="flex flex-wrap gap-3 border-t border-dashed pt-4">
           <Button
             variant="outline"
             onClick={() => void generateStylePrompt()}
@@ -360,10 +356,10 @@ export function StageArtifactCard({ stage, open, onToggle, state = "idle" }: Sta
         </div>
 
         {/* Style document editor / preview */}
-        <div className="rounded-lg border bg-card p-4">
-          <div className="mb-3 flex items-center justify-between border-b pb-3">
+        <div className="rounded-lg bg-muted/50 p-3 sm:p-4">
+          <div className="mb-3 flex items-center justify-between">
             <span className="text-sm font-medium text-foreground">{t("style.documentTitle")}</span>
-            <div className="inline-flex rounded-md border bg-muted p-1">
+            <div className="inline-flex rounded-md bg-muted p-1">
               <Button
                 variant={mode === "edit" ? "secondary" : "ghost"}
                 size="sm"
@@ -393,11 +389,9 @@ export function StageArtifactCard({ stage, open, onToggle, state = "idle" }: Sta
               onReviseSelection={(args) => handleReviseSection({ stage: "style" }, args)}
             />
           ) : (
-            <div className="rounded-md bg-muted/50 p-4">
-              <MarkdownPreview className="max-h-[40vh]">
-                {project.style_prompt || t("style.placeholder")}
-              </MarkdownPreview>
-            </div>
+            <MarkdownPreview className="max-h-[40vh]">
+              {project.style_prompt || t("style.placeholder")}
+            </MarkdownPreview>
           )}
         </div>
         {/* Generated preview thumbnails now render in the right-hand rail

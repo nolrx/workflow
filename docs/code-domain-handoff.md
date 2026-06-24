@@ -1,7 +1,7 @@
 # Code 域交接文档（设计 / 定义 / 全流程 / 已知问题）
 
-> 面向**接手 Code 域使用与二次开发**的团队。本文是当前代码的权威说明，凡与 `README.md`、`AGENTS.md` 冲突，以本文和 `CLAUDE.md` 为准（那两份已落后于代码）。
-> 适用范围：`/api/code` + 共享的 `/api/agent`（Agent Swarm）+ 前端 `frontend/src/{pages,components,stores,api}` 的 code/agent 部分 + 共享底座（auth/team/credit/ai）。PPT、RedBook 两域当前版本不启用，仅作镜像参考。
+> 面向**接手 Code 域使用与二次开发**的团队。本文是当前代码的权威说明；`README.md`（使用者向）、`AGENTS.md`（Codex 向）已与代码同步，更详尽处以本文与 `CLAUDE.md` 为准。
+> 适用范围：`/api/code` + 共享的 `/api/agent`（Agent Swarm）+ 前端 `frontend/src/{pages,components,stores,api}` 的 code/agent 部分 + 共享底座（auth/team/credit/ai）。
 
 ---
 
@@ -17,11 +17,11 @@
   | `code_frontend_project_generation` | fe_planner→fe_project_build→fe_publish（3 步，**容器化 agent**） | 多文件 React+Vite+TS 工程（源码 zip + 可预览 dist） | ✅ 当前前端生成默认 |
   | `code_canvas_generation` | 用户自绘 node graph，拓扑序执行（agent/merge/branch 节点） | 节点结论落 `CodeDocument` / stage 版本 | ✅ n8n 式 remix 画布 |
   | `code_figma_slice_generation` | fe_slice_planner→fe_slice_analyze→fe_slice_publish（3 步，**Codex 容器**） | UI 预览图 → 可逐元素编辑的 Design IR | ✅ Figma 高保真导出 |
-  | `code_backend_project_generation` | be_planner→be_project_build→be_publish（3 步，**be-agent 容器**） | 多文件 polyglot 后端工程（含 Dockerfile，源码 zip） | 🆕 全栈：后端工程 |
-  | `code_middleware_provisioning` | mw_planner→mw_provision→mw_publish（3 步） | schema/迁移/seed 产物 + 中间件清单（**不实建库**） | 🆕 全栈：中间件 |
-  | `code_fullstack_deploy` | fs_deploy（4 phase：provision→build→start→done） | 有序原子部署长驻后端容器 + 反代 + 预览 | 🆕 全栈：部署 |
+  | `code_backend_project_generation` | be_planner→be_project_build→be_publish（3 步，**be-agent 容器**） | 多文件 polyglot 后端工程（含 Dockerfile，源码 zip） | ✅ 全栈：后端工程 |
+  | `code_middleware_provisioning` | mw_planner→mw_provision→mw_publish（3 步） | schema/迁移/seed 产物 + 中间件清单（**不实建库**） | ✅ 全栈：中间件 |
+  | `code_fullstack_deploy` | fs_deploy（4 phase：provision→build→start→done） | 有序应用部署长驻后端容器 + 反代 + 预览 | ✅ 全栈：部署 |
 - **⚠️ 旧的单文件 HTML 流程已彻底移除**（commit `c5e782e`）：`code_frontend_generation`（spec→单文件 index.html）与已退休的 `code_figma_restore` 连同 `frontend_build_service`、`frontend_build/critic/repair/from_figma` 提示词一并删除。前端代码现在只由容器多文件工程路径产出；历史 run 仍可回放（`previewTabs.ts` 保留旧 key 仅供回放）。CLAUDE.md 已同步更正，不再以本文为唯一勘误源。
-- **全栈生成（后端 + 中间件 + 部署）是在研新增**：上表后三个 workflow + `CodeProjectLedger`/`CodeDeployment` 模型 + `/api/code/.../fullstack` 编排端点构成全栈流水线，由**共享 OpenAPI 契约**连接前后端。设计与实施清单见 **`docs/code-fullstack-generation.md`**，本文 §5.3 给出摘要。
+- **全栈生成（后端 + 中间件 + 部署）已落地**：上表后三个 workflow + `CodeProjectLedger`/`CodeDeployment` 模型 + `/api/code/.../fullstack` 编排端点构成全栈流水线，由**共享 OpenAPI 契约**连接前后端。设计与实施清单见 **`docs/code-fullstack-generation.md`**，本文 §5.3 给出摘要。
 - **Code 域当前计费默认全为 0**（免费），但所有扣费都走 `charge()`/`refund_credits()`，设 `PRICE_CODE_*` 环境变量即可开启计量，无需改代码。详见 §9。
 
 ---
@@ -93,7 +93,7 @@
 拆分后的可编辑开发文档。列：`document_type`、`title`、`content`、`prompt_expert`(每篇附带的提示词专家建议)、`order_index`。无版本表，历史靠 `CodeStageVersion` 的 DOCUMENTS stage 整组快照。
 
 ### 2.3 `CodeStageVersion`（表 `code_stage_versions`，`models/code/stage_version.py`）—— 分阶段版本历史
-镜像 PPT 的 `PPTPageImageVersion` 模式。**不变式**：每个 `(project_id, stage)` 至多一行 `is_current=True`，其内容与 `CodeProject` 对应字段同步。
+**不变式**：每个 `(project_id, stage)` 至多一行 `is_current=True`，其内容与 `CodeProject` 对应字段同步。
 
 - `stage` ∈ `CodeStage.ALL = (requirements, flow, documents, style, preview)`。
 - `version_number`：同一 `(project, stage)` 内自增，用 `MAX(version_number)+1` 计算（`version_service.py:165`）。
@@ -185,7 +185,7 @@ UI-baseline 确认（`status=ui_confirmed`）之后才生成代码。容器化 w
 - 历史 run 仍可逐步回放；前端 `previewTabs.ts` 保留 `code_frontend_html` 旧 key **仅用于回放**，`CodeAppPreview` 只主动触发 §5.1 的 project 版。
 - **不要**在这条链路上加新功能；新需求一律走容器多文件工程路径。
 
-### 5.3 全栈生成（🆕 在研：后端 + 中间件 + 部署）
+### 5.3 全栈生成（✅ 已落地：后端 + 中间件 + 部署）
 在 §5.1 前端工程之外新增三个独立 run，三者由**共享 OpenAPI 契约**连接（后端实现、前端消费）。完整设计 / 数据模型 / 实施清单见 **`docs/code-fullstack-generation.md`**；此处仅摘要。
 
 - **编排端点** `POST /api/code/projects/<pid>/fullstack/runs`（`fullstack_routes.py`）：① 同步合成共享契约（`fullstack/contract_service.py`，写 `CodeProjectLedger`，计费 `CODE_CONTRACT_SYNTHESIS`）；② 创建 3 个并发 `AgentRun`：`code_frontend_project_generation`（注入契约）+ `code_backend_project_generation` + `code_middleware_provisioning`。
@@ -278,7 +278,7 @@ UI-baseline 确认（`status=ui_confirmed`）之后才生成代码。容器化 w
 | 方法 | 路径 | 用途 |
 |---|---|---|
 | POST | `/projects/<pid>/fullstack/runs` | 同步合成共享契约（写 `CodeProjectLedger`）+ 创建 3 个并发 run，返回 `{contract, runs:{frontend,backend,middleware}}` |
-| POST | `/projects/<pid>/deploy` | 创建 `code_fullstack_deploy` run（有序原子部署 + 回滚）|
+| POST | `/projects/<pid>/deploy` | 创建 `code_fullstack_deploy` run（有序应用部署 + 回滚）|
 | GET | `/projects/<pid>/fullstack/status` | 三 run + 部署状态汇总 |
 | GET | `/projects/<pid>/contract` | 取共享 OpenAPI 契约 |
 | ANY | `/app/<pid>/api/<path>` | 反代到生成后端容器（部署后，`app_proxy_bp` 挂 `/app`）|
@@ -421,7 +421,7 @@ UI-baseline 确认（`status=ui_confirmed`）之后才生成代码。容器化 w
 
 ### 文档偏差（接手前务必知道）
 - **CLAUDE.md 已对齐当前代码**：单文件流程移除、`code_canvas_generation`/`code_figma_slice_generation`、BMAD prompt 重构均已写入，不再有前述前端 workflow 偏差。
-- **`README.md`/`AGENTS.md` 整体落后**（端口、默认 provider、域覆盖均不准，且只描述 PPT/RedBook），别依赖——以本文与 CLAUDE.md 为准。
+- **`README.md` / `AGENTS.md` 已同步至当前代码**（README 面向使用者、AGENTS 面向 Codex，端口 / 默认 provider / 域覆盖均已修正）；最详尽、最权威的仍是本文与 `CLAUDE.md`。
 - **全栈生成（后端/中间件/部署）已落代码并通过单测 + 实环境部署冒烟**：7 个 workflow 里的后 3 个、`models/code/fullstack.py`、`fullstack_routes.py`、`be-agent` 镜像、前端 `fullstackStore`/`CodeFullstackPanel` 均已实现并接线，CLAUDE.md 已更新为 7-workflow 构成。设计权威见 `docs/code-fullstack-generation.md`。**注意:`tests/test_fullstack_pipeline.py` 只覆盖纯逻辑（provider mock + sqlite 分支）——`docker build/run`、真实 postgres 建库、健康检查、反代转发等副作用路径未进单测,上线前须在目标 compose 栈内做端到端验证**（已在开发环境用最小后端镜像验证「build → 共享网运行 → 容器名 DNS 健康检查 → DATABASE_URL 注入」这一部署原语可用）。
 
 ---

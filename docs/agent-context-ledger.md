@@ -1,6 +1,6 @@
 # Agent 会话上下文账本（Session Context Ledger）规范
 
-> 范围:**仅 Code 域 + Agent Swarm**(`code_full_generation`、`code_frontend_project_generation`、`code_backend_project_generation`)。PPT / RedBook 不涉及。
+> 范围:**仅 Code 域 + Agent Swarm**(`code_full_generation`、`code_frontend_project_generation`、`code_backend_project_generation`)。
 > 性质:**内部 / 调试可见,从不进入用户产出**。它是保证多步工作流口径一致、避免上下文漂移层层放大的底座。
 
 ## 1. 目的

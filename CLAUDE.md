@@ -4,25 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 claude code only use chinese respone question.
 
-## 当前版本范围(重要 — 优先级最高)
+## 项目范围(重要 — 优先级最高)
 
-**当前版本只对 Code 域生效。** 本仓库虽包含三个产品域,但本版本的开发、改动与验证**仅针对 Code 域**(`/api/code` + 共享的 `/api/agent` Agent Swarm + 其前端 `frontend .../code`),以及 Code 域依赖的共享底座(认证、团队、积分、AI provider 抽象层)。
+**本仓库当前是一个聚焦 Code 域的产品。** 产品面 = Code 软件创作工作流(`/api/code` + 共享的 `/api/agent` Agent Swarm + 前端 `frontend .../code`),以及 Code 域依赖的共享底座(认证、团队、积分、AI provider 抽象层)。开发、改动与验证都围绕这一面展开,**默认只动 Code 域 + Agent Swarm + 共享底座(auth/team/credit/ai)**。
 
-- **PPT 与 RedBook(小红书)域在当前版本中不启用。** 下文中关于 PPT(`/api/ppt`、`backend/{models,routes,services}/ppt/*`、`pptStore`、`frontend .../ppt`)与 RedBook(`/api/redbook`、`backend/{models,routes,services}/redbook/*`、`redbookStore`、`frontend .../redbook`)的内容**仅作历史/架构参考**——不要在这两个域上新增或修改功能,除非用户明确点名要做 PPT 或 RedBook。
-- 保留这些描述是为了说明既有约定和"镜像对称"的设计思路:实现 Code 域功能时**可以参考**它们的模式(后台任务、SSE、文件服务、模型约定等),但产物只落在 Code 域。
-- 一句话:**默认只动 Code 域 + Agent Swarm + 共享底座(auth/team/credit/ai)。** 读到下文 PPT/RedBook 段落时,按"参考资料"对待,而非当前工作目标。
-
-> 仓库里还有一份 `AGENTS.md`(给 Codex 用)和 `README.md`——两者都已落后于当前代码(`AGENTS.md` 只描述了 PPT/RedBook 两个域、没有 Code/Agent Swarm,`README.md` 写的端口/默认 provider 也不准)。**以本文件为准。**
+> 仓库根还有一份 `AGENTS.md`(给 Codex 用,是本文件的精简镜像)和 `README.md`(面向使用者的快速上手)。三者口径保持一致,但**本文件(CLAUDE.md)最详尽,以本文件为准**。
 
 ## 项目概述
 
-AI Creative Studio 是一个 monorepo：后端为 Flask（Python），前端为 React/TypeScript（Vite），由根目录 `package.json` 的 npm 脚本统一编排。项目包含**三个平行的产品域**，它们共享认证、团队和积分体系：
+AI Creative Studio 是一个 monorepo：后端为 Flask（Python），前端为 React/TypeScript（Vite），由根目录 `package.json` 的 npm 脚本统一编排。当前产品域为 **Code**：
 
-- **PPT**（`/api/ppt`、`frontend .../ppt`）—— AI 生成幻灯片。流程为 大纲 → 每页描述 → 每页配图。 _（⚠️ 当前版本不启用，仅作参考，见上文「当前版本范围」）_
-- **RedBook**（`/api/redbook`、`frontend .../redbook`）—— 小红书风格的社交媒体图文生成。 _（⚠️ 当前版本不启用，仅作参考）_
-- **Code**（`/api/code` + 共享的 `/api/agent`、`frontend .../code`）—— 软件创作工作流：需求文档 → 开发流程 → 文档拆分 → 风格文档 → UI 预览 → **前端代码生成与预览**。它通过下文的 **Agent Swarm** 运行时执行，产出可回放的 `AgentRun`。 _（✅ 当前版本唯一在研域）_
+- **Code**（`/api/code` + 共享的 `/api/agent`、`frontend .../code`）—— 软件创作工作流：需求文档 → 开发流程 → 文档拆分 → 风格文档 → UI 预览 → **前端代码生成与预览**，并可进一步做**全栈生成（前端 + 后端 + 中间件）+ 应用部署**。它通过下文的 **Agent Swarm** 运行时执行，产出可回放的 `AgentRun`。
 
-这些域是刻意做成镜像对称的：各自在 `backend/models/`、`backend/routes/`、`backend/services/` 下有独立子包，前端也各有独立的 Zustand store 和页面。新增功能时，请参照*另一个*域的既有约定，而不要另起一套新做法。
+代码分层：Code 域在 `backend/{models,routes,services}/code` 下分子包，Agent Swarm 在 `backend/{models,services}/agent`，共享底座（auth/team/credit/ai）各有独立子包；前端按关注点分目录（`frontend/src/{pages,components,stores}/...`）。新增功能时，请参照既有 Code/Agent 约定，而不要另起一套新做法。
 
 ## 常用命令
 
@@ -31,7 +25,7 @@ AI Creative Studio 是一个 monorepo：后端为 Flask（Python），前端为 
 ```bash
 npm run setup            # uv sync + 安装前端依赖
 npm run dev              # 同时启动后端 + 前端 (npm-run-all --parallel)
-npm run dev:backend      # Flask，地址 http://localhost:5001  (cd backend && source venv/bin/activate && uv run python -m backend.app)
+npm run dev:backend      # Flask，地址 http://localhost:5001  (cd backend && uv run python -m backend.app)
 npm run dev:frontend     # Vite，地址 http://localhost:3000，将 /api 代理到 :5001
 npm run build            # 前端生产构建 (tsc -b && vite build)
 
@@ -56,13 +50,13 @@ uv run pytest path/to/test_x.py::test_name -v       # 跑单个测试
 `tests/conftest.py` 有一个 autouse fixture,在每个用例前后重置 `factory.py` 的 provider 单例缓存（`reset_providers()`），保证改环境变量后能立即生效。
 
 **信任这些脚本前需要知道的坑：**
-- README 写后端跑在 5000 端口；实际跑在 **5001**（见 `backend/app.py` 末尾以及 Vite 代理目标）。请用 5001。
-- **前端没有 `test` 脚本、也没装 vitest**（`frontend/package.json` 只有 `dev`/`build`/`lint`/`preview`）。因此根目录的 `npm run test:frontend` 与 `npm run test`(它会去跑 `cd frontend && npm test`)**目前会失败**——README 关于 vitest 的说法是错的。前端测试视为"未配置"。
+- 后端跑在 **5001**（见 `backend/app.py` 末尾的 `app.run(..., port=5001)` 以及 Vite 代理目标），不是 5000。
+- **前端没有 `test` 脚本、也没装 vitest**（`frontend/package.json` 只有 `dev`/`build`/`lint`/`preview`）。因此根目录的 `npm run test:frontend` 与 `npm run test`(它会去跑 `cd frontend && npm test`)**目前会失败**。前端测试视为"未配置"。
 - 数据库表结构在启动时由 `backend/app.py` 里的 `db.create_all()` 创建，所以开发环境下改动模型重启即生效。**Alembic 仅是声明的依赖——项目里完全没有 Alembic 配置**（没有 `alembic.ini`、没有 `env.py`、没有 migrations 目录），因此 `npm run db:migrate` / `db:revision` 当前会直接失败，也没有任何迁移历史。在真正搭好迁移之前，把表结构视为由 `create_all()` 驱动。
 
 ## 后端架构
 
-**应用工厂**（`backend/app.py`）：`create_app(config_name)` 通过把 `FLASK_ENV` 首字母大写来选择配置类（`development` → `backend/config.py` 中的 `DevelopmentConfig`；另有 `Production`/`Testing`）。开发环境在未设置时会自动生成 `SECRET_KEY`/`JWT_SECRET_KEY`，并默认使用 SQLite；**生产环境会校验 `SECRET_KEY`、`JWT_SECRET_KEY`、`DATABASE_URL` 三者都已设置**，否则启动即抛错。蓝图（blueprint）连同各自的 `url_prefix` 都在这里注册——这是 API 面的权威映射表（`/api/auth`、`/api/users`、`/api/teams`、`/api/credits`、`/api/agent`、`/api/code`，以及 PPT/RedBook 的一组）。
+**应用工厂**（`backend/app.py`）：`create_app(config_name)` 通过把 `FLASK_ENV` 首字母大写来选择配置类（`development` → `backend/config.py` 中的 `DevelopmentConfig`；另有 `Production`/`Testing`）。开发环境在未设置时会自动生成 `SECRET_KEY`/`JWT_SECRET_KEY`，并默认使用 SQLite；**生产环境会校验 `SECRET_KEY`、`JWT_SECRET_KEY`、`DATABASE_URL` 三者都已设置**，否则启动即抛错。蓝图（blueprint）连同各自的 `url_prefix` 都在这里注册——这是 API 面的权威映射表（`/api/auth`、`/api/users`、`/api/teams`、`/api/credits`、`/api/agent`、`/api/code`（含 `/api/code/figma`、`/api/code/github` 与全栈编排）、`/preview`、`/app`、`/api/admin`）。
 
 **扩展**（`backend/extensions.py`）：`db`（Flask-SQLAlchemy）和 `jwt` 定义在这里，与 app 分离以避免循环导入。请从 `backend.extensions` 导入 `db`，绝不要新建一个。
 
@@ -87,10 +81,7 @@ uv run pytest path/to/test_x.py::test_name -v       # 跑单个测试
   - 文本：`AI_TEXT_PROVIDER`、`AI_TEXT_MODEL`、`AI_TEXT_API_KEY`、`AI_TEXT_BASE_URL`、`AI_TEXT_MAX_TOKENS`；Claude 专属 `ANTHROPIC_API_KEY`/`CLAUDE_API_KEY`(可加 `ANTHROPIC_BASE_URL`)。
   - 图像：`AI_IMAGE_PROVIDER`、`AI_IMAGE_MODEL`、`AI_IMAGE_API_KEY`、`AI_IMAGE_BASE_URL`；OpenAI 专属 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_IMAGE_MODEL`、`OPENAI_IMAGE_QUALITY`、`OPENAI_IMAGE_SIZE`、`OPENAI_TIMEOUT`、`OPENAI_MAX_RETRIES`；Panlaxy 专属 `PANLAXY_API_KEY`、`PANLAXY_BASE_URL`、`PANLAXY_IMAGE_MODEL`、`PANLAXY_IMAGE_QUALITY`、`PANLAXY_IMAGE_SIZE`、`PANLAXY_TIMEOUT`、`PANLAXY_MAX_RETRIES`。
 
-**后台任务——多种模式，按场景选用：**
-- **Agent Swarm（Code 域）用进程级 ThreadPoolExecutor**，见下一节。这是当前版本的重点。
-- **PPT 用 ThreadPoolExecutor**，而非 Celery（`backend/services/ppt/task_manager.py`）。`ppt_task_manager.submit_task(task_id, fn, app, ...)` 在工作线程上运行 `fn`。任务函数接收 Flask `app` 并把主体包在 `with app.app_context():` 中。进度/状态通过 `mark_task_processing/completed/failed` + `update_task_progress` 等辅助函数持久化到 `PPTTask` 模型上；客户端轮询任务状态。图片生成是**逐页串行**执行的，以遵守速率限制。 _（参考资料，当前版本不动）_
-- **RedBook 用 SSE 流式输出**（`backend/routes/redbook/*`、`backend/services/redbook/*`）。服务方法是 Python 生成器，逐个 yield `{"event", "data"}` 字典，再通过 `stream_with_context` 以 `text/event-stream` 返回给客户端。事件类型包括 `image`、`content`、`error`、`complete`。 _（参考资料，当前版本不动）_
+**后台任务 —— Agent Swarm（Code 域）用进程级 `ThreadPoolExecutor`**（见下一节）：所有耗时的生成 / 部署都作为可回放的 `AgentRun` 跑在这个进程内运行时里，进度与产物经 recorder 落库、经 SSE 事件总线（`bus.py`）实时推送给客户端。
 
 **Agent Swarm（`backend/services/agent/`，路由 `/api/agent`）—— Code 域的执行与回放底座：**
 - `runtime.py` —— 进程级 `ThreadPoolExecutor(max_workers=8)`(env `AGENT_MAX_WORKERS`，为支撑全栈三并发容器构建 run 从 4 提到 8;模块级单例 `agent_runtime`)。workflow 用 `register_workflow(key, fn)` 注册进 `_WORKFLOWS` 字典、用 `get_workflow(key)` 取出；`agent_runtime.start(app, run_id)` 把一次 run 提交到线程池，在 `app.app_context()` 里执行。
@@ -102,7 +93,7 @@ uv run pytest path/to/test_x.py::test_name -v       # 跑单个测试
   - **`code_figma_slice_generation`**（`workflows/code_figma_slice_workflow.py`）——把一张 UI 预览缩略图重建成**可在 Figma 逐元素编辑的 Design IR**：`fe_slice_planner` → `fe_slice_analyze` → `fe_slice_publish`。**分析步在 docker `slicer-agent` 容器里跑 OpenAI Codex CLI**（Docker-out-of-Docker：后端容器挂宿主 `/var/run/docker.sock`、`TMPDIR` 两侧同路径供 `-v {workdir}:/out` bind mount；镜像用 `docker compose --profile setup build` 预构建）。**任何失败（认证/超时/无产物）都静默降级成单图 IR**（整图、run 仍 `completed`，表象像"切片没生效"），排查看 `TMPDIR/slicer-agent-*/` 下的 `codex_stderr.log`/`codex_exit`/`degraded`。Codex 调用契约见 `figma_slice_service.py::_CONTAINER_SCRIPT` 注释（须先 `codex login --with-api-key`，env 里的 `OPENAI_API_KEY` 不会被自动使用；prompt 走 **stdin** 而非位置参数，因 `-i/--image` 是 variadic 会吞掉位置参；Codex 是 reasoning 模型耗时数分钟，`CODEX_TIMEOUT` 默认 300 偏紧，生产已在 compose 设 900）。
   - **`code_backend_project_generation`**（`workflows/code_backend_project_workflow.py`）——**全栈:后端多文件工程**。`be_planner` → `be_project_build` → `be_publish`，镜像前端工程在 `be-agent` 容器里产出含 `Dockerfile`/健康检查的 polyglot 后端工程（产物 `code_backend_project_*`）。
   - **`code_middleware_provisioning`**（`workflows/code_middleware_workflow.py`）——**全栈:中间件**。`mw_planner` → `mw_provision` → `mw_publish`，从中间件清单生成 schema/迁移/seed 产物（**不实建库**，实建库在部署 run；产物 `code_middleware_*`）。
-  - **`code_fullstack_deploy`**（`workflows/code_fullstack_deploy_workflow.py`）——**全栈:原子部署**。单计费步 `fs_deploy`（provision→build→start→done 四 phase）：建库/迁移 → `docker build`+`run` 后端容器 → 健康检查 → 注册 `/app/<pid>/api` 反代，**任一步失败有序回滚**（`deploy_service.py`，回滚过程会 narrate 到时间线）。
+  - **`code_fullstack_deploy`**（`workflows/code_fullstack_deploy_workflow.py`）——**全栈:应用部署**。单计费步 `fs_deploy`（provision→build→start→done 四 phase）：建库/迁移 → `docker build`+`run` 后端容器 → 健康检查 → 注册 `/app/<pid>/api` 反代，**任一步失败有序回滚**（`deploy_service.py`，回滚过程会 narrate 到时间线）。
   - **全栈三 run 由共享 OpenAPI 契约（`CodeProjectLedger`）连接**：编排端点 `POST /api/code/projects/<pid>/fullstack/runs`（`fullstack_routes.py`）先同步合成契约（计费 `CODE_CONTRACT_SYNTHESIS`）再并发启动前端/后端/中间件三 run；三者完成后 `POST /api/code/projects/<pid>/deploy` 起部署 run。`MAX_CONCURRENT_RUNS` 因此提到 6（env `AGENT_MAX_CONCURRENT_RUNS`）。完整设计 / 数据模型 / 实施清单见 **`docs/code-fullstack-generation.md`** 与 **`docs/code-domain-handoff.md`**。
 - `recorder.py` 把每步的 prompt/响应、事件（带单调 `sequence`）、产物写入 `AgentRun/AgentStep/AgentEvent/AgentArtifact`（模型在 `backend/models/agent/{run,step,event,artifact}.py`）；`bus.py` 是 SSE 事件总线。客户端经 `GET /api/agent/runs/<id>/stream` 先重放已存事件再接实时推送——**已结束的 run 可被完整逐步回放**（流式 token delta 不持久化，回放时呈现各步完整响应）。
 - 主要 HTTP 端点：`POST /api/agent/runs`(创建并启动一次 run、预扣积分、校验 domain/workflow)、`GET /api/agent/runs`(列当前用户的 run，可按 domain/resource_id 过滤)、`GET /api/agent/runs/<id>`(run+steps+events+artifacts 快照)、`GET /api/agent/runs/<id>/stream`(SSE)、`POST /api/agent/runs/<id>/cancel`(协作式取消)、`GET /api/agent/artifacts/<id>/file`(下载产物，仅 owner)。
@@ -117,19 +108,16 @@ uv run pytest path/to/test_x.py::test_name -v       # 跑单个测试
 
 **所有消耗 AI 的操作都必须计费**，单价统一定义在 `backend/services/pricing.py`（每项可被 `PRICE_*` 环境变量覆盖，常量含 `CODE_FULL_GENERATION`、`CODE_FULL_GENERATION_TOTAL`、`CODE_FRONTEND_PROJECT_GENERATION`、`CODE_CONTEXT_VERIFY`，以及全栈的 `CODE_CONTRACT_SYNTHESIS`、`CODE_BACKEND_PROJECT_GENERATION`、`CODE_MIDDLEWARE_PROVISIONING`、`CODE_FULLSTACK_DEPLOY` 等，默认均为 0/免费）——不要把成本硬编码散落在各处。路由/任务里用两个封装：`charge()`（预检 + 原子扣费，余额不足返回 `False` 而非抛异常，便于循环里优雅停止）与 `refund_credits()`（失败退款，走 `add_credits(transaction_type="refund")`）。计费时机：
 - **Code**：在 `agent_routes` 创建 run 时按 workflow 总价**预扣**（`code_full_generation` → `CODE_FULL_GENERATION_TOTAL`，`code_frontend_project_generation` → `CODE_FRONTEND_PROJECT_GENERATION`；全栈三 run 各按 `CODE_BACKEND_PROJECT_GENERATION`/`CODE_MIDDLEWARE_PROVISIONING`/前端价预扣，契约合成按 `CODE_CONTRACT_SYNTHESIS`、部署按 `CODE_FULLSTACK_DEPLOY`），过程中的上下文一致性闸按 `CODE_CONTEXT_VERIFY` **逐次加扣**；仅当 run 失败且**未产出任何核心产物**时由 `runtime` 自动退款。
-- **PPT**：大纲在请求线程同步扣费、描述/配图在 ThreadPool 里**逐成功扣费**（部分失败只扣已交付的页）。 _（参考）_
-- **RedBook**：大纲/文案同步扣费、图片在 SSE 生成器里逐成功扣费。 _（参考）_
 - `GET /api/credits/balance` 支持 `?team_id=`（带成员校验）查询团队余额；前端各生成完成回调里调 `creditStore.refreshBalance()` 刷新展示。
 
-**统一 API 响应**：接口返回 `{"success": true, "data": ..., "message": ...}` 或 `{"success": false, "error": "CODE", "message": ...}`。权威辅助函数在 `backend/utils/response.py`（`success_response`/`error_response`）——**所有域都应导入共享版本，不要再本地重复定义**。错误码统一词汇：`VALIDATION_ERROR`(400)、`NOT_FOUND`(404)、`FORBIDDEN`(403)、`INSUFFICIENT_CREDITS`(402)、`SERVER_ERROR`(500) 等。RedBook 的错误**消息**仍是中文，放在 `message` 字段（`error` 字段是机器码），前端按 `message` 展示；RedBook 的列表/统计接口（`/tasks`、`/tasks/stats`）刻意返回**未包裹**的原始 dict。`app.py` 里的全局错误处理器已经会把 HTTP 异常和未捕获错误归一成这种结构，并在非 debug 模式下隐藏内部细节。
+**统一 API 响应**：接口返回 `{"success": true, "data": ..., "message": ...}` 或 `{"success": false, "error": "CODE", "message": ...}`。权威辅助函数在 `backend/utils/response.py`（`success_response`/`error_response`）——**所有域都应导入共享版本，不要再本地重复定义**。错误码统一词汇：`VALIDATION_ERROR`(400)、`NOT_FOUND`(404)、`FORBIDDEN`(403)、`INSUFFICIENT_CREDITS`(402)、`SERVER_ERROR`(500) 等。`app.py` 里的全局错误处理器已经会把 HTTP 异常和未捕获错误归一成这种结构，并在非 debug 模式下隐藏内部细节。
 
-**模型**：主键为字符串 UUID（`db.String(36)`），带 `user_id` + 可空的 `team_id` 以支持多租户，并有一个取值为 `private|team|public` 的 `visibility` 字段。结构化内容（大纲、描述、进度、上下文账本）以 **JSON 形式存在 Text 列**里，通过模型上的 getter/setter 辅助方法访问（`get_outline_content()`、`set_description_content()`、`get_progress()`、`get/set_context_ledger()` 等）——请走这些方法，不要直接读原始列。各域模型分布：Code 在 `models/code/project.py`(`CodeProject`)、Agent Swarm 在 `models/agent/*`(`AgentRun/AgentStep/AgentEvent/AgentArtifact`)、PPT/RedBook 各自子包。PPT 每页配图通过 `PPTPageImageVersion` 做版本管理（`version_number` 用 `MAX(...)` 查询计算，每页只有一条 `is_current=True`）。
+**模型**：主键为字符串 UUID（`db.String(36)`），带 `user_id` + 可空的 `team_id` 以支持多租户，并有一个取值为 `private|team|public` 的 `visibility` 字段。结构化内容（文档内容、阶段进度、上下文账本）以 **JSON 形式存在 Text 列**里，通过模型上的 getter/setter 辅助方法访问（`get_progress()`、`get/set_context_ledger()` 等）——请走这些方法，不要直接读原始列。各域模型分布：Code 在 `models/code/*`（`CodeProject`、`CodeDocument`、`CodeStageVersion`），全栈在 `models/code/fullstack.py`（`CodeProjectLedger`、`CodeDeployment`），Agent Swarm 在 `models/agent/*`（`AgentRun/AgentStep/AgentEvent/AgentArtifact`）。
 
 **认证**：Flask-JWT-Extended，access token 30 分钟、refresh token 30 天。用 `@jwt_required()` 保护接口，用 `get_jwt_identity()` 读取当前用户。
 
 **Prompt（提示词）**：
 - **Code** 的 prompt 是 `backend/prompts/code/` 下的 `.txt` 模板，**按 BMAD 风格组织为「角色与原则 / 输入（视为既定事实）/ 本阶段职责与边界 / 产出契约（唯一权威）/ 交付前自检」五段骨架**，各阶段带稳定 `FR/NFR/M/MS` 编号与明确的「不做(交给下游)」边界：`requirements_prompt`、`requirements_clarify_prompt`、`development_flow_prompt`、`document_split_prompt`、`style_prompt`（及各自的 `*_revision` / `*_section_revision` 修订门）、`frontend_project_prompt` / `frontend_project_repair_prompt`（Docker 前端工程）、`figma_slice_prompt`（切片分析）、`html_to_figma_ir_prompt`（HTML→Figma 导出）。文档拆分/风格等模板用 `backend/services/prompt_library/`（`compose_recipe_prompt(...)`）拼出 `{system_prefix}`——**Code 配方调用时传 `include_output_contract=False`，不再附加通用 `OUTPUT_CONTRACT`，以免与各阶段「产出契约」冲突导致输出漂移**。提示词的占位符 / 花括号转义 / JSON 契约由 `scripts/validate_code_prompts.py` + `tests/test_code_prompts.py` 做 CI 守护；改 `.txt` 后用 `scripts/sync_code_prompts.py` 同步进 Mongo 才会在运行时生效（见下条）。
-- **RedBook** 的 prompt 是 `backend/prompts/redbook/` 下的 `.txt` 模板；**PPT** 的 prompt 构造器是从 `backend.services.ppt.prompts` 导入的函数。
 - 增删改 prompt 请在这些位置进行，不要内联写进业务逻辑。**走 `.format()` 的模板（多数含 JSON 示例的）里花括号要写成 `{{ }}` 转义**，否则报错（`test_code_json_parsing.py` 覆盖了 JSON 解析健壮性）；而走 `_fill` / `[[KEY]]` 占位符替换的模板（如 `figma_slice_prompt`，由 `figma_slice_service._fill` 处理）则**不要**转义花括号。
 - **⚠️ 运行时 prompt 由 `backend/services/prompts/`（`prompt_store.get(key)`，key 形如 `code/<file>.txt`）从 MongoDB `prompts` collection 读取——上面的 `.txt` / `internet_roles` 只是 `defaults.py` 的 seed 与 fallback 源。改了模板文件「不会自动生效」**：`seed_defaults()` 只插入缺失的 key、**从不覆盖已存文档**（为保护 admin 后台编辑），所以已 seed 过的 prompt 会一直用 Mongo 里的旧版本，重建镜像也没用。让改动生效要：① 改 `.txt`；② 更新 Mongo 对应 `_id` 文档的 `content`（`is_overridden=True` 表示被 admin 改过，**勿擅自覆盖、先问**；`False` 时可安全同步成新 default）；③ 重启后端清 `prompt_store._cache`（带 TTL）。仅当 Mongo 不可达时才整体走文件 fallback。
 
@@ -137,11 +125,11 @@ uv run pytest path/to/test_x.py::test_name -v       # 跑单个测试
 
 React 19 + TypeScript + Vite。`@/` 是 `frontend/src/` 的别名。
 
-- **状态管理**：`src/stores/` 下每个关注点一个 Zustand store（`authStore`、`teamStore`、`creditStore`、`pptStore`、`redbookStore`、`codeStore`、`agentStore`、`exportTasksStore`）。服务端缓存可用 TanStack Query。
+- **状态管理**：`src/stores/` 下每个关注点一个 Zustand store（`authStore`、`teamStore`、`creditStore`、`codeStore`、`agentStore`、`canvasStore`、`fullstackStore`、`exportTasksStore`、`preferenceStore`）。服务端缓存可用 TanStack Query。
 - **API 层**：`src/api/client.ts` 是 axios 实例。它会注入 bearer token，并在收到 401 时**透明刷新 token**——并发的 401 会排队等待同一次刷新调用，刷新失败则清除 token 并跳转 `/login`。请使用 `api.get/post/put/patch/delete` 辅助方法（它们会自动解包 `res.data`），而不要直接调用 axios。
-- **路由**：`src/App.tsx` 中所有应用路由都包在 `<ProtectedRoute>` 内；`/login` 和 `/register` 是仅有的公开路由。`AuthInitializer` 在加载时引导初始化认证状态。三个域各有入口（`/code`、`/ppt`、`/redbook`）、详情（`/code/:projectId`、`/ppt/project/:projectId`、`/redbook/task/:id`）与历史页。左侧 `components/layout/Sidebar.tsx` 是统一的**会话侧边栏**（域标签切换 + 当前域历史会话列表 + 新建会话）——"会话"即各域的 project/task 本身，点击切换、可深链；Code 域可借 `agentStore.openLatestRunForResource()` 调出时间线做过程回放。
-- **UI**：shadcn 风格组件（Radix 原语 + Tailwind v4）在 `src/components/ui/`；业务组件分目录在 `src/components/{code,agent,ppt,common,layout}/`。
-- **国际化（i18n）**：i18next，按命名空间组织的 JSON 位于 `src/locales/{en,ja,ko,zh-CN}/`（`common`、`auth`、`ppt`、`redbook`、`code`、`agent`、`team`、`errors` 等）。新增 key 要同时加到**四种语言**、放进正确的命名空间；不要硬编码面向用户的文案。
+- **路由**：`src/App.tsx` 中所有应用路由都包在 `<ProtectedRoute>` 内；`/login` 和 `/register` 是仅有的公开路由。`AuthInitializer` 在加载时引导初始化认证状态。主要页面：Code 入口 `/code`、详情 `/code/:projectId`，以及 `/dashboard`、`/settings`、`/team`、`/admin`。左侧 `components/layout/Sidebar.tsx` 是**会话侧边栏**（Code 历史会话列表 + 新建会话）——"会话"即 `CodeProject` 本身，点击切换、可深链；可借 `agentStore.openLatestRunForResource()` 调出时间线做过程回放。
+- **UI**：shadcn 风格组件（Radix 原语 + Tailwind v4）在 `src/components/ui/`；业务组件分目录在 `src/components/{code,agent,common,layout}/` 等。
+- **国际化（i18n）**：i18next，按命名空间组织的 JSON 位于 `src/locales/{en,ja,ko,zh-CN}/`（`common`、`auth`、`code`、`codeapp`、`agent`、`fullstack`、`team`、`admin`、`dashboard`、`settings`、`canvas`、`errors`）。新增 key 要同时加到**四种语言**、放进正确的命名空间；不要硬编码面向用户的文案。
 
 ## 插件（`plugin/`）
 
@@ -161,7 +149,7 @@ React 19 + TypeScript + Vite。`@/` 是 `frontend/src/` 的别名。
 
 ## 值得遵循的约定
 
-- 代码注释：**PPT/核心模块用英文，RedBook 模块用中文**——与所在文件保持一致。
+- 代码注释：与所在文件 / 邻近代码保持一致的语言与风格。
 - AI/模型失败以结果对象返回（`success=False`），而基础设施/数据库错误则抛异常——保持这种区分。
-- 改动积分、任务、图片版本、Agent run 相关逻辑时，请保留上文那些原子/线程安全的写法；它们正是为了在 ThreadPoolExecutor 和并发请求下避免竞态而存在的。
+- 改动积分、Agent run、上下文账本、部署登记相关逻辑时，请保留上文那些原子/线程安全的写法；它们正是为了在 ThreadPoolExecutor 和并发请求下避免竞态而存在的。
 - 新增 AI provider：实现 `AIProvider` 两个方法（不支持的能力返回 `success=False`，不要抛），在 `factory.py` 的 `_create_provider()` 里挂上分支，必要时在 `_resolve_text_config()`/`_resolve_image_config()` 加该 provider 的 key 回退链；别绕过 capability 路由直接 new provider。

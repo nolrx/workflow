@@ -1,6 +1,6 @@
 # Code 全栈生成(前端 + 后端 + 中间件)架构设计
 
-> 状态:在研(2026-06)。本文件是权威设计 + 实施清单。当前版本只动 Code 域。
+> 状态:**已实现**(2026-06 落地)。本文件是权威设计 + 实施清单(下方实施清单已全部完成 ✅)。
 
 ## 目标
 
@@ -10,7 +10,7 @@
 2. **统一进度**:三股进度展示在同一「执行详情」面板(新建多 run 面板,复用既有渲染原语)。
 3. **互相打通,零功能错误**:由**共享 OpenAPI 契约**连接 —— 后端实现它、前端消费它。
 4. **前端实打后端**:生成的前端所有请求走 `/app/<pid>/api` 命中实跑的后端容器。
-5. **原子部署**:中间件 → 后端 → 前端 有序拉起 + 健康检查 + 任一步失败回滚。
+5. **应用部署**:中间件 → 后端 → 前端 有序拉起 + 健康检查 + 任一步失败回滚。
 6. **技术栈跟随 flow 文档**(polyglot):生成的后端工程自带 `Dockerfile`,部署时 `docker build` 它自己 —— 多语言复杂度落到「工程自带 Dockerfile」,后端构建 agent 只需会**写**代码。
 
 ## 枢纽:共享 OpenAPI 契约
@@ -70,7 +70,7 @@
 
 - `code_backend_project_workflow.py`:`be_planner`(校验 requirements_doc+development_flow,载共享契约) → `be_project_build`(容器生成 + 二次补强 + 真实构建梯子;degraded 时发 WARNING、Dockerfile 静态检查提示;验收评审) → `be_publish`(源码 zip + meta,`domain_ref_type=code_backend_project_*`)。验收评审除 `endpoint_coverage`(契约端点)外还核 **`fr_coverage`(功能锚点 FR/NFR/M 是否真有端到端实现,带 `file` 指向)**——critic 把「核心 FR/M 未覆盖」折进 verdict=FAIL;meta 记 `fr_coverage`/`fr_uncovered`/`reinforce_state`。**契约/功能锚点评审 verdict=FAIL → run 置 `PARTIAL`(非 COMPLETED)**,meta 标 `contract_pass=False`;PARTIAL 仍可部署(`deploy_service._BUILT` 含 PARTIAL),但把「联调才爆的契约漂移」在生成期标红、可被可选门 `REQUIRE_CONTRACT_PASS` 拦截。
 - `code_middleware_provisioning` (`code_middleware_workflow.py`):`mw_planner` → `mw_provision`(生成 schema/迁移产物,**不实建库** —— 实建库在部署 run) → `mw_publish`(清单 + SQL artifact,`code_middleware_*`)。
-- `code_fullstack_deploy` (`code_fullstack_deploy_workflow.py`):join 三 run 产物 → 调 deploy_service 原子部署 → 发 deploy meta(`code_deploy_meta`,含 preview_url + api_base)。单计费步,内部 **6 phase**(`TOTAL_STEPS=6`,`_PHASE_PROGRESS` provision/migrate/build/start/health/smoke 单调递进;rollback 仍走 recovery 不计进度)。
+- `code_fullstack_deploy` (`code_fullstack_deploy_workflow.py`):join 三 run 产物 → 调 deploy_service 应用部署 → 发 deploy meta(`code_deploy_meta`,含 preview_url + api_base)。单计费步,内部 **6 phase**(`TOTAL_STEPS=6`,`_PHASE_PROGRESS` provision/migrate/build/start/health/smoke 单调递进;rollback 仍走 recovery 不计进度)。
 
 ## 路由(`backend/routes/code/fullstack_routes.py`,蓝图挂 `/api/code` 或新前缀)
 
@@ -121,4 +121,3 @@
    新增的 4 个 prompt 是缺失 key,会被 `seed_defaults()` 自动插入,无需手动同步。
 2. **deploy 需在 docker-compose 栈内运行**:生成的后端容器接入 `ai-creative-studio-net`,平台 backend 也须在该网络(compose 已配)。先 `docker compose --profile setup build` 构建 fe-agent / be-agent / slicer-agent 镜像。
 3. 计费默认 0(免费);用 `PRICE_CODE_BACKEND_PROJECT` / `PRICE_CODE_MIDDLEWARE` / `PRICE_CODE_FULLSTACK_DEPLOY` / `PRICE_CODE_CONTRACT_SYNTHESIS` 开启计量。
-```

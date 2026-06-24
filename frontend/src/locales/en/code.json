@@ -155,6 +155,7 @@
     "versionLabel": "Version {{n}}",
     "selectHint": "Select a version on the left to preview",
     "noContent": "This version has no content",
+    "zoom": "Click to enlarge",
     "source": {
       "generated": "AI generated",
       "manual_edit": "Manual edit",

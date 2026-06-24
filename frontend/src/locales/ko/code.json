@@ -155,6 +155,7 @@
     "versionLabel": "버전 {{n}}",
     "selectHint": "왼쪽에서 버전을 선택해 내용을 확인하세요",
     "noContent": "이 버전에는 내용이 없습니다",
+    "zoom": "클릭하여 확대",
     "source": {
       "generated": "AI 생성",
       "manual_edit": "수동 편집",

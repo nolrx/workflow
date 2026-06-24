@@ -88,5 +88,19 @@
     "notifications": "通知",
     "profile": "プロフィール",
     "openMenu": "メニューを開く"
+  },
+  "preview": {
+    "title": "画像プレビュー",
+    "dialogTitle": "画像プレビュー（{{current}} / {{total}}）",
+    "counter": "{{current}} / {{total}}",
+    "imageAlt": "プレビュー画像",
+    "close": "閉じる",
+    "previous": "前へ",
+    "next": "次へ",
+    "download": "ダウンロード",
+    "openInNewTab": "新しいタブで開く",
+    "zoomIn": "拡大",
+    "zoomOut": "縮小",
+    "hint": "画像をクリックして拡大 · ドラッグで移動 · ホイールで拡大縮小 · 空白をクリックまたは Esc で閉じる"
   }
 }

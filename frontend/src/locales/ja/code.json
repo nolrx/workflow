@@ -154,6 +154,7 @@
     "versionLabel": "バージョン {{n}}",
     "selectHint": "左側のバージョンを選択して内容を確認",
     "noContent": "このバージョンには内容がありません",
+    "zoom": "クリックして拡大",
     "source": {
       "generated": "AI 生成",
       "manual_edit": "手動編集",

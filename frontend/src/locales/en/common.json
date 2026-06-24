@@ -90,5 +90,19 @@
     "notifications": "Notifications",
     "profile": "Profile",
     "openMenu": "Open menu"
+  },
+  "preview": {
+    "title": "Image preview",
+    "dialogTitle": "Image preview ({{current}} / {{total}})",
+    "counter": "{{current}} / {{total}}",
+    "imageAlt": "Preview image",
+    "close": "Close",
+    "previous": "Previous",
+    "next": "Next",
+    "download": "Download",
+    "openInNewTab": "Open in new tab",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "hint": "Click image to zoom · drag to pan · scroll to zoom · click blank area or press Esc to close"
   }
 }

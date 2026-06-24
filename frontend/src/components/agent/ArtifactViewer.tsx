@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { Download, FileJson, FileText, ImageIcon, Loader2 } from "lucide-react"
+import { Download, FileJson, FileText, ImageIcon, Loader2, ZoomIn } from "lucide-react"
 
 import { agentApi, type AgentArtifact } from "@/api/agent"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { ImagePreviewDialog } from "@/components/common/ImagePreviewDialog"
 import { cn } from "@/lib/utils"
 
 interface ArtifactViewerProps {
@@ -58,6 +59,7 @@ export function ArtifactViewer({ artifact, onDownload }: ArtifactViewerProps) {
 
   const imageSrc = inlineDataUrl ?? blobUrl
   const imageLoading = needsBlob && !blobUrl && !blobFailed
+  const [previewOpen, setPreviewOpen] = useState(false)
 
   const jsonText =
     artifact.artifact_type === "json" && artifact.content_json !== undefined
@@ -90,13 +92,20 @@ export function ArtifactViewer({ artifact, onDownload }: ArtifactViewerProps) {
       <div className="p-3">
         {artifact.artifact_type === "image" ? (
           imageSrc ? (
-            <a href={imageSrc} target="_blank" rel="noreferrer">
+            <button
+              type="button"
+              onClick={() => setPreviewOpen(true)}
+              className="group relative block w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
               <img
                 src={imageSrc}
                 alt={artifact.title}
-                className="max-h-72 w-full rounded border object-contain"
+                className="max-h-72 w-full rounded border object-contain transition-transform duration-300 group-hover:scale-[1.02]"
               />
-            </a>
+              <span className="absolute inset-0 flex items-center justify-center rounded bg-black/0 opacity-0 transition-all duration-200 group-hover:bg-black/20 group-hover:opacity-100">
+                <ZoomIn className="h-8 w-8 text-white drop-shadow-md" />
+              </span>
+            </button>
           ) : imageLoading ? (
             <div className="flex h-32 items-center justify-center text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -120,6 +129,13 @@ export function ArtifactViewer({ artifact, onDownload }: ArtifactViewerProps) {
           <p className="text-xs text-muted-foreground">{t("artifact.empty")}</p>
         )}
       </div>
+
+      <ImagePreviewDialog
+        open={previewOpen}
+        onOpenChange={setPreviewOpen}
+        images={imageSrc ? [{ src: imageSrc, alt: artifact.title, downloadUrl: artifact.file_url ?? undefined }] : []}
+        index={0}
+      />
     </div>
   )
 }

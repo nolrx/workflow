@@ -6,6 +6,7 @@ import { toast } from "sonner"
 import { codeApi, type CodeProject, type StageVersion } from "@/api/code"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { ImagePreviewDialog } from "@/components/common/ImagePreviewDialog"
 import {
   Dialog,
   DialogContent,
@@ -53,6 +54,9 @@ export function StageHistoryDialog({
   const [detail, setDetail] = useState<StageVersion | null>(null)
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [restoringId, setRestoringId] = useState<string | null>(null)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewIndex, setPreviewIndex] = useState(0)
+  const [previewImages, setPreviewImages] = useState<Array<{ src: string; alt?: string }>>([])
 
   const selectVersion = async (version: StageVersion) => {
     setSelectedId(version.id)
@@ -130,15 +134,31 @@ export function StageHistoryDialog({
         (version.content_json as { preview_images?: Array<{ id?: string; url: string }> })
           ?.preview_images ?? []
       if (!images.length) return empty
+      const openPreview = (index: number) => {
+        setPreviewImages(images.map((img) => ({ src: img.url, alt: "" })))
+        setPreviewIndex(index)
+        setPreviewOpen(true)
+      }
       return (
         <div className="grid grid-cols-2 gap-2">
           {images.map((image, index) => (
-            <img
+            <button
               key={image.id ?? index}
-              src={image.url}
-              alt=""
-              className="w-full rounded border"
-            />
+              type="button"
+              onClick={() => openPreview(index)}
+              className="group relative overflow-hidden rounded border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <img
+                src={image.url}
+                alt=""
+                className="w-full transition-transform duration-300 group-hover:scale-105"
+              />
+              <span className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all duration-200 group-hover:bg-black/20 group-hover:opacity-100">
+                <span className="text-xs font-medium text-white drop-shadow">
+                  {t("versions.zoom")}
+                </span>
+              </span>
+            </button>
           ))}
         </div>
       )
@@ -260,6 +280,14 @@ export function StageHistoryDialog({
           </div>
         )}
       </DialogContent>
+
+      <ImagePreviewDialog
+        open={previewOpen}
+        onOpenChange={setPreviewOpen}
+        images={previewImages}
+        index={previewIndex}
+        onIndexChange={setPreviewIndex}
+      />
     </Dialog>
   )
 }

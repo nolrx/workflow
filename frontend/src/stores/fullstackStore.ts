@@ -56,9 +56,11 @@ interface FullstackState {
   contract: SharedContract | null
   deployment: Deployment | null
   starting: boolean
+  startingBackend: boolean
   deploying: boolean
 
   startFullstack: (projectId: string) => Promise<void>
+  startBackendOnly: (projectId: string) => Promise<void>
   startDeploy: (projectId: string) => Promise<void>
   hydrate: (projectId: string) => Promise<void>
   reset: () => void
@@ -234,6 +236,7 @@ export const useFullstackStore = create<FullstackState>()((set, get) => {
       contract: null,
       deployment: null,
       starting: false,
+      startingBackend: false,
       deploying: false,
     })
   }
@@ -244,6 +247,7 @@ export const useFullstackStore = create<FullstackState>()((set, get) => {
     contract: null,
     deployment: null,
     starting: false,
+    startingBackend: false,
     deploying: false,
 
     startFullstack: async (projectId) => {
@@ -253,11 +257,29 @@ export const useFullstackStore = create<FullstackState>()((set, get) => {
         set({ projectId })
         const result = await fullstackApi.start(projectId)
         set({ contract: result.contract })
-        openLane("frontend", result.runs.frontend, true)
-        openLane("backend", result.runs.backend, true)
-        openLane("middleware", result.runs.middleware, true)
+        // Guard each lane: a full start returns all three, but the response shape
+        // is now subset-aware (every lane optional).
+        if (result.runs.frontend) openLane("frontend", result.runs.frontend, true)
+        if (result.runs.backend) openLane("backend", result.runs.backend, true)
+        if (result.runs.middleware) openLane("middleware", result.runs.middleware, true)
       } finally {
         set({ starting: false })
+      }
+    },
+
+    // Regenerate ONLY the backend project (reuses the frozen contract, leaves the
+    // frontend/middleware runs untouched). After it completes, the user re-deploys
+    // to rebuild + run the Codex repair cycle on the fresh backend.
+    startBackendOnly: async (projectId) => {
+      set({ startingBackend: true })
+      try {
+        boundProject = projectId
+        set({ projectId })
+        const result = await fullstackApi.start(projectId, ["backend"])
+        if (result.contract) set({ contract: result.contract })
+        if (result.runs.backend) openLane("backend", result.runs.backend, true)
+      } finally {
+        set({ startingBackend: false })
       }
     },
 

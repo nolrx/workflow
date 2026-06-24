@@ -97,7 +97,12 @@ class BaseConfig:
     GITHUB_API_BASE = os.getenv("GITHUB_API_BASE", "https://api.github.com")
     GITHUB_REPO_VISIBILITY = os.getenv("GITHUB_REPO_VISIBILITY", "private")
     GITHUB_REPO_PREFIX = os.getenv("GITHUB_REPO_PREFIX", "")
-    GITHUB_PUSH_DIST = os.getenv("GITHUB_PUSH_DIST", "true").lower() in ("1", "true", "yes")
+    # Off by default: dist/ is a build product; git should hold source.
+    GITHUB_PUSH_DIST = os.getenv("GITHUB_PUSH_DIST", "false").lower() in ("1", "true", "yes")
+    # Branch the platform forks (once, after a successful deploy) for the user's
+    # secondary development; never overwritten by a later snapshot. main is always
+    # platform-owned (full-state snapshot per run).
+    GITHUB_DEV_BRANCH = os.getenv("GITHUB_DEV_BRANCH", "dev")
 
     # Redis Configuration
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")

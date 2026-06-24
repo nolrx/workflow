@@ -15,6 +15,8 @@
     "deployHint": "The backend project is ready. Run the atomic deploy (create database → build backend image → start container → health check → wire the reverse proxy).",
     "redeploy": "Re-deploy",
     "redeployHint": "Re-run the deploy + auto-repair cycle on the existing projects — no need to regenerate the frontend/backend.",
+    "regenerateBackend": "Regenerate backend",
+    "regenerateBackendHint": "Regenerate only the backend project (reuses the frozen contract; the frontend/middleware stay untouched). Then re-deploy to rebuild and run the repair cycle.",
     "apiBase": "The frontend calls the backend live via {{base}}.",
     "lane": {
         "frontend": "Frontend project",
@@ -36,6 +38,7 @@
         "started": "Full-stack generation started (frontend / backend / middleware concurrently)",
         "startFailed": "Failed to start",
         "deployStarted": "App deploy started",
+        "backendRegenStarted": "Backend regeneration started (frontend untouched)",
         "deployFailed": "Failed to start deploy",
         "downloadFailed": "Download failed"
     },

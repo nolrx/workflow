@@ -43,6 +43,7 @@ _PHASE_PROGRESS = {
     "health": 5,
     "smoke": 6,
     "itest": 7,
+    "repair": 7,  # comprehensive Codex repair rounds — hold the bar at the itest step
     "done": 7,
 }
 
@@ -175,8 +176,8 @@ def run_code_fullstack_deploy_workflow(ctx, recorder) -> dict:
             repaired_note = f";自动修复后端 {n} 个文件(已发布修复版源码)"
         step.set_output(
             output_summary=f"全栈应用已部署并通过健康检查 + 前后端接口联调:前端经 {api_base} 实时调用后端{repaired_note}。",
-            reasoning_summary="有序应用部署:建库 → docker build 后端镜像 → 启动长驻容器 → 健康检查 → 契约冒烟 → 拉取前端调用代码+契约做全面接口测试;发现确定性失败则只改后端自动修复(重建+重启+重测,尽力放行)→ 接入反代。修复版后端源码已发布(下载/同步/重部署优先取修复版)。",
-            self_check=f"容器 {result.get('container')};镜像={result.get('image')};接口联调={itest.get('gate', 'n/a')}(执行 {itest.get('executed', 0)} 项);修复={fix.get('itest_repaired_rounds', 0)} 轮;预览={preview_url}",
+            reasoning_summary="有序应用部署:建库 → docker build 后端镜像 → 启动长驻容器 → 健康检查 → 契约冒烟 → 拉取前端调用代码+契约做全面接口测试;发现 5xx/确定性缺陷则在 Codex 容器里对后端做彻底修复(一次修完 数据库+运行报错+接口 → 再次自建镜像 → 换容器 → 同步复检,多轮迭代,只改后端、尽力放行)→ 接入反代。修复版后端源码已发布(下载/同步/重部署优先取修复版)。",
+            self_check=f"容器 {result.get('container')};镜像={result.get('image')};接口联调={itest.get('gate', 'n/a')}(执行 {itest.get('executed', 0)} 项);Codex 彻底修复={fix.get('itest_repaired_rounds', 0)} 轮;预览={preview_url}",
             next_action="在预览中验证前后端联通。",
         )
 

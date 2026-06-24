@@ -12,6 +12,9 @@ rollback on any failure (so a half-deployed app never lingers):
       → contract smoke   (sampled GETs must not 5xx)
       → integration test (pull FE call-code + contract → AI plan → EXECUTE against
                           the live container; deterministic, tiered hard gate)
+      → comprehensive Codex repair (on any smoke/itest defect: one Codex pass fixes
+                          database + runtime 5xx + interface, rebuild + swap + re-check;
+                          ≤ APP_DEPLOY_REPAIR_ROUNDS rounds; best-effort-proceed)
       → register the deployment  (the /app/<pid>/api reverse proxy resolves here)
 
 The backend container joins the same docker network as this platform's backend,
@@ -452,6 +455,11 @@ def deploy(
             if started.returncode == 0:
                 healthy, detail = _wait_healthy(container, BACKEND_PORT, HEALTH_TIMEOUT, cancelled)
                 if healthy:
+                    # The recovery WIPED init.sql's tables (DB is now empty; the
+                    # backend self-migrated). Reflect that locally so the downstream
+                    # comprehensive-repair brief tells Codex the data layer is empty /
+                    # init.sql is NOT in effect — not the stale "已应用" from line ~357.
+                    init_applied = False
                     dep.set_detail({**dep.get_detail(),
                                     "init_sql_skipped": True,
                                     "recovery": "reset-empty-db; backend self-migrated"})
@@ -485,17 +493,15 @@ def deploy(
         else:
             phase("smoke", "契约冒烟通过(抽样端点路由可达)", {"smoke": smoke_detail})
 
-        # --- 6a. Frontend↔backend integration test + auto-repair -------------
+        # --- 6a. Frontend↔backend integration test (defect detection) --------
         # Pull the generated FRONTEND's actual API-calling code + the shared contract,
         # distill a TARGETED test plan (which endpoints the frontend really calls and
         # which response fields it parses), then EXECUTE that plan against the live
-        # container and DETERMINISTICALLY judge it. On a `critical` deterministic
-        # failure (5xx / JSON the frontend can't parse / missing required field / auth
-        # 5xx), enter an AUTO-REPAIR ladder: self-heal the BACKEND ONLY to conform to
-        # the contract, rebuild + restart + re-test (≤ APP_ITEST_REPAIRS rounds). The
-        # frontend dist is NEVER touched (it was built against the contract). Per the
-        # best-effort-proceed policy this stage NEVER rolls a health-green deploy back
-        # — an unfixable residual ships with a warning. A harness bug fails OPEN.
+        # container and DETERMINISTICALLY judge it. This (together with the smoke 5xx
+        # signal above) is the DETECTION half; the repair half is the comprehensive
+        # Codex ladder in 6a-bis (database + runtime + interface, one pass per round).
+        # The frontend dist is NEVER touched (it was built against the contract). A
+        # harness bug fails OPEN (a green deploy is never sunk by a detection error).
         if cancelled():
             return _abort(dep, rollback, "已取消")
         itest: dict = {}
@@ -522,9 +528,23 @@ def deploy(
             dep.set_detail({**dep.get_detail(), "integration_test": itest.get("summary")})
             db.session.commit()
 
-        # --- 6a-bis. Backend-only auto-repair ladder (best-effort) -----------
-        max_itest_repairs = int(os.getenv("APP_ITEST_REPAIRS", "2"))
-        if itest.get("gate") == "fail" and max_itest_repairs > 0 and not cancelled():
+        # --- 6a-bis. Comprehensive Codex deploy-repair ladder (best-effort) --
+        # Replaces the old contract-only Claude rung. A post-start defect from EITHER
+        # detector (smoke 5xx OR an itest deterministic failure) enters a multi-round
+        # ladder where EACH round is ONE thorough Codex repair of the running backend —
+        # database / data-layer, runtime (5xx) crashes AND interface defects, fixed
+        # together from an AGGREGATED brief (data-layer state + smoke 5xx + itest
+        # failures + container stack traces + the shared contract). After each pass we
+        # REBUILD ("再次自建") the image, swap the container, then run the SYNCHRONIZED
+        # re-check (health + smoke + itest); a residual defect loops into the next round
+        # (≤ APP_DEPLOY_REPAIR_ROUNDS). Codex-driven (the be-agent image pre-bakes the
+        # OpenAI Codex CLI). Only the BACKEND is touched (the frontend dist was built
+        # against the contract). Best-effort-proceed: an unfixable residual ships with a
+        # warning — ONLY a repaired image that won't come up HEALTHY rolls anything back
+        # (liveness is the sole hard gate here); a harness bug fails OPEN.
+        max_repair_rounds = int(os.getenv("APP_DEPLOY_REPAIR_ROUNDS", "3"))
+        post_start_defect = (itest.get("gate") == "fail") or (not smoke_ok)
+        if max_repair_rounds > 0 and post_start_defect and not cancelled():
             try:
                 from backend.services.code.fullstack import (
                     contract_service,
@@ -534,33 +554,44 @@ def deploy(
                 contract_block = integration_test_service._render_contract_block(
                     _row.get_api_contract() if _row else {}
                 )
+                # If the initial itest harness threw (itest_plan is None) but we still
+                # entered the ladder via a smoke 5xx, seed a deterministic fallback plan
+                # so the synchronized re-check REUSES it (no AI re-plan, no re-charge).
+                if itest_plan is None:
+                    itest_plan = integration_test_service._contract_fallback_plan(
+                        _row.get_api_contract() if _row else {}
+                    )
                 # Snapshot the source the CURRENTLY-running image was built from
                 # BEFORE any round dirties the workdir, so a failed round can never
                 # cause us to promote source that doesn't match the running image.
                 good_source = _collect_repaired_source(workdir, set(source.keys())) if workdir else None
                 round_n = 0
-                while (itest.get("gate") == "fail" and round_n < max_itest_repairs
-                       and not cancelled()):
+                while (((itest.get("gate") == "fail") or (not smoke_ok))
+                       and round_n < max_repair_rounds and not cancelled()):
                     round_n += 1
-                    logs = _docker(["logs", "--tail", "120", container], 30)
-                    digest = integration_test_service.format_failures_for_repair(
-                        itest, contract_block=contract_block,
-                        logs=(logs.stdout or logs.stderr or ""),
+                    # Pull a generous log tail AFTER detection so the smoke/itest 5xx
+                    # stack traces (runtime + DB errors) are in the brief.
+                    logs = _docker(["logs", "--tail", "200", container], 30)
+                    digest = _build_comprehensive_digest(
+                        itest=itest, smoke_results=smoke_detail,
+                        container_logs=(logs.stdout or logs.stderr or ""),
+                        contract_block=contract_block, prov=prov, init_applied=init_applied,
                     )
-                    phase("itest", f"接口联调发现确定性失败,启动后端定向修复(第 {round_n}/{max_itest_repairs} 轮,只改后端、不动前端)")
-                    rep = get_backend_project_service().repair_contract(
+                    phase("repair", f"启动 Codex 彻底修复(第 {round_n}/{max_repair_rounds} 轮,一次修完 数据库 + 运行报错 + 接口,只改后端、不动前端)")
+                    rep = get_backend_project_service().repair_5xx(
                         workdir=str(workdir), failures_digest=digest,
-                        on_log=lambda m: phase("itest", m), is_cancelled=cancelled,
+                        on_log=lambda m: phase("repair", m), is_cancelled=cancelled,
                     )
                     if not rep.get("ran"):
-                        phase("itest", "AI 修复不可用(未配置密钥),按尽力放行继续")
+                        phase("repair", "Codex 修复不可用(未配置 OPENAI_API_KEY),按尽力放行继续")
                         break
                     if rep.get("summary"):
                         fix_notes.append(rep["summary"])
-                    new_tag = f"{image_tag}-itest{round_n}"
+                    new_tag = f"{image_tag}-fix{round_n}"
+                    phase("repair", "彻底修复完成,重新自建镜像(docker build)")
                     build = _docker(["build", "-t", new_tag, str(workdir)], BUILD_TIMEOUT)
                     if build.returncode != 0:
-                        phase("itest", "修复后镜像重建失败,保留修复前容器,停止修复(尽力放行)")
+                        phase("repair", "修复后镜像重建失败,保留修复前容器,停止修复(尽力放行)")
                         break
                     rollback.append(lambda t=new_tag: _docker(["image", "rm", "-f", t], 60))
                     # Swap the container to the repaired image; if it won't start /
@@ -569,7 +600,7 @@ def deploy(
                     swap = _run_container(container, new_tag, prov)
                     healthy = False
                     if swap.returncode == 0:
-                        healthy, hdetail = _wait_healthy(container, BACKEND_PORT, HEALTH_TIMEOUT, cancelled)
+                        healthy, _ = _wait_healthy(container, BACKEND_PORT, HEALTH_TIMEOUT, cancelled)
                     if not healthy:
                         # Revert to the last-known-good image. Liveness is a HARD gate
                         # (best-effort-proceed covers interface grounds, NOT "is the app
@@ -585,30 +616,36 @@ def deploy(
                                 "修复后容器无法启动,且回滚到修复前镜像也未能恢复健康",
                                 narrate=phase,
                             )
-                        phase("itest", "修复后容器无法启动/健康检查未过,已恢复修复前镜像,停止修复(尽力放行)")
+                        phase("repair", "修复后容器无法启动/健康检查未过,已恢复修复前镜像,停止修复(尽力放行)")
                         break
                     running_image = new_tag
                     itest_repaired_rounds = round_n
                     # This round built + swapped + passed health → the workdir matches
                     # the new running image; advance the promotable snapshot.
                     good_source = _collect_repaired_source(workdir, set(source.keys())) if workdir else good_source
+                    # --- SYNCHRONIZED re-check: smoke + itest against the fixed image -
+                    phase("repair", "同步复检:契约冒烟 + 前后端接口联调")
+                    smoke_ok, smoke_detail = _smoke_test(container, BACKEND_PORT, project.id, cancelled)
                     itest = integration_test_service.run_integration_tests(
                         project_id=project.id, user_id=user_id, team_id=team_id,
                         container=container, port=BACKEND_PORT, frontend_run=frontend_run,
                         run_id=run_id, cancelled=cancelled, plan=itest_plan,
                     )
-                    dep.set_detail({**dep.get_detail(), "integration_test": itest.get("summary")})
+                    itest_plan = itest.get("plan") or itest_plan
+                    dep.set_detail({**dep.get_detail(),
+                                    "smoke": smoke_detail,
+                                    "integration_test": itest.get("summary")})
                     db.session.commit()
-                if itest_repaired_rounds and itest.get("gate") != "fail":
-                    phase("itest", f"自动修复后接口联调通过(仅改后端,修复 {itest_repaired_rounds} 轮)",
+                if itest_repaired_rounds and (itest.get("gate") != "fail") and smoke_ok:
+                    phase("repair", f"Codex 彻底修复后复检通过(仅改后端,修复 {itest_repaired_rounds} 轮)",
                           {"integration_test": itest.get("summary")})
             except Exception:  # noqa: BLE001 — repair harness bug must not sink the deploy
                 try:
                     db.session.rollback()
                 except Exception:  # noqa: BLE001
                     pass
-                logger.warning("integration-test repair ladder failed (fail-open)", exc_info=True)
-                phase("itest", "自动修复过程异常,已跳过(尽力放行)")
+                logger.warning("comprehensive deploy-repair ladder failed (fail-open)", exc_info=True)
+                phase("repair", "Codex 修复过程异常,已跳过(尽力放行)")
 
         # Record whichever image is actually running now (a repaired tag, if any).
         if running_image != image_tag:
@@ -633,6 +670,12 @@ def deploy(
             else:
                 phase("itest", f"接口联调通过(执行 {executed} 项关键接口,响应结构符合前端解析预期)",
                       {"integration_test": summary})
+
+        # Honest residual signal: a still-red smoke (definitive 5xx) after the repair
+        # ladder is downgraded to a warning, not a rollback (best-effort-proceed).
+        if not smoke_ok:
+            phase("repair", "⚠ 契约冒烟仍有 5xx 残留,按尽力放行策略继续部署(已记录,建议人工排查)",
+                  {"smoke": smoke_detail})
 
         # --- 6b. First-screen visibility (advisory) --------------------------
         # /health + smoke prove the app is up and routes resolve, but a list
@@ -678,11 +721,11 @@ def deploy(
         # --- 6c. PROMOTE the repaired source ---------------------------------
         # Publish the repaired backend source so download / re-deploy use the fixed
         # code ("logical overwrite, physical additive"). It must EXACTLY match the
-        # running image: when the itest ladder ran, use ``good_source`` (the snapshot
-        # tracked to the last HEALTHY round — a failed round's dirty workdir is never
-        # promoted); otherwise (build-repair only, no itest ladder) the workdir is
-        # clean and matches the image, so collect it. Only the BACKEND is repaired;
-        # the frontend dist is untouched.
+        # running image: when the comprehensive Codex repair ladder ran, use
+        # ``good_source`` (the snapshot tracked to the last HEALTHY round — a failed
+        # round's dirty workdir is never promoted); otherwise (build-repair only, no
+        # repair ladder) the workdir is clean and matches the image, so collect it.
+        # Only the BACKEND is repaired; the frontend dist is untouched.
         build_rounds = int(dep.get_detail().get("build_repaired_rounds") or 0)
         repaired_source: dict = {}
         fix_summary: Optional[dict] = None
@@ -696,9 +739,13 @@ def deploy(
             changed = sorted(rel for rel in collected if collected.get(rel) != source.get(rel))
             removed = sorted(set(source) - set(collected))
             repaired_source = collected
+            # ``itest_repaired_rounds`` now counts comprehensive Codex repair rounds
+            # (kept under the old key for downstream/back-compat); ``repair_engine``
+            # records which post-start engine ran when any round landed.
             fix_summary = {
                 "build_repaired_rounds": build_rounds,
                 "itest_repaired_rounds": itest_repaired_rounds,
+                "repair_engine": "codex" if itest_repaired_rounds else None,
                 "changed_files": changed,
                 "removed_files": removed,
                 "notes": [n for n in fix_notes if n],
@@ -706,6 +753,7 @@ def deploy(
             dep.set_detail({**dep.get_detail(), "promoted_fix": {
                 "build_repaired_rounds": build_rounds,
                 "itest_repaired_rounds": itest_repaired_rounds,
+                "repair_engine": "codex" if itest_repaired_rounds else None,
                 "changed_files": changed,
                 "removed_files": removed,
             }})
@@ -904,6 +952,41 @@ def _smoke_test(container: str, port: int, project_id: str, cancelled) -> tuple[
         except Exception as error:  # noqa: BLE001 — inconclusive, not a 5xx
             results.append({"endpoint": f"GET {path}", "result": f"inconclusive ({type(error).__name__})"})
     return ok, results
+
+
+def _build_comprehensive_digest(
+    *, itest: dict, smoke_results: list, container_logs: str,
+    contract_block: str, prov, init_applied: bool,
+) -> str:
+    """Aggregate EVERY observed post-start defect into one brief for the Codex
+    comprehensive-repair pass: the data-layer state, the smoke 5xx endpoints, the
+    itest deterministic failures, the container stack traces (runtime + DB errors)
+    and the shared contract. One brief → one Codex pass fixes database + runtime +
+    interface together. The itest-failures + logs + contract tail reuses the
+    canonical formatter so the wording matches what the repair prompt expects."""
+    from backend.services.code.fullstack import integration_test_service
+
+    parts: list[str] = []
+    # Data-layer state (lets Codex tell schema drift / empty-DB from app bugs).
+    dl = [f"- 中间件引擎:{getattr(prov, 'engine_kind', '?')}"]
+    if getattr(prov, "db_name", None):
+        dl.append(f"- 数据库:{prov.db_name}(部署环境真实库,可能为空 — 后端须能在空库上自建表)")
+    dl.append(f"- 启动时已应用生成的 init.sql 兜底:{'是' if init_applied else '否(依赖后端自迁移)'}")
+    parts.append("## 运行时 / 数据层状态\n" + "\n".join(dl))
+    # Smoke 5xx endpoints (route exists, handler crashes).
+    fivexx = [r for r in (smoke_results or [])
+              if isinstance(r, dict) and r.get("result") == "5xx"]
+    if fivexx:
+        parts.append(
+            "## 契约冒烟发现的 5xx 端点(路由存在但 handler 崩溃)\n"
+            + "\n".join(f"- {r.get('endpoint')} → HTTP {r.get('status')}" for r in fivexx)
+        )
+    # itest failures + container logs (stack traces) + contract — the canonical
+    # formatter already appends the logs + contract sections, so feed once.
+    parts.append(integration_test_service.format_failures_for_repair(
+        itest or {}, contract_block=contract_block, logs=container_logs or "",
+    ))
+    return "\n\n".join(parts)
 
 
 # --- first-screen visibility probe (advisory) --------------------------------

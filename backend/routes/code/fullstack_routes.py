@@ -155,8 +155,15 @@ def _active_pipeline_runs(project_id: str, user_id: str) -> dict:
 @fullstack_bp.route("/projects/<project_id>/fullstack/runs", methods=["POST"])
 @jwt_required()
 def start_fullstack(project_id: str):
-    """Synthesize the shared contract, then start the three concurrent runs."""
-    drained = drain_guard()  # starts three background runs — refuse while draining
+    """Synthesize the shared contract, then start the generation runs.
+
+    Body (optional): ``{"lanes": ["backend"]}`` to start ONLY a subset (e.g.
+    regenerate just the backend without re-running the frontend / middleware).
+    A subset REUSES the already-frozen contract (``force=False`` → no re-synthesis,
+    so the regenerated backend stays aligned with the existing frontend); the full
+    set (default) ensures the contract as before.
+    """
+    drained = drain_guard()  # starts background runs — refuse while draining
     if drained:
         return drained
     user_id = get_jwt_identity()
@@ -168,9 +175,26 @@ def start_fullstack(project_id: str):
             "VALIDATION_ERROR", "项目尚未完成需求文档与开发流程，无法生成全栈应用", 400
         )
 
+    # Resolve the requested lanes (default: the full trio, canonical order).
+    all_lanes = list(_PIPELINE.keys())
+    body = request.get_json(silent=True) or {}
+    requested = body.get("lanes")
+    if requested is None:
+        lanes = all_lanes
+    else:
+        if not isinstance(requested, list) or not requested:
+            return error_response("VALIDATION_ERROR", "lanes 必须是非空数组", 400)
+        invalid = [str(x) for x in requested if x not in _PIPELINE]
+        if invalid:
+            return error_response("VALIDATION_ERROR", f"未知的生成泳道：{', '.join(invalid)}", 400)
+        lanes = [k for k in all_lanes if k in set(requested)]  # canonical order, dedup
+    subset = lanes != all_lanes
+
     team_id = project.team_id
 
-    # 1) Freeze the shared OpenAPI contract BEFORE any run starts.
+    # 1) Freeze the shared OpenAPI contract BEFORE any run starts. A subset run
+    #    REUSES the frozen contract (force=False); a subset on a project whose
+    #    contract was never synthesized is a misuse — guide the user to the full run.
     try:
         ledger = contract_service.ensure_contract(project, user_id, team_id)
     except Exception as error:  # noqa: BLE001
@@ -179,30 +203,36 @@ def start_fullstack(project_id: str):
     if ledger.contract_status != ContractStatus.READY:
         return error_response("SERVER_ERROR", "共享 API 契约未就绪", 500)
 
-    # 2) Start the three concurrent runs (reuse any already in flight). Read the
-    #    active set and create under the lock so two concurrent submits can't each
-    #    pass an empty check and duplicate the trio — the re-read here is the half
-    #    that has to be inside the critical section.
+    # 2) Start the requested runs (reuse any already in flight). Read the active set
+    #    and create under the lock so two concurrent submits can't each pass an empty
+    #    check and duplicate a run — the re-read here is the half that has to be
+    #    inside the critical section.
     runs: dict[str, str] = {}
     with _trio_creation_lock:
         active = _active_pipeline_runs(project_id, user_id)
-        for key, (workflow, _cost) in _PIPELINE.items():
+        for key in lanes:
+            workflow, _cost = _PIPELINE[key]
             existing = active.get(workflow)
             if existing:
                 runs[key] = existing.id
                 continue
             run = _start_run(user_id, team_id, workflow, project_id, {"pipeline": key})
             if run is None:
-                return error_response("INSUFFICIENT_CREDITS", "积分不足，无法启动全栈生成", 402)
+                return error_response("INSUFFICIENT_CREDITS", "积分不足，无法启动生成", 402)
             runs[key] = run.id
 
+    message = (
+        "仅重新生成后端已启动（复用已冻结契约，不动前端 / 中间件）"
+        if subset and lanes == ["backend"]
+        else ("已启动指定生成泳道" if subset else "全栈生成已启动（前端 / 后端 / 中间件并发）")
+    )
     return success_response(
         {
             "runs": runs,
             "contract": ledger.to_dict(),
             "stream_urls": {k: f"/api/agent/runs/{v}/stream" for k, v in runs.items()},
         },
-        "全栈生成已启动（前端 / 后端 / 中间件并发）",
+        message,
         201,
     )
 

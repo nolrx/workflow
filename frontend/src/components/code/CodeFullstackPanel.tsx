@@ -98,6 +98,27 @@ function LaneCard({ lane }: { lane: Lane }) {
   const [open, setOpen] = useState(false)
   const Icon = LANE_ICON[lane]
 
+  // Backend-only regenerate: re-run just the backend project (reuses the frozen
+  // contract; leaves frontend/middleware untouched). Offered on the backend lane
+  // once its run has settled (not streaming) — then the user re-deploys to rebuild
+  // + run the Codex repair cycle on the fresh backend.
+  const projectId = useFullstackStore((s) => s.projectId)
+  const startBackendOnly = useFullstackStore((s) => s.startBackendOnly)
+  const startingBackend = useFullstackStore((s) => s.startingBackend)
+  const showRegenBackend = lane === "backend" && !!state.runId
+  const handleRegenBackend = async () => {
+    if (!projectId) return
+    try {
+      await startBackendOnly(projectId)
+      toast.success(t("toast.backendRegenStarted"))
+    } catch (err) {
+      const message =
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+        t("toast.startFailed")
+      toast.error(message)
+    }
+  }
+
   const run = state.run
   const progress = run?.progress
   const pct = progress?.total_steps
@@ -214,6 +235,23 @@ function LaneCard({ lane }: { lane: Lane }) {
                 <Wrench className="h-3 w-3" />
               )}
               {fixCount > 0 ? t("downloadRepairedCount", { count: fixCount }) : t("downloadRepaired")}
+            </Button>
+          )}
+          {showRegenBackend && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 shrink-0 gap-1 px-2 text-[11px]"
+              onClick={handleRegenBackend}
+              disabled={startingBackend || state.isStreaming}
+              title={t("regenerateBackendHint")}
+            >
+              {startingBackend || state.isStreaming ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3 w-3" />
+              )}
+              {t("regenerateBackend")}
             </Button>
           )}
         </div>

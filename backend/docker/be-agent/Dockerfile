@@ -34,8 +34,10 @@
 # installed explicitly because the ladders prefer the generated Makefile targets.
 #
 # No app code or secrets are baked in; ANTHROPIC_API_KEY / OPENAI_API_KEY are
-# injected at run time via `-e`. CLIs: claude (@anthropic-ai/claude-code) is the
-# primary engine; codex (@openai/codex) is available for parity with fe-agent.
+# injected at run time via `-e`. CLIs: claude (@anthropic-ai/claude-code) drives
+# generation + the build self-heal rungs; codex (@openai/codex) drives the
+# DEPLOY-TIME comprehensive repair (database + runtime 5xx + interface, one pass
+# per round — see deploy_service / backend_project_service.repair_5xx).
 FROM node:22
 
 # --- OS deps + Java (Temurin 21 via Adoptium) -------------------------------

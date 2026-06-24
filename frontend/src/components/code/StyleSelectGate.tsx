@@ -30,7 +30,7 @@ export function StyleSelectGate() {
         <Palette className="h-4 w-4 text-primary" />
         {t("styleSelect.title")}
       </p>
-      <div className="grid gap-2 sm:grid-cols-2">
+      <div className="grid max-h-[40vh] gap-2 overflow-y-auto overscroll-contain pr-1 sm:grid-cols-2">
         {styles.map((style) => (
           <Label key={style.id} className="flex cursor-pointer gap-3 rounded-md border p-3">
             <Checkbox

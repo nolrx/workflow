@@ -332,6 +332,42 @@ claude -p --output-format stream-json --verbose --permission-mode bypassPermissi
 """
 
 
+# Runs INSIDE the be-agent container for the DEPLOY-TIME *comprehensive* repair
+# round, driven by the OpenAI Codex CLI (the be-agent image pre-bakes `codex`).
+# One Codex pass fixes EVERYTHING observed on the running backend in this round —
+# database / data-layer, runtime (5xx) crashes and interface defects — editing the
+# staged source mounted at /out in place; the deploy step then re-runs `docker
+# build`, swaps the container and re-checks. Two stdin sources are deliberately
+# kept apart: the OpenAI key is fed to `codex login` over an ISOLATED pipe (so it
+# never consumes the prompt), while the aggregated repair brief arrives on the
+# container's OWN stdin (the host pipes it) and is read by `codex exec` — kept off
+# argv (E2BIG) AND out of /out (never pollutes the rebuild context / promoted
+# source). `exec` replaces the shell so codex's exit code IS the container's.
+_CODEX_REPAIR_SCRIPT = r"""
+set -u
+export HOME=/home/node
+export CODEX_HOME=/home/node/.codex
+export PATH="/home/node/bin:$PATH"
+mkdir -p "$CODEX_HOME"
+# Drain the host-piped aggregated brief off stdin into a temp file OUTSIDE /out
+# (so it never pollutes the rebuild context / promoted source), THEN feed it to
+# codex via an explicit redirect — the proven slicer/fe-agent contract (don't rely
+# on codex inheriting the shell's stdin). `cat` reads stdin fully to EOF first, so
+# the key pipe below can't race it.
+cat > /tmp/repair_prompt.txt
+cd /out
+# codex (>=0.x) does NOT pick up OPENAI_API_KEY from the environment on its own:
+# the key must be written to auth.json via `login --with-api-key` (reads the key
+# from ITS OWN stdin pipe — independent of /tmp/repair_prompt.txt above).
+printf '%s' "${OPENAI_API_KEY:-}" | codex login --with-api-key >/dev/null 2>&1 || true
+# codex edits /out in place. Merge stderr into stdout (2>&1) so the host drains ONE
+# pipe — codex's progress can be large and the host reads stderr only after the
+# stdout loop, so a separate stderr stream could fill its 64KB pipe and deadlock.
+# `exec` makes codex's exit the container's.
+exec timeout "${BE_CODEX_REPAIR_TIMEOUT:-900}" codex ${BE_CODEX_REPAIR_FLAGS} < /tmp/repair_prompt.txt 2>&1
+"""
+
+
 class BackendProjectService:
     """Generate a runnable multi-file backend project via a sandboxed agent."""
 
@@ -381,6 +417,16 @@ class BackendProjectService:
         # download+build is slower than a blind edit, hence the wider default. The
         # generation-time ladder reuses this same per-round budget.
         self.repair_timeout = int(os.getenv("BE_AGENT_REPAIR_TIMEOUT", "900"))
+        # Deploy-time COMPREHENSIVE repair via the OpenAI Codex CLI (the be-agent
+        # image pre-bakes `codex`). One Codex pass fixes database + runtime + interface
+        # against the running container, then the deploy step rebuilds + re-checks.
+        # Separate timeout/flags from the Claude rungs; `exec` reads the prompt off
+        # stdin (no positional, no --json so the plain progress streams to on_log).
+        self.codex_repair_timeout = int(os.getenv("BE_CODEX_REPAIR_TIMEOUT", "900"))
+        self.codex_repair_flags = os.getenv(
+            "BE_CODEX_REPAIR_FLAGS",
+            "exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check",
+        )
 
     # --- prompt assembly -----------------------------------------------------
     def _load_prompt(self, name: str) -> str:
@@ -414,6 +460,13 @@ class BackendProjectService:
 
     def is_configured(self) -> bool:
         return bool(os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY"))
+
+    @staticmethod
+    def is_codex_configured() -> bool:
+        """Whether the OpenAI Codex CLI repair path can run (its own key, separate
+        from the Claude rungs). ``repair_5xx`` returns ``ran=False`` when unset so the
+        deploy's comprehensive-repair ladder degrades to best-effort-proceed."""
+        return bool(os.getenv("OPENAI_API_KEY"))
 
     def review_project(
         self, *, source_digest: str, contract_summary: str, on_model_call=None
@@ -692,6 +745,37 @@ class BackendProjectService:
         )
         return self._run_repair_agent(workdir, prompt, on_log=on_log, is_cancelled=is_cancelled)
 
+    def repair_5xx(
+        self,
+        *,
+        workdir: str,
+        failures_digest: str,
+        on_log: Optional[Callable[[str], None]] = None,
+        is_cancelled: Optional[Callable[[], bool]] = None,
+    ) -> dict:
+        """Comprehensive deploy-time backend self-heal driven by the OpenAI Codex CLI.
+
+        ONE Codex pass fixes EVERYTHING observed on the running backend this round —
+        database / data-layer, runtime (5xx) crashes and interface defects — editing
+        the staged source mounted at ``/out`` in place; the deploy step then rebuilds
+        + swaps + re-checks (health + smoke + itest). Same in-place mechanism as
+        ``repair_contract`` but uses Codex (`codex exec`, the be-agent image pre-bakes
+        it) and a comprehensive aggregated brief (data-layer state + smoke 5xx + itest
+        failures + container stack traces + contract). Returns ``{ran, summary,
+        cost_usd}``; ``ran`` is False when ``OPENAI_API_KEY`` is unset (the caller then
+        skips the repair rung and proceeds best-effort)."""
+        # Keep the HEAD of the digest (data-layer state + smoke 5xx + itest cases +
+        # stack-trace logs are front-loaded by _build_comprehensive_digest; the
+        # contract reference trails). A tail-slice here would drop exactly the
+        # data-layer + smoke sections the comprehensive brief exists to feed. The
+        # prompt rides a temp file in-container (no argv limit), so the cap is just a
+        # generous guard above the bounded digest size.
+        prompt = (
+            self._load_prompt("backend_project_5xx_repair_prompt.txt")
+            + "\n\n" + (failures_digest or "")[:18000]
+        )
+        return self._run_codex_repair_agent(workdir, prompt, on_log=on_log, is_cancelled=is_cancelled)
+
     def _run_repair_agent(
         self,
         workdir: str,
@@ -772,6 +856,87 @@ class BackendProjectService:
             )
             cost = sum(float(r.get("total_cost_usd") or 0.0) for r in result_events)
         return {"ran": True, "summary": summary, "cost_usd": cost}
+
+    def _run_codex_repair_agent(
+        self,
+        workdir: str,
+        prompt: str,
+        *,
+        on_log: Optional[Callable[[str], None]] = None,
+        is_cancelled: Optional[Callable[[], bool]] = None,
+    ) -> dict:
+        """Run the in-place be-agent COMPREHENSIVE repair container driven by the
+        OpenAI Codex CLI (``codex exec``). The aggregated brief is piped over the
+        container's stdin so it never lands in /out (no build-context / promoted-source
+        pollution); codex edits the staged source in place and the deploy step then
+        rebuilds + swaps + re-checks. Codex streams PLAIN progress (not Claude's JSON
+        events), so forward a throttled heartbeat to ``on_log`` and keep the tail as
+        the summary. Returns ``{ran, summary, cost_usd}``; ``ran`` is False when
+        ``OPENAI_API_KEY`` is unset (caller proceeds best-effort)."""
+        if not self.is_codex_configured():
+            return {"ran": False, "summary": "", "cost_usd": 0.0, "error": "OPENAI_API_KEY not configured"}
+        wd = Path(workdir)
+        if not wd.is_dir():
+            return {"ran": False, "summary": "", "cost_usd": 0.0, "error": "workdir missing"}
+        # The container runs as the non-root ``node`` uid; make the staged tree
+        # writable so codex can edit the existing (backend-written) files.
+        self._make_writable(wd)
+        cmd = [
+            self.docker, "run", "--rm", "-i", "--user", "node",
+            "-e", "OPENAI_API_KEY",
+            "-e", f"BE_CODEX_REPAIR_TIMEOUT={self.codex_repair_timeout}",
+            "-e", f"BE_CODEX_REPAIR_FLAGS={self.codex_repair_flags}",
+            "-v", f"{wd}:/out", self.image, "bash", "-c", _CODEX_REPAIR_SCRIPT,
+        ]
+        env = dict(os.environ, OPENAI_API_KEY=os.getenv("OPENAI_API_KEY") or "")
+
+        tail: list[str] = []
+        seen = 0
+        proc = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, bufsize=1, env=env,
+        )
+        try:
+            proc.stdin.write(prompt)
+            proc.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+        try:
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                tail.append(line)
+                tail = tail[-60:]
+                seen += 1
+                # Codex is verbose — throttle the deploy timeline to a heartbeat.
+                if on_log and seen % 25 == 1:
+                    try:
+                        on_log(f"Codex 修复中:{line[:160]}")
+                    except Exception:  # noqa: BLE001
+                        pass
+                if is_cancelled and is_cancelled():
+                    proc.kill()
+                    return {"ran": True, "summary": "cancelled", "cost_usd": 0.0}
+            # Host backstop slightly above the in-container `timeout`; None when the
+            # in-container cap is disabled (0 = run to completion, mirrors gen).
+            proc.wait(timeout=self.codex_repair_timeout + 60 if self.codex_repair_timeout > 0 else None)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            return {"ran": True, "summary": "codex repair timed out", "cost_usd": 0.0}
+        finally:
+            if proc.stderr:
+                err = proc.stderr.read()
+                if err:
+                    logger.info("be-agent codex repair stderr: %s", err[:1500])
+
+        summary = " ".join(tail[-3:])[:300] if tail else ""
+        if on_log and summary:
+            try:
+                on_log(f"Codex 修复完成:{summary[:160]}")
+            except Exception:  # noqa: BLE001
+                pass
+        return {"ran": True, "summary": summary, "cost_usd": 0.0}
 
     @staticmethod
     def _make_writable(root: Path) -> None:

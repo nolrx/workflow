@@ -71,7 +71,9 @@ export interface Deployment {
 }
 
 export interface StartFullstackResult {
-  runs: { frontend: string; backend: string; middleware: string }
+  // A subset start (e.g. lanes: ["backend"]) only returns the requested lanes, so
+  // every lane is optional — callers must guard each before opening it.
+  runs: { frontend?: string; backend?: string; middleware?: string }
   contract: SharedContract
   stream_urls: Record<string, string>
 }
@@ -88,10 +90,16 @@ export interface FullstackStatus {
 }
 
 export const fullstackApi = {
-  /** Synthesize the shared contract and start the three concurrent runs. */
-  start: async (projectId: string): Promise<StartFullstackResult> => {
+  /** Synthesize the shared contract and start the generation runs. Pass ``lanes``
+   *  to start ONLY a subset (e.g. ["backend"] to regenerate just the backend,
+   *  reusing the frozen contract — no frontend/middleware re-run). */
+  start: async (
+    projectId: string,
+    lanes?: ("frontend" | "backend" | "middleware")[]
+  ): Promise<StartFullstackResult> => {
     const res = await api.post<Envelope<StartFullstackResult>>(
-      `/code/projects/${projectId}/fullstack/runs`
+      `/code/projects/${projectId}/fullstack/runs`,
+      lanes ? { lanes } : undefined
     )
     return res.data
   },

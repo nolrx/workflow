@@ -14,6 +14,7 @@ deploy-time fallback.
 
 Steps: ``mw_planner`` -> ``mw_provision`` -> ``mw_publish`` (3 counted steps).
 """
+
 import logging
 
 from backend.extensions import db
@@ -58,17 +59,27 @@ def run_code_middleware_workflow(ctx, recorder) -> dict:
     def progress(current_step: str) -> None:
         run = db.session.get(AgentRun, ctx.run_id)
         if run:
-            run.set_progress({
-                "total_steps": TOTAL_STEPS, "completed_steps": completed,
-                "failed_steps": 0, "current_step": current_step,
-            })
+            run.set_progress(
+                {
+                    "total_steps": TOTAL_STEPS,
+                    "completed_steps": completed,
+                    "failed_steps": 0,
+                    "current_step": current_step,
+                }
+            )
             db.session.commit()
-        recorder.emit(AgentEventType.PROGRESS, message=f"进度 {completed}/{TOTAL_STEPS}",
-                      payload={"completed": completed, "total": TOTAL_STEPS, "current": current_step})
+        recorder.emit(
+            AgentEventType.PROGRESS,
+            message=f"进度 {completed}/{TOTAL_STEPS}",
+            payload={"completed": completed, "total": TOTAL_STEPS, "current": current_step},
+        )
 
     def cancel_result(project_id) -> dict:
-        recorder.emit(AgentEventType.WARNING, level=AgentEventLevel.WARNING,
-                      message="收到取消请求，停止后续步骤")
+        recorder.emit(
+            AgentEventType.WARNING,
+            level=AgentEventLevel.WARNING,
+            message="收到取消请求，停止后续步骤",
+        )
         return {"status": AgentRunStatus.CANCELLED, "resource_id": project_id}
 
     # --- Step 1: Planner -----------------------------------------------------
@@ -90,9 +101,13 @@ def run_code_middleware_workflow(ctx, recorder) -> dict:
         db.session.commit()
 
         datastores = manifest.get("datastores") or []
-        recorder.emit(AgentEventType.PROGRESS, step_id=step.id,
-                      message=f"中间件需求:{len(datastores)} 个数据存储" + ("，含缓存" if manifest.get("cache") else ""),
-                      payload={"manifest": manifest})
+        recorder.emit(
+            AgentEventType.PROGRESS,
+            step_id=step.id,
+            message=f"中间件需求:{len(datastores)} 个数据存储"
+            + ("，含缓存" if manifest.get("cache") else ""),
+            payload={"manifest": manifest},
+        )
         step.set_context(snapshot={"injected_text": "", "ledger": ledger.to_dict()})
         step.set_output(
             output_summary=f"已载入中间件清单:{', '.join(d.get('type', '') for d in datastores) or '默认 postgres'}。",
@@ -109,7 +124,10 @@ def run_code_middleware_workflow(ctx, recorder) -> dict:
         return cancel_result(project_id)
     data_layer: dict = {}
     with recorder.step(
-        "mw_provision", "中间件生成 Agent", "generator", 2,
+        "mw_provision",
+        "中间件生成 Agent",
+        "generator",
+        2,
         input_summary="生成初始化 SQL / 迁移 / 种子数据",
     ) as step:
         project = db.session.get(CodeProject, project_id)
@@ -120,11 +138,22 @@ def run_code_middleware_workflow(ctx, recorder) -> dict:
         n_entities = len(data_layer.get("entities") or [])
         has_sql = bool((data_layer.get("init_sql") or "").strip())
         if data_layer.get("_degraded"):
-            recorder.emit(AgentEventType.WARNING, level=AgentEventLevel.WARNING, step_id=step.id,
-                          message="未配置文本模型:数据层为确定性回退(建表交给后端自带迁移)。")
-        recorder.emit(AgentEventType.MODEL_RESPONSE, step_id=step.id, message="数据层生成完成",
-                      payload={"entities": n_entities, "has_init_sql": has_sql,
-                               "summary": data_layer.get("summary")})
+            recorder.emit(
+                AgentEventType.WARNING,
+                level=AgentEventLevel.WARNING,
+                step_id=step.id,
+                message="未配置文本模型:数据层为确定性回退(建表交给后端自带迁移)。",
+            )
+        recorder.emit(
+            AgentEventType.MODEL_RESPONSE,
+            step_id=step.id,
+            message="数据层生成完成",
+            payload={
+                "entities": n_entities,
+                "has_init_sql": has_sql,
+                "summary": data_layer.get("summary"),
+            },
+        )
         step.set_output(
             output_summary=f"已生成数据层:{n_entities} 个实体,{'含' if has_sql else '无'}初始化 SQL。{data_layer.get('summary', '')}".strip(),
             reasoning_summary="按清单与数据设计产出可移植 DDL 与种子;部署时作为非自迁移后端的兜底初始化。",
@@ -143,13 +172,18 @@ def run_code_middleware_workflow(ctx, recorder) -> dict:
         if init_sql.strip() or seed_sql.strip():
             combined = (init_sql + ("\n\n-- seed\n" + seed_sql if seed_sql.strip() else "")).strip()
             step.add_artifact(
-                AgentArtifactType.TEXT, "初始化 SQL（init.sql）", filename="init.sql",
-                mime_type="text/plain; charset=utf-8", write_file=True,
+                AgentArtifactType.TEXT,
+                "初始化 SQL（init.sql）",
+                filename="init.sql",
+                mime_type="text/plain; charset=utf-8",
+                write_file=True,
                 content_text=combined,
-                domain_ref_type="code_middleware_sql", domain_ref_id=project_id,
+                domain_ref_type="code_middleware_sql",
+                domain_ref_id=project_id,
             )
         step.add_artifact(
-            AgentArtifactType.JSON, "中间件清单与数据层",
+            AgentArtifactType.JSON,
+            "中间件清单与数据层",
             content_json={
                 "manifest": manifest,
                 "entities": data_layer.get("entities") or [],
@@ -160,14 +194,15 @@ def run_code_middleware_workflow(ctx, recorder) -> dict:
                 "delivery": "middleware-provisioning",
             },
             filename="middleware_meta.json",
-            domain_ref_type="code_middleware_meta", domain_ref_id=project_id,
+            domain_ref_type="code_middleware_meta",
+            domain_ref_id=project_id,
         )
         step.set_context(snapshot={"injected_text": "", "ledger": ledger.to_dict()})
         step.set_output(
             output_summary="中间件清单与数据层已发布:部署阶段据此建库并(必要时)应用初始化 SQL。",
             reasoning_summary="把清单与 SQL 作为 artifact 落库;部署 run 读取它创建项目专属命名空间。",
             self_check=f"清单数据存储 {len(manifest.get('datastores') or [])};SQL {'有' if init_sql.strip() else '无'}。",
-            next_action="待三端就绪后触发原子部署。",
+            next_action="待三端就绪后触发应用部署。",
         )
     completed += 1
     progress("done")

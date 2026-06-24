@@ -35,6 +35,7 @@ Examples
 
 Exit code: 0 if every attempted stage passed, 1 otherwise.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -124,22 +125,39 @@ class Reporter:
 
 def main() -> int:
     p = argparse.ArgumentParser(description="End-to-end full-stack pipeline smoke.")
-    p.add_argument("--base-url", default="http://localhost:5001",
-                   help="backend or nginx base URL (default http://localhost:5001)")
+    p.add_argument(
+        "--base-url",
+        default="http://localhost:5001",
+        help="backend or nginx base URL (default http://localhost:5001)",
+    )
     p.add_argument("--token", default=None, help="JWT access token (skip login)")
     p.add_argument("--email", default=None)
     p.add_argument("--password", default=None)
     p.add_argument("--register", action="store_true", help="register the email/password first")
-    p.add_argument("--project-id", default=None,
-                   help="use an existing project (must have development_flow) instead of seeding")
-    p.add_argument("--requirement", default="一个简单的待办事项应用",
-                   help="requirement for the seeded project (seed mode)")
+    p.add_argument(
+        "--project-id",
+        default=None,
+        help="use an existing project (must have development_flow) instead of seeding",
+    )
+    p.add_argument(
+        "--requirement",
+        default="一个简单的待办事项应用",
+        help="requirement for the seeded project (seed mode)",
+    )
     p.add_argument("--title", default="E2E 全栈冒烟", help="seeded project title")
-    p.add_argument("--flow-file", default=None,
-                   help="path to a development_flow markdown to seed (default: canned TODO flow)")
-    p.add_argument("--requirements-file", default=None,
-                   help="path to a requirements_doc markdown to seed (default: canned)")
-    p.add_argument("--no-deploy", action="store_true", help="stop after generation; skip deploy + verify")
+    p.add_argument(
+        "--flow-file",
+        default=None,
+        help="path to a development_flow markdown to seed (default: canned TODO flow)",
+    )
+    p.add_argument(
+        "--requirements-file",
+        default=None,
+        help="path to a requirements_doc markdown to seed (default: canned)",
+    )
+    p.add_argument(
+        "--no-deploy", action="store_true", help="stop after generation; skip deploy + verify"
+    )
     p.add_argument("--gen-timeout", type=int, default=1800, help="seconds to wait for generation")
     p.add_argument("--deploy-timeout", type=int, default=900, help="seconds to wait for deploy")
     p.add_argument("--poll", type=int, default=6, help="poll interval seconds")
@@ -166,14 +184,14 @@ def main() -> int:
             r.failed("缺少凭证:提供 --token,或 --email + --password")
             return 1
         if args.register:
-            rr = s.post(url("/api/auth/register"),
-                        json={"email": args.email, "password": args.password})
+            rr = s.post(
+                url("/api/auth/register"), json={"email": args.email, "password": args.password}
+            )
             if rr.status_code in (200, 201):
                 r.passed(f"注册成功 {args.email}")
             else:
                 r.info(f"注册返回 {rr.status_code}(可能已存在),尝试登录")
-        rr = s.post(url("/api/auth/login"),
-                    json={"email": args.email, "password": args.password})
+        rr = s.post(url("/api/auth/login"), json={"email": args.email, "password": args.password})
         if rr.status_code != 200:
             r.failed(f"登录失败 {rr.status_code}: {rr.text[:200]}")
             return 1
@@ -194,30 +212,43 @@ def main() -> int:
             return 1
         proj = data_of(rr).get("project", {})
         if not proj.get("development_flow"):
-            r.failed("该项目尚无 development_flow,无法跑全栈;请换一个已完成开发流程的项目或用 seed 模式")
+            r.failed(
+                "该项目尚无 development_flow,无法跑全栈;请换一个已完成开发流程的项目或用 seed 模式"
+            )
             return 1
         r.passed(f"复用现有项目 {pid}「{proj.get('title')}」")
     else:
         flow = _read_file(args.flow_file) if args.flow_file else CANNED_FLOW
         reqs = _read_file(args.requirements_file) if args.requirements_file else CANNED_REQUIREMENTS
-        rr = s.post(url("/api/code/projects"),
-                    json={"requirement": args.requirement, "title": args.title})
+        rr = s.post(
+            url("/api/code/projects"), json={"requirement": args.requirement, "title": args.title}
+        )
         if rr.status_code not in (200, 201):
-            r.failed(f"创建项目失败 {rr.status_code}: {rr.text[:200]}(create 需要文本模型生成需求文档)")
+            r.failed(
+                f"创建项目失败 {rr.status_code}: {rr.text[:200]}(create 需要文本模型生成需求文档)"
+            )
             return 1
         pid = data_of(rr).get("project", {}).get("id")
         r.passed(f"已创建项目 {pid}")
         # Seed deterministic flow / requirements / style so the run is repeatable.
-        rr = s.patch(url(f"/api/code/projects/{pid}"), json={
-            "requirements_doc": reqs,
-            "development_flow": flow,
-            "style_prompt": CANNED_STYLE,
-        })
+        rr = s.patch(
+            url(f"/api/code/projects/{pid}"),
+            json={
+                "requirements_doc": reqs,
+                "development_flow": flow,
+                "style_prompt": CANNED_STYLE,
+            },
+        )
         if rr.status_code != 200:
             r.failed(f"写入开发流程失败 {rr.status_code}: {rr.text[:200]}")
             return 1
-        endpoints = flow.count("\nGET ") + flow.count("\nPOST ") + flow.count("\nPUT ") + \
-            flow.count("\nPATCH ") + flow.count("\nDELETE ")
+        endpoints = (
+            flow.count("\nGET ")
+            + flow.count("\nPOST ")
+            + flow.count("\nPUT ")
+            + flow.count("\nPATCH ")
+            + flow.count("\nDELETE ")
+        )
         r.passed(f"已写入开发流程({len(flow)} 字符,约 {endpoints} 个端点)")
 
     # --- 3. Start the pipeline ----------------------------------------------
@@ -233,9 +264,13 @@ def main() -> int:
     ts = api.get("tech_stack", {})
     paths = (api.get("openapi", {}) or {}).get("paths", {}) or {}
     mw = contract.get("middleware_manifest", {})
-    r.passed(f"已启动:fe={runs.get('frontend')} be={runs.get('backend')} mw={runs.get('middleware')}")
-    r.info(f"契约状态={contract.get('contract_status')} 栈={ts.get('language')}/{ts.get('framework')} "
-           f"端点={len(paths)} 数据存储={len(mw.get('datastores') or [])}")
+    r.passed(
+        f"已启动:fe={runs.get('frontend')} be={runs.get('backend')} mw={runs.get('middleware')}"
+    )
+    r.info(
+        f"契约状态={contract.get('contract_status')} 栈={ts.get('language')}/{ts.get('framework')} "
+        f"端点={len(paths)} 数据存储={len(mw.get('datastores') or [])}"
+    )
 
     # --- 4. Poll generation --------------------------------------------------
     r.stage("4. 生成中(轮询三条流水线直到结束)")
@@ -254,7 +289,9 @@ def main() -> int:
             run = final_runs.get(lane) or {}
             status = run.get("status", "—")
             prog = run.get("progress") or {}
-            line.append(f"{lane}={status}({prog.get('completed_steps', 0)}/{prog.get('total_steps', 0)})")
+            line.append(
+                f"{lane}={status}({prog.get('completed_steps', 0)}/{prog.get('total_steps', 0)})"
+            )
         snapshot = " ".join(line)
         if snapshot != last.get("snap"):
             r.info(snapshot)
@@ -282,7 +319,7 @@ def main() -> int:
         return 0 if r.ok else 1
 
     # --- 5. Deploy -----------------------------------------------------------
-    r.stage("5. 原子部署(中间件 → 构建+自愈 → 起容器 → 健康检查 → 反代)")
+    r.stage("5. 应用部署(中间件 → 构建+自愈 → 起容器 → 健康检查 → 反代)")
     rr = s.post(url(f"/api/code/projects/{pid}/deploy"))
     if rr.status_code not in (200, 201):
         r.failed(f"部署启动失败 {rr.status_code}: {rr.text[:300]}")
@@ -297,7 +334,7 @@ def main() -> int:
         if rr.status_code == 200:
             st = data_of(rr)
             dep = st.get("deployment") or {}
-            drun = (st.get("runs", {}).get("deploy") or {})
+            drun = st.get("runs", {}).get("deploy") or {}
             dep_status = dep.get("status")
             prog = drun.get("progress") or {}
             snap = f"deploy={drun.get('status', '—')}({prog.get('completed_steps', 0)}/{prog.get('total_steps', 0)}) deployment={dep_status}"

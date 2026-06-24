@@ -13,6 +13,7 @@ Runs CONCURRENTLY with ``code_frontend_project_generation`` and
 ``code_middleware_provisioning`` for the same project; all three read the same
 frozen contract from ``CodeProjectLedger`` so they stay in lock-step.
 """
+
 import io
 import json
 import logging
@@ -147,19 +148,27 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
     def progress(current_step: str) -> None:
         run = db.session.get(AgentRun, ctx.run_id)
         if run:
-            run.set_progress({
-                "total_steps": TOTAL_STEPS, "completed_steps": completed,
-                "failed_steps": 0, "current_step": current_step,
-            })
+            run.set_progress(
+                {
+                    "total_steps": TOTAL_STEPS,
+                    "completed_steps": completed,
+                    "failed_steps": 0,
+                    "current_step": current_step,
+                }
+            )
             db.session.commit()
         recorder.emit(
-            AgentEventType.PROGRESS, message=f"进度 {completed}/{TOTAL_STEPS}",
+            AgentEventType.PROGRESS,
+            message=f"进度 {completed}/{TOTAL_STEPS}",
             payload={"completed": completed, "total": TOTAL_STEPS, "current": current_step},
         )
 
     def cancel_result(project_id) -> dict:
-        recorder.emit(AgentEventType.WARNING, level=AgentEventLevel.WARNING,
-                      message="收到取消请求，停止后续步骤")
+        recorder.emit(
+            AgentEventType.WARNING,
+            level=AgentEventLevel.WARNING,
+            message="收到取消请求，停止后续步骤",
+        )
         return {"status": AgentRunStatus.CANCELLED, "resource_id": project_id}
 
     # --- Step 1: Planner -----------------------------------------------------
@@ -181,11 +190,15 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
         db.session.commit()
 
         if not service.is_configured():
-            recorder.emit(AgentEventType.WARNING, level=AgentEventLevel.WARNING, step_id=step.id,
-                          message="未配置 ANTHROPIC_API_KEY，无法运行容器化后端生成")
+            recorder.emit(
+                AgentEventType.WARNING,
+                level=AgentEventLevel.WARNING,
+                step_id=step.id,
+                message="未配置 ANTHROPIC_API_KEY，无法运行容器化后端生成",
+            )
 
         step.set_context(snapshot={"injected_text": "", "ledger": ledger.to_dict()})
-        ts = (contract.get("tech_stack") or {})
+        ts = contract.get("tech_stack") or {}
         step.set_output(
             output_summary=f"已载入共享 API 契约（{ts.get('language', '?')}/{ts.get('framework', '?')}），准备生成后端工程。",
             reasoning_summary="读取由开发流程合成、三端共享的 OpenAPI 契约与中间件清单，确保后端实现与前端调用严格一致。",
@@ -201,7 +214,10 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
         return cancel_result(project_id)
     result: dict = {}
     with recorder.step(
-        "be_project_build", "后端工程 Agent", "generator", 2,
+        "be_project_build",
+        "后端工程 Agent",
+        "generator",
+        2,
         input_summary="在沙箱容器内按共享契约生成后端工程(含 Dockerfile)",
     ) as step:
         project = db.session.get(CodeProject, project_id)
@@ -221,26 +237,44 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
                     inp = block.get("input") or {}
                     if name in ("Write", "Edit"):
                         fpath = inp.get("file_path") or inp.get("path") or ""
-                        recorder.emit(AgentEventType.FILE_CREATED, step_id=step.id,
-                                      message=f"写入 {fpath}", payload={"tool": name, "file": fpath})
+                        recorder.emit(
+                            AgentEventType.FILE_CREATED,
+                            step_id=step.id,
+                            message=f"写入 {fpath}",
+                            payload={"tool": name, "file": fpath},
+                        )
                     else:
                         cmd = inp.get("command") or ""
-                        recorder.emit(AgentEventType.TOOL_CALL, step_id=step.id,
-                                      message=(f"{name}: {cmd[:80]}" if cmd else name),
-                                      payload={"tool": name, "command": cmd[:500]})
+                        recorder.emit(
+                            AgentEventType.TOOL_CALL,
+                            step_id=step.id,
+                            message=(f"{name}: {cmd[:80]}" if cmd else name),
+                            payload={"tool": name, "command": cmd[:500]},
+                        )
             elif etype == "user":
                 for block in event.get("message", {}).get("content", []):
                     if not isinstance(block, dict) or block.get("type") != "tool_result":
                         continue
                     content = block.get("content")
-                    text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
-                    recorder.emit(AgentEventType.TOOL_RESULT, step_id=step.id,
-                                  message="工具返回", payload={"output": (text or "")[:2000]})
+                    text = (
+                        content
+                        if isinstance(content, str)
+                        else json.dumps(content, ensure_ascii=False)
+                    )
+                    recorder.emit(
+                        AgentEventType.TOOL_RESULT,
+                        step_id=step.id,
+                        message="工具返回",
+                        payload={"output": (text or "")[:2000]},
+                    )
             elif etype == "be_phase":
                 phase = event.get("phase") or ""
-                recorder.emit(AgentEventType.TOOL_CALL, step_id=step.id,
-                              message=_BE_PHASE_LABELS.get(phase, f"构建阶段：{phase}"),
-                              payload={"phase": phase})
+                recorder.emit(
+                    AgentEventType.TOOL_CALL,
+                    step_id=step.id,
+                    message=_BE_PHASE_LABELS.get(phase, f"构建阶段：{phase}"),
+                    payload={"phase": phase},
+                )
 
         result = service.build_project(
             requirement=project.requirement_input,
@@ -265,9 +299,13 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
         stack = result.get("stack") or "unknown"
         dockerfile_origin = result.get("dockerfile_origin")
         if dockerfile_origin == "synthesized":
-            recorder.emit(AgentEventType.WARNING, level=AgentEventLevel.WARNING, step_id=step.id,
-                          message="Agent 未自带 Dockerfile，已按检测到的技术栈合成一个（可能需在部署阶段微调）。",
-                          payload={"stack": stack})
+            recorder.emit(
+                AgentEventType.WARNING,
+                level=AgentEventLevel.WARNING,
+                step_id=step.id,
+                message="Agent 未自带 Dockerfile，已按检测到的技术栈合成一个（可能需在部署阶段微调）。",
+                payload={"stack": stack},
+            )
 
         # Generation-time native build verdict: green / green-repaired publish
         # cleanly; a still-red build after the self-heal round(s) is published as
@@ -276,34 +314,58 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
         build_state = result.get("build_state") or "unknown"
         if result.get("degraded"):
             recorder.emit(
-                AgentEventType.WARNING, level=AgentEventLevel.WARNING, step_id=step.id,
-                message=(f"本机原生构建未完全通过（{result.get('degraded_reason') or build_state}，"
-                         f"已自愈 {result.get('build_repaired_rounds') or 0} 轮）；源码已生成,"
-                         "将在部署阶段再次 docker build + AI 修复。"),
-                payload={"build_state": build_state,
-                         "degraded_reason": result.get("degraded_reason"),
-                         "repaired_rounds": result.get("build_repaired_rounds"),
-                         "build_logs": result.get("build_logs"),
-                         "tests_ran": result.get("tests_ran")},
+                AgentEventType.WARNING,
+                level=AgentEventLevel.WARNING,
+                step_id=step.id,
+                message=(
+                    f"本机原生构建未完全通过（{result.get('degraded_reason') or build_state}，"
+                    f"已自愈 {result.get('build_repaired_rounds') or 0} 轮）；源码已生成,"
+                    "将在部署阶段再次 docker build + AI 修复。"
+                ),
+                payload={
+                    "build_state": build_state,
+                    "degraded_reason": result.get("degraded_reason"),
+                    "repaired_rounds": result.get("build_repaired_rounds"),
+                    "build_logs": result.get("build_logs"),
+                    "tests_ran": result.get("tests_ran"),
+                },
             )
         else:
             recorder.emit(
-                AgentEventType.PROGRESS, step_id=step.id,
-                message=(f"本机原生构建验证通过（{build_state}）"
-                         + ("，测试已运行" if result.get("tests_ran") else "")),
-                payload={"build_state": build_state, "tests_ran": result.get("tests_ran"),
-                         "scaffold": result.get("scaffold")},
+                AgentEventType.PROGRESS,
+                step_id=step.id,
+                message=(
+                    f"本机原生构建验证通过（{build_state}）"
+                    + ("，测试已运行" if result.get("tests_ran") else "")
+                ),
+                payload={
+                    "build_state": build_state,
+                    "tests_ran": result.get("tests_ran"),
+                    "scaffold": result.get("scaffold"),
+                },
             )
         if result.get("dockerfile_warn"):
-            recorder.emit(AgentEventType.WARNING, level=AgentEventLevel.WARNING, step_id=step.id,
-                          message=f"Dockerfile 静态检查提示：{result.get('dockerfile_warn')}",
-                          payload={"dockerfile_warn": result.get("dockerfile_warn")})
+            recorder.emit(
+                AgentEventType.WARNING,
+                level=AgentEventLevel.WARNING,
+                step_id=step.id,
+                message=f"Dockerfile 静态检查提示：{result.get('dockerfile_warn')}",
+                payload={"dockerfile_warn": result.get("dockerfile_warn")},
+            )
 
         # --- Acceptance review vs the shared contract (advisory, charged) ----
-        if src_files and gate_available() and charge(
-            user_id=ctx.user_id, amount=pricing.CODE_CONTEXT_VERIFY,
-            operation="code_context_verify", resource_type="agent_run",
-            resource_id=ctx.run_id, description="backend acceptance review", team_id=ctx.team_id,
+        if (
+            src_files
+            and gate_available()
+            and charge(
+                user_id=ctx.user_id,
+                amount=pricing.CODE_CONTEXT_VERIFY,
+                operation="code_context_verify",
+                resource_type="agent_run",
+                resource_id=ctx.run_id,
+                description="backend acceptance review",
+                team_id=ctx.team_id,
+            )
         ):
             review = service.review_project(
                 source_digest=_source_digest(src_files),
@@ -312,7 +374,8 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
             if review:
                 verdict = str(review.get("verdict") or "").upper()
                 missing_ep = [
-                    c.get("endpoint") or c.get("id") for c in (review.get("endpoint_coverage") or [])
+                    c.get("endpoint") or c.get("id")
+                    for c in (review.get("endpoint_coverage") or [])
                     if isinstance(c, dict) and not c.get("covered")
                 ]
                 # Functional-anchor (FR/NFR/M) coverage — the "implement the whole
@@ -321,7 +384,8 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
                 # source of truth (verdict); missing_fr is for narration + meta.
                 fr_coverage_summary = (review.get("fr_coverage") or [])[:50]
                 missing_fr = [
-                    c.get("id") for c in fr_coverage_summary
+                    c.get("id")
+                    for c in fr_coverage_summary
                     if isinstance(c, dict) and not c.get("covered")
                 ]
                 missing_all = [m for m in (*missing_ep, *missing_fr) if m]
@@ -331,26 +395,47 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
                     AgentEventType.WARNING if concern else AgentEventType.PROGRESS,
                     level=AgentEventLevel.WARNING if concern else AgentEventLevel.INFO,
                     step_id=step.id,
-                    message=f"契约 / 功能锚点符合性评审：{verdict or '—'}" + (f"；未覆盖 {', '.join(missing_all)}" if missing_all else "；端点与功能锚点覆盖完整"),
-                    payload={"verdict": verdict, "missing_endpoints": missing_ep, "missing_fr": missing_fr,
-                             "issues": (review.get("issues") or [])[:20], "summary": review.get("summary")},
+                    message=f"契约 / 功能锚点符合性评审：{verdict or '—'}"
+                    + (
+                        f"；未覆盖 {', '.join(missing_all)}"
+                        if missing_all
+                        else "；端点与功能锚点覆盖完整"
+                    ),
+                    payload={
+                        "verdict": verdict,
+                        "missing_endpoints": missing_ep,
+                        "missing_fr": missing_fr,
+                        "issues": (review.get("issues") or [])[:20],
+                        "summary": review.get("summary"),
+                    },
                 )
                 step.add_artifact(
-                    AgentArtifactType.JSON, "后端契约符合性评审", content_json=review,
+                    AgentArtifactType.JSON,
+                    "后端契约符合性评审",
+                    content_json=review,
                     filename="backend_project_review.json",
-                    domain_ref_type="code_backend_project_meta", domain_ref_id=project_id,
+                    domain_ref_type="code_backend_project_meta",
+                    domain_ref_id=project_id,
                 )
 
         step.model_response = (result.get("summary") or "")[:8000]
         db.session.commit()
-        recorder.emit(AgentEventType.MODEL_RESPONSE, step_id=step.id, message="agent 完成",
-                      payload={"summary": result.get("summary"), "usage": usage,
-                               "cost_usd": result.get("cost_usd"), "stack": stack})
+        recorder.emit(
+            AgentEventType.MODEL_RESPONSE,
+            step_id=step.id,
+            message="agent 完成",
+            payload={
+                "summary": result.get("summary"),
+                "usage": usage,
+                "cost_usd": result.get("cost_usd"),
+                "stack": stack,
+            },
+        )
         step.set_output(
             output_summary=f"已生成后端工程：{n_src} 个文件，技术栈 {stack}，Dockerfile 来源 {dockerfile_origin}。{result.get('summary', '')}".strip(),
             reasoning_summary="沙箱容器内 Claude Code 按共享契约自主创建多文件后端工程，并补齐运行所需 Dockerfile 与 /health、env 读取约定;实际构建运行交给部署阶段。",
             self_check=f"源码 {n_src} 文件；栈={stack}；Dockerfile={dockerfile_origin}；cost≈${result.get('cost_usd')}",
-            next_action="发布源码并等待原子部署。",
+            next_action="发布源码并等待应用部署。",
         )
     completed += 1
     progress("publish")
@@ -365,12 +450,18 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
             for rel, content in files.items():
                 archive.writestr(rel, content or b"")
         step.add_artifact(
-            AgentArtifactType.TEXT, "后端工程源码（zip）", filename="backend_project.zip",
-            mime_type="application/zip", write_file=True, content_bytes=buffer.getvalue(),
-            domain_ref_type="code_backend_project_zip", domain_ref_id=project_id,
+            AgentArtifactType.TEXT,
+            "后端工程源码（zip）",
+            filename="backend_project.zip",
+            mime_type="application/zip",
+            write_file=True,
+            content_bytes=buffer.getvalue(),
+            domain_ref_type="code_backend_project_zip",
+            domain_ref_id=project_id,
         )
         step.add_artifact(
-            AgentArtifactType.JSON, "后端工程元数据",
+            AgentArtifactType.JSON,
+            "后端工程元数据",
             content_json={
                 "source_files": sorted(files.keys()),
                 "stack": result.get("stack"),
@@ -391,13 +482,15 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
                 # Functional-anchor coverage + BMAD reinforce-pass diagnostics.
                 "fr_coverage": fr_coverage_summary,
                 "fr_uncovered": [
-                    c.get("id") for c in fr_coverage_summary
+                    c.get("id")
+                    for c in fr_coverage_summary
                     if isinstance(c, dict) and not c.get("covered")
                 ],
                 "reinforce_state": result.get("reinforce_state"),
             },
             filename="backend_project_meta.json",
-            domain_ref_type="code_backend_project_meta", domain_ref_id=project_id,
+            domain_ref_type="code_backend_project_meta",
+            domain_ref_id=project_id,
         )
         step.set_context(snapshot={"injected_text": "", "ledger": ledger.to_dict()})
         step.set_output(
@@ -410,7 +503,7 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
                 f"源码 {len(files)} 文件;栈={result.get('stack')};"
                 f"构建={result.get('build_state')};契约={'FAIL' if contract_failed else 'ok'}"
             ),
-            next_action="待三端就绪后触发原子部署。",
+            next_action="待三端就绪后触发应用部署。",
         )
     completed += 1
     progress("done")

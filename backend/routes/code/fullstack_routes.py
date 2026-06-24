@@ -17,6 +17,7 @@ reverse proxy is how the served frontend (``/preview/<pid>/``) reaches the
 generated backend for real — auth rides a path-scoped cookie set by the preview
 entry, mirroring the existing static preview.
 """
+
 import logging
 import threading
 
@@ -62,8 +63,16 @@ _trio_creation_lock = threading.Lock()
 
 # Hop-by-hop headers never forwarded by the reverse proxy.
 _HOP_HEADERS = {
-    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-    "te", "trailers", "transfer-encoding", "upgrade", "host", "content-length",
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailers",
+    "transfer-encoding",
+    "upgrade",
+    "host",
+    "content-length",
 }
 # Cookie that authenticates the served frontend's calls to /app/<pid>/api.
 APP_TOKEN_COOKIE = "fs_app_token"
@@ -82,23 +91,38 @@ def _start_run(user_id, team_id, workflow: str, project_id: str, config: dict) -
     """
     cost = _cost_for(workflow)
     run = AgentRun(
-        user_id=user_id, team_id=team_id, domain="code", workflow=workflow,
-        resource_type="code_project", resource_id=project_id,
-        title=config.get("title"), status=AgentRunStatus.QUEUED, credit_reserved=cost,
+        user_id=user_id,
+        team_id=team_id,
+        domain="code",
+        workflow=workflow,
+        resource_type="code_project",
+        resource_id=project_id,
+        title=config.get("title"),
+        status=AgentRunStatus.QUEUED,
+        credit_reserved=cost,
     )
     run.set_config(config)
-    run.set_input_snapshot({
-        "domain": "code", "workflow": workflow,
-        "resource_type": "code_project", "resource_id": project_id, "config": config,
-    })
+    run.set_input_snapshot(
+        {
+            "domain": "code",
+            "workflow": workflow,
+            "resource_type": "code_project",
+            "resource_id": project_id,
+            "config": config,
+        }
+    )
     db.session.add(run)
     db.session.commit()
     if cost > 0:
         try:
             deduct_credits(
-                user_id=user_id, amount=cost, operation="agent_run",
-                resource_type="agent_run", resource_id=run.id,
-                description=f"Agent run: {workflow}", team_id=team_id,
+                user_id=user_id,
+                amount=cost,
+                operation="agent_run",
+                resource_type="agent_run",
+                resource_id=run.id,
+                description=f"Agent run: {workflow}",
+                team_id=team_id,
             )
         except InsufficientCreditsError:
             db.session.delete(run)
@@ -198,7 +222,8 @@ def start_deploy(project_id: str):
     # Require a completed backend run (the deploy reads its source).
     backend_done = (
         AgentRun.query.filter_by(
-            resource_id=project_id, user_id=user_id,
+            resource_id=project_id,
+            user_id=user_id,
             workflow="code_backend_project_generation",
         )
         .filter(AgentRun.status.in_(list(AgentRunStatus.TERMINAL)))
@@ -216,7 +241,8 @@ def start_deploy(project_id: str):
     # and degrades gracefully (best-effort init.sql) when no middleware run exists.
     frontend_done = (
         AgentRun.query.filter_by(
-            resource_id=project_id, user_id=user_id,
+            resource_id=project_id,
+            user_id=user_id,
             workflow="code_frontend_project_generation",
         )
         .filter(AgentRun.status.in_([AgentRunStatus.COMPLETED, AgentRunStatus.PARTIAL]))
@@ -227,7 +253,8 @@ def start_deploy(project_id: str):
 
     # Avoid duplicate deploy runs.
     in_flight = AgentRun.query.filter(
-        AgentRun.resource_id == project_id, AgentRun.user_id == user_id,
+        AgentRun.resource_id == project_id,
+        AgentRun.user_id == user_id,
         AgentRun.workflow == "code_fullstack_deploy",
         AgentRun.status.in_(list(AgentRunStatus.ACTIVE)),
     ).first()
@@ -242,7 +269,7 @@ def start_deploy(project_id: str):
         return error_response("INSUFFICIENT_CREDITS", "积分不足，无法启动部署", 402)
     return success_response(
         {"run_id": run.id, "stream_url": f"/api/agent/runs/{run.id}/stream"},
-        "原子部署已启动",
+        "应用部署已启动",
         201,
     )
 
@@ -266,16 +293,18 @@ def fullstack_status(project_id: str):
 
     deployment = CodeDeployment.query.filter_by(project_id=project_id).first()
     ledger = contract_service.get_ledger(project_id)
-    return success_response({
-        "runs": {
-            "frontend": latest("code_frontend_project_generation"),
-            "backend": latest("code_backend_project_generation"),
-            "middleware": latest("code_middleware_provisioning"),
-            "deploy": latest("code_fullstack_deploy"),
-        },
-        "deployment": deployment.to_dict() if deployment else None,
-        "contract_status": ledger.contract_status if ledger else "pending",
-    })
+    return success_response(
+        {
+            "runs": {
+                "frontend": latest("code_frontend_project_generation"),
+                "backend": latest("code_backend_project_generation"),
+                "middleware": latest("code_middleware_provisioning"),
+                "deploy": latest("code_fullstack_deploy"),
+            },
+            "deployment": deployment.to_dict() if deployment else None,
+            "contract_status": ledger.contract_status if ledger else "pending",
+        }
+    )
 
 
 @fullstack_bp.route("/projects/<project_id>/contract", methods=["GET"])
@@ -305,7 +334,8 @@ def _proxy_identity(project_id: str) -> str | None:
 
 
 @app_proxy_bp.route(
-    "/<project_id>/api/", defaults={"subpath": ""},
+    "/<project_id>/api/",
+    defaults={"subpath": ""},
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 )
 @app_proxy_bp.route(
@@ -343,9 +373,7 @@ def proxy_to_backend(project_id: str, subpath: str):
     container, port = target
 
     upstream = f"http://{container}:{port}/{subpath}"
-    fwd_headers = {
-        k: v for k, v in request.headers.items() if k.lower() not in _HOP_HEADERS
-    }
+    fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_HEADERS}
     try:
         resp = requests.request(
             method=request.method,

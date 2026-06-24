@@ -4,7 +4,7 @@
 优雅地发新版本，把"重启即中断"变成"短暂暂停 → 自动续跑"。
 
 > 这里说的是**平台**的部署。用户生成的应用如何部署见
-> [`code-fullstack-generation.md`](./code-fullstack-generation.md) 的原子部署。
+> [`code-fullstack-generation.md`](./code-fullstack-generation.md) 的应用部署。
 
 ## 为什么不是字面"蓝绿"
 

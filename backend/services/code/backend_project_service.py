@@ -204,9 +204,12 @@ class BackendProjectService:
         self.docker = os.getenv("DOCKER_BIN", "docker")
         self.gen_timeout = int(os.getenv("BE_AGENT_TIMEOUT", "900"))
         self.total_timeout = int(os.getenv("BE_AGENT_TOTAL_TIMEOUT", "2400"))
-        # Deploy-time build self-healing: cap one AI repair round on the staged
-        # source after a failed ``docker build`` / container start.
-        self.repair_timeout = int(os.getenv("BE_AGENT_REPAIR_TIMEOUT", "600"))
+        # Deploy-time build self-healing: each AI repair round runs on the staged
+        # source after a failed ``docker build`` / container start. The be-agent
+        # image now carries real build toolchains (JDK+Maven / Go / Python / Node)
+        # so the round COMPILES its edits in-container before handing back; that
+        # download+build is slower than a blind edit, hence the wider default.
+        self.repair_timeout = int(os.getenv("BE_AGENT_REPAIR_TIMEOUT", "900"))
 
     # --- prompt assembly -----------------------------------------------------
     def _load_prompt(self, name: str) -> str:

@@ -254,15 +254,18 @@ def deploy(
             return _fail(dep, rollback, "后端工程缺少 Dockerfile,无法构建", narrate=phase)
 
         # Build → AI self-heal → rebuild ladder: a failed `docker build` feeds its
-        # log to the be-agent, which edits the staged source in place (mirrors the
-        # frontend self-healing ladder, here at deploy time). Bounded by
-        # APP_BUILD_REPAIRS (default 1). Repair is skipped when no provider is
+        # log to the be-agent, which compiles/builds the staged source for real
+        # (the image now carries JDK+Maven / Go / Python / Node toolchains) and
+        # edits it in place until green (mirrors the frontend self-healing ladder,
+        # here at deploy time). Bounded by APP_BUILD_REPAIRS (default 3) — polyglot
+        # compile-error cascades typically need a few rounds, since fixing one
+        # error surfaces the next. Repair is skipped when no provider is
         # configured; the original failure is then reported and rolled back.
         def _repair_log(message: str) -> None:
             phase("build", message)
 
         build = _docker(["build", "-t", image_tag, str(workdir)], BUILD_TIMEOUT)
-        max_repairs = int(os.getenv("APP_BUILD_REPAIRS", "1"))
+        max_repairs = int(os.getenv("APP_BUILD_REPAIRS", "3"))
         attempt = 0
         while build.returncode != 0 and attempt < max_repairs:
             if cancelled():

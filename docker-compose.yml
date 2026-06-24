@@ -108,6 +108,14 @@ services:
             # is the in-container port the generated backend listens on (PORT env).
             APP_NETWORK: ai-creative-studio-net
             APP_BACKEND_PORT: "8080"
+            # Deploy-time backend build self-heal. A failed `docker build` of the
+            # generated project's own Dockerfile feeds its FULL log to the be-agent,
+            # which now carries real toolchains (JDK+Maven / Go / Python / Node) and
+            # compiles its edits in-container before the host re-builds. Polyglot
+            # compile-error cascades need a few rounds (fixing one surfaces the next).
+            APP_BUILD_REPAIRS: "3"
+            APP_BUILD_TIMEOUT: "1200"
+            BE_AGENT_REPAIR_TIMEOUT: "900"
             # fe-agent now runs TWO CLIs: Claude Code (writes the project) + Codex (real
             # image assets via the bundled image-assets skill). Codex reuses
             # OPENAI_API_KEY (from .env, the image key); the backend injects it per

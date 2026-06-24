@@ -57,7 +57,11 @@
 
 3. **从环境读取配置(硬性)**:监听端口取自环境变量 `PORT`(默认 8080),绑定 `0.0.0.0`;数据库连接取自 `DATABASE_URL`;若用缓存则从 `REDIS_URL`(可配合 `REDIS_PREFIX`)读取。**禁止硬编码端口/连接串/密钥。**
 
-4. **Dockerfile(硬性)**:工程根目录必须有一个 `Dockerfile`,能完成:安装依赖 → (如需)编译 → 设定 `EXPOSE 8080` → 以读取 `PORT` 的方式启动服务。镜像要尽量精简(用官方 slim/alpine 基础镜像)。确保 `docker build .` 后 `docker run -e PORT=8080 -e DATABASE_URL=...` 即可对外服务。
+4. **Dockerfile(硬性)**:工程根目录必须有一个 `Dockerfile`,能完成:安装依赖 → (如需)编译 → 设定 `EXPOSE 8080` → 以读取 `PORT` 的方式启动服务。确保 `docker build .` 后 `docker run -e PORT=8080 -e DATABASE_URL=...` 即可对外服务。务必满足:
+   - **用明确版本的官方基础镜像**,编译型语言用**多阶段构建**(build 阶段编译、runtime 阶段精简):Java 用 `maven:3.9-eclipse-temurin-21` 编译 + `eclipse-temurin:21-jre` 运行;Go 用 `golang:1.22` 编译 + `gcr.io/distroless/base-debian12` 运行;Python 用 `python:3.12-slim`;Node 用 `node:22-slim`。
+   - **安装该工程需要的【全部】依赖**(完整 `mvn package` / `go mod download` / `pip install -r requirements.txt` / `npm ci`),不得只装一部分、不得依赖运行时联网补装;锁定依赖版本。
+   - **构建命令必须保留完整输出,严禁用 `-q` / `--quiet` / `>/dev/null` 等抑制日志**——一旦构建失败,完整的编译错误是平台自动修复的唯一线索,静默会让修复失败。Java 用 `mvn -B -e package`(可 `-DskipTests`),不要 `-q`。
+   - 镜像在满足上述前提下尽量精简(runtime 阶段用 slim/jre/distroless)。
 
 5. **数据层自建**:数据库初始为空。要么在服务启动时自动建表/迁移(推荐),要么随工程提供可被启动命令调用的迁移;表结构对齐契约的数据模型与「数据设计」。
 
@@ -71,7 +75,7 @@
 - [ ] **逐端点覆盖**:契约 `paths` 里每个端点都已实现,method/path/字段与契约**逐字一致**,路由挂在根路径、无 `/api` 前缀。
 - [ ] **/health**:已实现 `GET /health` 且就绪时返回 200。
 - [ ] **环境配置**:端口读 `PORT`(绑 0.0.0.0)、数据库读 `DATABASE_URL`、缓存读 `REDIS_URL`;无任何硬编码端口/连接串/密钥。
-- [ ] **Dockerfile**:根目录有可构建可启动的 `Dockerfile`,`EXPOSE 8080`,启动命令读取 `PORT`。
+- [ ] **Dockerfile**:根目录有可构建可启动的 `Dockerfile`,`EXPOSE 8080`,启动命令读取 `PORT`;编译型语言用多阶段+官方定版基础镜像,安装了全部依赖,构建命令**未用 `-q`/`--quiet`** 抑制日志。
 - [ ] **数据层**:有建表/迁移机制,启动后能对空库正常工作;读写落到真实数据库,无内存 mock。
 - [ ] **技术栈合规**:严格按契约 `tech_stack` 实现,未另选栈、未引入与共识冲突的依赖。
 - [ ] **无残缺**:无 TODO/FIXME/占位/"未实现"/仅 mock;端点均有真实逻辑。

@@ -62,7 +62,7 @@
 ## 服务层
 
 - `services/code/fullstack/contract_service.py` —— 合成共享契约(一次 text-model 调用),乐观锁写 `CodeProjectLedger`;`ensure_contract(project_id)` 幂等。
-- `services/code/backend_project_service.py` —— 镜像 `frontend_project_service`:DooD 容器跑 Claude Code+Codex 写 polyglot 后端工程(含 Dockerfile/健康检查/读 env),自检构建梯子(语法/契约校验,**不实跑**),二进制安全收集。镜像 `be-agent:latest`(`backend/docker/be-agent/`)。
+- `services/code/backend_project_service.py` —— 镜像 `frontend_project_service`:DooD 容器跑 Claude Code+Codex 写 polyglot 后端工程(含 Dockerfile/健康检查/读 env),生成期自检构建梯子(语法/契约校验,**不实跑**),二进制安全收集。`repair_build()` 是**部署期自愈**:`docker build` 失败后把完整日志喂回 be-agent,claude 在容器内用**真实工具链实编译**(见下)迭代到 green。镜像 `be-agent:latest`(`backend/docker/be-agent/`)。
 - `services/code/middleware_service.py` —— 从清单生成 schema SQL / 迁移 / seed;`provision(project_id, manifest)` 在共享 pg/redis 建库/前缀并跑初始化。
 - `services/code/deploy_service.py` —— 原子有序部署 + 回滚;长驻容器生命周期;健康检查;部署登记表读写;反代解析。
 
@@ -90,7 +90,7 @@
 
 ## 部署基础设施
 
-- `backend/docker/be-agent/Dockerfile` —— node 基础 + claude-code + codex(写代码足矣;实跑用工程自带 Dockerfile)。
+- `backend/docker/be-agent/Dockerfile` —— node 基础 + claude-code + codex,**并装齐多语言构建工具链:JDK21+Maven / Go / Python3+pip / Node**。生成期只写代码(实跑用工程自带 Dockerfile);但**部署期自愈轮**(`repair_build`)要在容器内 `mvn package`/`go build`/`pip install`/`npm ci` 真实编译验证,故工具链必须常驻,否则只能盲改一次、跨语言编译错误一旦成串就修不动。部署自愈轮数 `APP_BUILD_REPAIRS`(默认 3)、单轮预算 `BE_AGENT_REPAIR_TIMEOUT`(默认 900s)、单次 `docker build` 预算 `APP_BUILD_TIMEOUT`(默认 1200s),均在 compose / `.env.example` 可调。生成的 Dockerfile 由 `backend_project_prompt.txt` 约束为多阶段+官方定版基础镜像、装全依赖、**禁用 `-q`/quiet**(静默会让自愈拿不到编译错误)。
 - `docker-compose.yml` —— 加 `be-agent`(profile setup 构建);backend 加 env `APP_NETWORK`、`APP_BACKEND_PORT`;backend 已有 docker.sock + `.fe-agent-work` 挂载,后端容器构建复用同一 DooD 工作目录(prefix `be-agent-`)。
 - `nginx default.conf` —— 加 `location /app/ { proxy_pass backend; }`(SSE/长连接友好)。
 

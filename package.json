@@ -4,9 +4,9 @@
   "description": "AI-powered creative platform",
   "private": true,
   "scripts": {
-    "setup": "uv sync && cd frontend && npm install",
+    "setup": "uv sync && npm install && cd frontend && npm install",
     "dev": "npm-run-all --parallel dev:backend dev:frontend",
-    "dev:backend": "cd backend && source venv/bin/activate && uv run --active python -m backend.app",
+    "dev:backend": "cd backend && uv run python -m backend.app",
     "dev:frontend": "cd frontend && npm run dev",
     "build": "cd frontend && npm run build",
     "test": "npm-run-all test:backend test:frontend",

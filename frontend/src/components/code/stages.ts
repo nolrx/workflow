@@ -80,7 +80,23 @@ export function deriveStageNav(run: AgentRun | null): StageNav {
   const allDone = status === "completed" || status === "partial"
   const paused = status === "paused"
 
-  const current = progress?.review_stage || progress?.current_step || (run ? "requirements" : null)
+  // While the run is actively generating, `progress.current_step` lags: the
+  // workflow only advances it *after* a stage finishes, and the resume route
+  // clears `review_stage` on approve — so between "approve" and the next review
+  // gate the snapshot still points at the just-approved stage. Trust the step
+  // that is actually running instead, so the live position moves to where work
+  // is really happening the moment the next stage starts. This is what makes the
+  // workspace follow the user into the next stage on confirm, rather than
+  // stranding them on the approved stage until it pauses again.
+  const runningStepKey =
+    status === "running" || status === "queued"
+      ? run?.steps?.find((step) => step.status === "running")?.agent_key ?? null
+      : null
+  const current =
+    progress?.review_stage ||
+    runningStepKey ||
+    progress?.current_step ||
+    (run ? "requirements" : null)
   const currentIdx = current ? STAGE_INDEX[current] ?? 0 : -1
 
   const failedStep =

@@ -53,7 +53,16 @@ PROMPT_DIR = Path(__file__).parent.parent.parent / "prompts" / "code"
 _MAX_TEXT_BYTES = 512_000
 _MAX_ASSET_BYTES = 4_000_000
 _MAX_TOTAL_ASSET_BYTES = 24_000_000
+# Bundler OUTPUT (the built dist's entry chunk / styles / sourcemaps / wasm) is
+# routinely larger than a hand-written source file — a single React+Three.js app
+# easily emits a ~700KB index-*.js. These are NOT runaway source files: index.html
+# references them by hash, so dropping one 404s the preview's own entry script and
+# the page goes blank. Give them a generous per-file cap (well above the text cap)
+# so a built bundle is never silently skipped. They don't count against the raster
+# image budget (they aren't images).
+_MAX_BUNDLE_BYTES = 16_000_000
 _BINARY_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".ico", ".bmp"}
+_BUNDLE_EXTS = {".js", ".mjs", ".cjs", ".css", ".map", ".wasm"}
 
 # Runs INSIDE the container. The agent's stream-json goes to stdout (streamed live
 # to the host); in-container ``timeout`` guards every phase against a hang. Only
@@ -999,9 +1008,11 @@ class FrontendProjectService:
         Binary-aware: source/text and generated raster assets are both read as
         raw bytes, so the zip / on-disk dist / GitHub commit keep real image data
         intact (a text-only collector would have corrupted PNGs into empty
-        strings). Text files keep a tight per-file cap; raster assets get a larger
-        per-file cap plus a total budget so a runaway image set can't bloat the
-        artifact."""
+        strings). Source text files keep a tight per-file cap; raster assets get a
+        larger per-file cap plus a total budget so a runaway image set can't bloat
+        the artifact; built bundles (.js/.css/.map/.wasm) get a generous cap so the
+        bundler's own large entry chunk is never dropped (which would 404 the
+        served preview's entry script and blank the page)."""
         out: dict[str, bytes] = {}
         if not root.exists():
             return out
@@ -1012,8 +1023,14 @@ class FrontendProjectService:
             rel = path.relative_to(root)
             if exclude_top and rel.parts and rel.parts[0] == exclude_top:
                 continue
-            is_asset = path.suffix.lower() in _BINARY_EXTS
-            cap = _MAX_ASSET_BYTES if is_asset else _MAX_TEXT_BYTES
+            suffix = path.suffix.lower()
+            is_asset = suffix in _BINARY_EXTS
+            if is_asset:
+                cap = _MAX_ASSET_BYTES
+            elif suffix in _BUNDLE_EXTS:
+                cap = _MAX_BUNDLE_BYTES
+            else:
+                cap = _MAX_TEXT_BYTES
             try:
                 size = path.stat().st_size
                 if size > cap:

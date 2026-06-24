@@ -463,3 +463,39 @@ def test_deploy_phase_progress_is_monotonic_six_steps():
     pp = wf._PHASE_PROGRESS
     assert pp["provision"] < pp["migrate"] < pp["build"] < pp["start"] < pp["health"] < pp["smoke"]
     assert pp["smoke"] == wf.TOTAL_STEPS == pp["done"]
+
+
+# --- trio idempotency (double-submit guard) ----------------------------------
+def test_start_fullstack_idempotent_under_double_submit(app, monkeypatch):
+    """A 2nd POST while a trio is already in flight reuses it, never duplicates.
+
+    Regression: a fast double-click created two full trios (6 runs + their
+    containers) because both requests passed the active-check before either
+    committed. The check+create now runs under a lock with the active set re-read
+    inside it, so the 2nd call sees the 1st's runs and reuses them.
+    """
+    from flask_jwt_extended import create_access_token
+
+    from backend.models.agent import AgentRun
+    from backend.services.agent import runtime as rt
+
+    project = _make_project(user_id="u1")
+    # Record dispatches without actually running workflows / spawning containers.
+    monkeypatch.setattr(rt.agent_runtime, "start", lambda app, run_id: None)
+
+    client = app.test_client()
+    headers = {"Authorization": f"Bearer {create_access_token(identity='u1')}"}
+    url = f"/api/code/projects/{project.id}/fullstack/runs"
+
+    r1 = client.post(url, headers=headers)
+    assert r1.status_code == 201, r1.get_data(as_text=True)
+    runs1 = r1.get_json()["data"]["runs"]
+    assert set(runs1) == {"frontend", "backend", "middleware"}
+
+    r2 = client.post(url, headers=headers)
+    assert r2.status_code == 201, r2.get_data(as_text=True)
+    runs2 = r2.get_json()["data"]["runs"]
+
+    assert runs1 == runs2, "second submit must reuse the same trio"
+    total = AgentRun.query.filter_by(resource_id=project.id).count()
+    assert total == 3, f"expected 3 runs total, got {total} (duplicate trio created)"

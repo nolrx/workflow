@@ -14,8 +14,17 @@ from backend.extensions import db, jwt
 logger = logging.getLogger(__name__)
 
 
-def create_app(config_name: str = None) -> Flask:
-    """Application factory for creating Flask app instances."""
+def create_app(config_name: str = None, *, reconcile_on_boot: bool = False) -> Flask:
+    """Application factory for creating Flask app instances.
+
+    ``reconcile_on_boot`` MUST stay False for every incidental ``create_app()``
+    (tests, scripts, an ops one-liner that just needs an app context). It is True
+    only on the real server entrypoints (``serve()`` for gunicorn, ``__main__``
+    for dev). Reconciliation re-dispatches EVERY in-flight run platform-wide and
+    spawns their sandbox containers — making that a side effect of merely building
+    an app turns any `create_app('production')` against the prod DB into an
+    accidental mass-resume storm. Keep it opt-in.
+    """
     app = Flask(__name__)
 
     # Load configuration
@@ -161,13 +170,17 @@ def create_app(config_name: str = None) -> Flask:
     # Reconcile runs orphaned by a previous process (e.g. a restart / crash): the
     # background executor is in-process, so a replaced process leaves in-flight
     # runs stuck 'running' forever (and, counting as ACTIVE, they block the user
-    # from re-running). Mark them failed (+ refund) on boot. Fails soft.
-    try:
-        from backend.services.agent.runtime import reconcile_orphaned_runs
+    # from re-running). Resume (or fail+refund past the budget) on boot. Fails
+    # soft. ONLY on the real server boot — never as a side effect of an incidental
+    # create_app() (see the factory docstring): this re-dispatches every run and
+    # spawns containers, so an ad-hoc create_app('production') would storm prod.
+    if reconcile_on_boot:
+        try:
+            from backend.services.agent.runtime import reconcile_orphaned_runs
 
-        reconcile_orphaned_runs(app)
-    except Exception as error:  # noqa: BLE001 — never block startup on reconciliation
-        logger.warning("Orphaned-run reconciliation skipped: %s", error)
+            reconcile_orphaned_runs(app)
+        except Exception as error:  # noqa: BLE001 — never block startup on reconciliation
+            logger.warning("Orphaned-run reconciliation skipped: %s", error)
 
     # Seed editable system prompts into MongoDB (idempotent; only inserts
     # missing keys). Fails soft — if Mongo is unreachable the app still runs off
@@ -182,6 +195,16 @@ def create_app(config_name: str = None) -> Flask:
     return app
 
 
+def serve() -> Flask:
+    """Real server entrypoint (gunicorn factory target).
+
+    The ONLY app build that reconciles orphaned runs on boot. Gunicorn loads
+    ``backend.app:serve()``; every other code path uses ``create_app()`` and is
+    side-effect-free.
+    """
+    return create_app(reconcile_on_boot=True)
+
+
 if __name__ == "__main__":
-    app = create_app()
+    app = serve()
     app.run(host="0.0.0.0", port=5001, debug=True)

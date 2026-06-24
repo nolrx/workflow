@@ -47,4 +47,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
 # graceful drain-on-SIGTERM hook live in backend/gunicorn.conf.py — a single
 # worker is intentional (the Agent Swarm runtime / SSE bus / recorder are
 # process-level singletons, so cross-request SSE replay only works in one process).
-CMD ["gunicorn", "backend.app:create_app()", "-c", "backend/gunicorn.conf.py"]
+# `serve()` (not `create_app()`) is the factory: it is the one entrypoint that
+# reconciles orphaned runs on boot. Plain create_app() stays side-effect-free so
+# no script/test/ops one-liner can trigger a platform-wide resume storm.
+CMD ["gunicorn", "backend.app:serve()", "-c", "backend/gunicorn.conf.py"]

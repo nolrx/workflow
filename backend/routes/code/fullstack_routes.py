@@ -18,6 +18,7 @@ generated backend for real — auth rides a path-scoped cookie set by the previe
 entry, mirroring the existing static preview.
 """
 import logging
+import threading
 
 import requests
 from flask import Blueprint, Response, current_app, request, stream_with_context
@@ -50,6 +51,14 @@ _PIPELINE = {
     "middleware": ("code_middleware_provisioning", pricing.CODE_MIDDLEWARE_PROVISIONING),
 }
 _PIPELINE_WORKFLOWS = {wf for wf, _ in _PIPELINE.values()}
+
+# Serialize the "is a trio already in flight? -> if not, create one" critical
+# section. Without it a double-submit (two concurrent requests from a fast
+# double-click) both read no active runs before either commits, and each creates
+# a full trio — duplicating three runs + their containers. The lock is held only
+# around the cheap check+create (NOT the slow contract synthesis), so distinct
+# projects barely contend; the single gunicorn worker means one lock suffices.
+_trio_creation_lock = threading.Lock()
 
 # Hop-by-hop headers never forwarded by the reverse proxy.
 _HOP_HEADERS = {
@@ -136,8 +145,6 @@ def start_fullstack(project_id: str):
         )
 
     team_id = project.team_id
-    # Idempotency: if a trio is already in flight, return it instead of duplicating.
-    active = _active_pipeline_runs(project_id, user_id)
 
     # 1) Freeze the shared OpenAPI contract BEFORE any run starts.
     try:
@@ -148,17 +155,22 @@ def start_fullstack(project_id: str):
     if ledger.contract_status != ContractStatus.READY:
         return error_response("SERVER_ERROR", "共享 API 契约未就绪", 500)
 
-    # 2) Start the three concurrent runs (reuse any already in flight).
+    # 2) Start the three concurrent runs (reuse any already in flight). Read the
+    #    active set and create under the lock so two concurrent submits can't each
+    #    pass an empty check and duplicate the trio — the re-read here is the half
+    #    that has to be inside the critical section.
     runs: dict[str, str] = {}
-    for key, (workflow, _cost) in _PIPELINE.items():
-        existing = active.get(workflow)
-        if existing:
-            runs[key] = existing.id
-            continue
-        run = _start_run(user_id, team_id, workflow, project_id, {"pipeline": key})
-        if run is None:
-            return error_response("INSUFFICIENT_CREDITS", "积分不足，无法启动全栈生成", 402)
-        runs[key] = run.id
+    with _trio_creation_lock:
+        active = _active_pipeline_runs(project_id, user_id)
+        for key, (workflow, _cost) in _PIPELINE.items():
+            existing = active.get(workflow)
+            if existing:
+                runs[key] = existing.id
+                continue
+            run = _start_run(user_id, team_id, workflow, project_id, {"pipeline": key})
+            if run is None:
+                return error_response("INSUFFICIENT_CREDITS", "积分不足，无法启动全栈生成", 402)
+            runs[key] = run.id
 
     return success_response(
         {

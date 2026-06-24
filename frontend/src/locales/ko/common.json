@@ -90,5 +90,19 @@
     "notifications": "알림",
     "profile": "프로필",
     "openMenu": "메뉴 열기"
+  },
+  "preview": {
+    "title": "이미지 미리보기",
+    "dialogTitle": "이미지 미리보기 ({{current}} / {{total}})",
+    "counter": "{{current}} / {{total}}",
+    "imageAlt": "미리보기 이미지",
+    "close": "닫기",
+    "previous": "이전",
+    "next": "다음",
+    "download": "다운로드",
+    "openInNewTab": "새 탭에서 열기",
+    "zoomIn": "확대",
+    "zoomOut": "축소",
+    "hint": "이미지 클릭하여 확대 · 드래그로 이동 · 휠로 확대/축소 · 빈 공간 클릭 또는 Esc로 닫기"
   }
 }

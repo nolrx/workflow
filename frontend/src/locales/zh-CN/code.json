@@ -155,6 +155,7 @@
     "versionLabel": "版本 {{n}}",
     "selectHint": "选择左侧版本查看内容",
     "noContent": "该版本无内容",
+    "zoom": "点击放大",
     "source": {
       "generated": "AI 生成",
       "manual_edit": "手动编辑",

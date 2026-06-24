@@ -90,5 +90,19 @@
     "notifications": "通知",
     "profile": "个人资料",
     "openMenu": "打开菜单"
+  },
+  "preview": {
+    "title": "图片预览",
+    "dialogTitle": "图片预览（{{current}} / {{total}}）",
+    "counter": "{{current}} / {{total}}",
+    "imageAlt": "预览图片",
+    "close": "关闭",
+    "previous": "上一张",
+    "next": "下一张",
+    "download": "下载",
+    "openInNewTab": "在新标签页打开",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "hint": "点击图片放大 · 拖动平移 · 滚轮缩放 · 点击空白处或按 Esc 关闭"
   }
 }

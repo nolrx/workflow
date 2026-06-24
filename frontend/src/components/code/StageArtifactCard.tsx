@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react"
+import { lazy, Suspense, useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
   AppWindow,
@@ -8,6 +8,7 @@ import {
   FileText,
   Loader2,
   Palette,
+  Settings2,
   Wand2,
   Workflow,
   type LucideIcon,
@@ -16,14 +17,14 @@ import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+import { codeApi } from "@/api/code"
 import { cn } from "@/lib/utils"
 import { MarkdownPreview } from "@/components/code/MarkdownPreview"
 import { SelectionReviseTextarea } from "@/components/code/SelectionReviseTextarea"
 import { StageHistoryDialog } from "@/components/code/StageHistoryDialog"
+import { StyleSelectModal } from "@/components/code/StyleSelectModal"
 import { useCodeStore, type ReviseSectionArgs } from "@/stores/codeStore"
 
 // The app preview pulls in an iframe + history lookups, so only load it when a
@@ -78,12 +79,33 @@ export function StageArtifactCard({ stage, open, onToggle, state = "idle" }: Sta
   const setCurrentProject = useCodeStore((s) => s.setCurrentProject)
   const updateDocument = useCodeStore((s) => s.updateDocument)
   const updateDocumentDraft = useCodeStore((s) => s.updateDocumentDraft)
-  const toggleStyle = useCodeStore((s) => s.toggleStyle)
   const generateStylePrompt = useCodeStore((s) => s.generateStylePrompt)
   const generatePreviews = useCodeStore((s) => s.generatePreviews)
   const reviseSection = useCodeStore((s) => s.reviseSection)
 
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null)
+  const [styleModalOpen, setStyleModalOpen] = useState(false)
+  const [styleVersionCount, setStyleVersionCount] = useState(0)
+
+  // Check whether this project has any style-stage history so we can decide
+  // whether to show the history button next to the style selector.
+  useEffect(() => {
+    const projectId = project?.id
+    if (!projectId || stage !== "style") return
+    let cancelled = false
+    void (async () => {
+      try {
+        const versions = await codeApi.listStageVersions(projectId, "style")
+        if (!cancelled) setStyleVersionCount(versions.length)
+      } catch {
+        // Non-critical: if the history check fails we simply hide the button.
+        if (!cancelled) setStyleVersionCount(0)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [project?.id, stage])
 
   // View mode for Markdown document stages: default to rendered preview so the
   // user can read formatted headings/lists, switch to edit to make changes.
@@ -299,36 +321,57 @@ export function StageArtifactCard({ stage, open, onToggle, state = "idle" }: Sta
   const renderStyle = () => {
     if (!project) return emptyState
     const mode = viewMode.style
+    const selectedStyles = styles.filter((style) => selectedStyleIds.includes(style.id))
+
     return (
       <div className="space-y-4 sm:space-y-6">
-        {/* History */}
-        <div className="flex flex-wrap justify-end gap-2">
-          <StageHistoryDialog
-            projectId={project.id}
-            stage="style"
-            onRestored={setCurrentProject}
-            triggerLabel={t("versions.styleHistory")}
-          />
-        </div>
+        <StyleSelectModal open={styleModalOpen} onOpenChange={setStyleModalOpen} />
 
-        {/* Style selection */}
-        <div className="grid gap-3 sm:grid-cols-2">
-          {styles.map((style) => (
-            <Label key={style.id} className="flex cursor-pointer gap-3 rounded-md border bg-card p-3">
-              <Checkbox
-                checked={selectedStyleIds.includes(style.id)}
-                onCheckedChange={() => toggleStyle(style.id)}
-              />
-              <span className="min-w-0">
-                <span className="block font-medium">{style.name}</span>
-                <span className="block text-sm text-muted-foreground">{style.description}</span>
-              </span>
-            </Label>
-          ))}
+        {/* Style selection summary */}
+        <div className="rounded-md border bg-card p-3 sm:p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <Palette className="h-4 w-4 text-primary" />
+              <span>{t("style.selectedCount", { count: selectedStyles.length })}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setStyleModalOpen(true)}
+                className="shrink-0 gap-1.5"
+              >
+                <Settings2 className="h-3.5 w-3.5" />
+                {t("style.selectStyles")}
+              </Button>
+              {styleVersionCount > 0 && (
+                <StageHistoryDialog
+                  projectId={project.id}
+                  stage="style"
+                  onRestored={setCurrentProject}
+                  triggerLabel={t("versions.styleHistory")}
+                />
+              )}
+            </div>
+          </div>
+          {selectedStyles.length === 0 ? (
+            <p className="text-sm text-muted-foreground">{t("style.placeholder")}</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {selectedStyles.map((style) => (
+                <span
+                  key={style.id}
+                  className="inline-flex items-center rounded-full border bg-muted px-2.5 py-1 text-xs font-medium"
+                >
+                  {style.name}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Actions */}
-        <div className="flex flex-wrap gap-3 border-t border-dashed pt-4">
+        <div className="flex flex-wrap gap-3">
           <Button
             variant="outline"
             onClick={() => void generateStylePrompt()}

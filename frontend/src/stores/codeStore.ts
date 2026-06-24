@@ -63,6 +63,7 @@ interface CodeState {
   updateDocumentDraft: (documentId: string, data: Partial<CodeDocument>) => void
   reviseSection: (args: ReviseSectionArgs) => Promise<ReviseSectionResult>
   toggleStyle: (styleId: string) => void
+  setSelectedStyleIds: (ids: string[]) => void
   generateStylePrompt: () => Promise<void>
   generatePreviews: () => Promise<boolean>
   confirmPreview: (previewUrl: string) => Promise<void>
@@ -312,6 +313,8 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
         : [...selectedStyleIds, styleId],
     })
   },
+
+  setSelectedStyleIds: (ids) => set({ selectedStyleIds: ids }),
 
   generateStylePrompt: async () => {
     const project = get().project

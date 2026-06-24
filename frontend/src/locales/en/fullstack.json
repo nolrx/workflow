@@ -13,6 +13,8 @@
   "deployDespiteFailure": "Some pipelines didn't finish cleanly, but the backend is ready, so you can still deploy — the database setup or live frontend preview may be incomplete.",
   "deploy": "Deploy & preview",
   "deployHint": "The backend project is ready. Run the atomic deploy (create database → build backend image → start container → health check → wire the reverse proxy).",
+  "redeploy": "Re-deploy",
+  "redeployHint": "Re-run the deploy + auto-repair cycle on the existing projects — no need to regenerate the frontend/backend.",
   "apiBase": "The frontend calls the backend live via {{base}}.",
   "lane": {
     "frontend": "Frontend project",
@@ -37,5 +39,8 @@
     "deployFailed": "Failed to start deploy",
     "downloadFailed": "Download failed"
   },
-  "downloadSource": "Download source"
+  "downloadSource": "Download source",
+  "downloadRepaired": "Download fixed",
+  "downloadRepairedCount": "Fixed source ({{count}})",
+  "repairedTooltip": "Deploy auto-fixed {{count}} backend file(s) to match the contract — download the repaired source (this is what the running app was built from)."
 }

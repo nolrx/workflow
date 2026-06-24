@@ -13,6 +13,8 @@
   "deployDespiteFailure": "部分流水线未顺利完成,但后端已就绪,仍可部署——数据层初始化或前端实时预览可能不完整。",
   "deploy": "部署并预览",
   "deployHint": "后端工程已就绪,可执行原子化部署(建库 → 构建后端镜像 → 启动容器 → 健康检查 → 接入反代)。",
+  "redeploy": "重新部署",
+  "redeployHint": "在现有工程上再跑一次部署 + 自动修复,无需重建前后端工程。",
   "apiBase": "前端经 {{base}} 实时调用后端。",
   "lane": {
     "frontend": "前端工程",
@@ -37,5 +39,8 @@
     "deployFailed": "部署启动失败",
     "downloadFailed": "下载失败"
   },
-  "downloadSource": "下载源码"
+  "downloadSource": "下载源码",
+  "downloadRepaired": "下载修复版",
+  "downloadRepairedCount": "修复版源码({{count}})",
+  "repairedTooltip": "部署时自动修复了 {{count}} 个后端文件以贴合契约——下载修复版源码(线上运行的正是这一版)。"
 }

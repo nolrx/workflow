@@ -663,19 +663,25 @@ def deploy(
         fix_summary: Optional[dict] = None
         if (build_rounds or itest_repaired_rounds) and workdir and workdir.exists():
             collected = _collect_repaired_source(workdir, set(source.keys()))
-            changed = sorted(rel for rel in collected if collected.get(rel) != source.get(rel))
-            if changed:
+            # Promote only if the source actually changed (edits / additions /
+            # deletions) — a repair round that produced byte-identical output is not
+            # promoted. `collected` empty (workdir vanished) is never promoted.
+            if collected and collected != source:
+                changed = sorted(rel for rel in collected if collected.get(rel) != source.get(rel))
+                removed = sorted(set(source) - set(collected))
                 repaired_source = collected
                 fix_summary = {
                     "build_repaired_rounds": build_rounds,
                     "itest_repaired_rounds": itest_repaired_rounds,
                     "changed_files": changed,
+                    "removed_files": removed,
                     "notes": [n for n in fix_notes if n],
                 }
                 dep.set_detail({**dep.get_detail(), "promoted_fix": {
                     "build_repaired_rounds": build_rounds,
                     "itest_repaired_rounds": itest_repaired_rounds,
                     "changed_files": changed,
+                    "removed_files": removed,
                 }})
                 db.session.commit()
 

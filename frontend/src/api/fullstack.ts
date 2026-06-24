@@ -58,6 +58,16 @@ export interface Deployment {
   health: string | null
   error_message: string | null
   deployed_at: string | null
+  // Free-form deploy detail; carries the promoted auto-repair summary when the
+  // deploy auto-fixed the backend (so the panel can surface a "fixed source" download).
+  detail?: {
+    promoted_fix?: {
+      build_repaired_rounds?: number
+      itest_repaired_rounds?: number
+      changed_files?: string[]
+    }
+    [key: string]: unknown
+  } | null
 }
 
 export interface StartFullstackResult {

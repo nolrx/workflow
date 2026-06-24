@@ -18,8 +18,10 @@ import {
   Download,
   ExternalLink,
   Loader2,
+  RefreshCw,
   Rocket,
   Server,
+  Wrench,
   XCircle,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -125,6 +127,30 @@ function LaneCard({ lane }: { lane: Lane }) {
     }
   }
 
+  // Deploy lane: when the deploy auto-repaired the backend, its run publishes a
+  // repaired source zip (a distinct domain_ref_type — never reuses the original).
+  // Offer it as a "fixed source" download; the running app was built from it.
+  const deployment = useFullstackStore((s) => s.deployment)
+  const repairedArtifactId =
+    lane === "deploy"
+      ? (run?.artifacts?.find((a) => a.domain_ref_type === "code_backend_project_repaired_zip")?.id ?? null)
+      : null
+  const fixCount =
+    lane === "deploy" ? (deployment?.detail?.promoted_fix?.changed_files?.length ?? 0) : 0
+  const [downloadingFix, setDownloadingFix] = useState(false)
+  const handleDownloadRepaired = async () => {
+    if (!repairedArtifactId) return
+    setDownloadingFix(true)
+    try {
+      const blob = await agentApi.downloadArtifact(repairedArtifactId)
+      downloadBlob(blob, "backend_project_repaired.zip")
+    } catch {
+      toast.error(t("toast.downloadFailed"))
+    } finally {
+      setDownloadingFix(false)
+    }
+  }
+
   return (
     <div className="rounded-lg border bg-card">
       <button
@@ -170,6 +196,23 @@ function LaneCard({ lane }: { lane: Lane }) {
                 <Download className="h-3 w-3" />
               )}
               {t("downloadSource")}
+            </Button>
+          )}
+          {repairedArtifactId && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 shrink-0 gap-1 px-2 text-[11px]"
+              onClick={handleDownloadRepaired}
+              disabled={downloadingFix}
+              title={t("repairedTooltip", { count: fixCount })}
+            >
+              {downloadingFix ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Wrench className="h-3 w-3" />
+              )}
+              {fixCount > 0 ? t("downloadRepairedCount", { count: fixCount }) : t("downloadRepaired")}
             </Button>
           )}
         </div>
@@ -272,6 +315,14 @@ export function CodeFullstackPanel() {
     lanes.backend.run?.status === "failed" || lanes.backend.run?.status === "cancelled"
   const deployState = lanes.deploy
   const deployRunning = deployment?.status === "running"
+  // The deploy run has settled (terminal, not streaming) → offer a one-click
+  // re-deploy so the user can iterate the build → health → smoke → integration-test
+  // → auto-repair cycle WITHOUT regenerating the frontend/backend projects (deploy
+  // reuses them, and prefers the promoted repaired source from the prior attempt).
+  const deploySettled =
+    !!deployState.runId &&
+    !deployState.isStreaming &&
+    ["completed", "partial", "failed", "cancelled"].includes(deployState.run?.status ?? "")
   // Backend requires BOTH the requirements doc and the development flow (mirrors
   // the server-side `start_fullstack` precondition) before the pipeline can start.
   const prereqsReady = !!project?.requirements_doc && !!project?.development_flow
@@ -353,7 +404,22 @@ export function CodeFullstackPanel() {
       {hasRuns && (
         <div className="rounded-lg border bg-muted/30 p-3">
           {deployState.runId ? (
-            <LaneCard lane="deploy" />
+            <div className="flex flex-col gap-2">
+              <LaneCard lane="deploy" />
+              {deploySettled && (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[11px] text-muted-foreground">{t("redeployHint")}</p>
+                  <Button size="sm" variant="outline" onClick={handleDeploy} disabled={deploying}>
+                    {deploying ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="mr-2 h-4 w-4" />
+                    )}
+                    {t("redeploy")}
+                  </Button>
+                </div>
+              )}
+            </div>
           ) : ready ? (
             <div className="flex flex-col gap-2">
               {genHadFailure && (

@@ -105,9 +105,16 @@ apiClient.interceptors.response.use(
       }
 
       try {
-        const response = await axios.post(`${API_BASE_URL}/auth/refresh`, {
-          refresh_token: refreshToken,
-        })
+        // Send the refresh token BOTH as an Authorization header (what
+        // flask-jwt-extended's @jwt_required(refresh=True) reads by default) and
+        // in the body — so this works whether the backend looks in headers, the
+        // JSON body, or both. Using bare `axios` skips the request interceptor,
+        // so the header must be set explicitly here.
+        const response = await axios.post(
+          `${API_BASE_URL}/auth/refresh`,
+          { refresh_token: refreshToken },
+          { headers: { Authorization: `Bearer ${refreshToken}` } }
+        )
 
         const { access_token, refresh_token: newRefresh } = response.data
         tokenManager.setTokens(access_token, newRefresh || refreshToken)

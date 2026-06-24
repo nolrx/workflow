@@ -22,6 +22,17 @@ class BaseConfig:
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(minutes=30)
     JWT_REFRESH_TOKEN_EXPIRES = timedelta(days=30)
+    # Accept the JWT from the Authorization header (the default, used by every
+    # normal request via the axios interceptor) OR from a JSON body key. The web
+    # client posts the refresh token in the request body ({"refresh_token": ...})
+    # with no Authorization header, so /auth/refresh's @jwt_required(refresh=True)
+    # MUST also look in the body — otherwise every refresh 401s and users get
+    # bounced to /login the moment their 30-min access token lapses (and the SSE
+    # auto-reconnect turns that into a 401 storm). Headers are tried first, so
+    # ordinary header-bearing requests never parse the body (uploads stay safe);
+    # the default JSON keys ("access_token" / "refresh_token") already match what
+    # the client sends.
+    JWT_TOKEN_LOCATION = ["headers", "json"]
 
     # SQLAlchemy Configuration
     SQLALCHEMY_TRACK_MODIFICATIONS = False

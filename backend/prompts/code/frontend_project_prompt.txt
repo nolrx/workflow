@@ -59,11 +59,18 @@
 # OUTPUT CONTRACT (authoritative)(产出契约 — 唯一权威输出结构)
 **本契约优先于上方任何通用结构化建议,冲突以此为准。** 本阶段产出形态是 **agent-files**:你要在容器内**真实创建文件、运行命令、并自检构建**,而不是输出 JSON 或描述。最终只回一句话总结(见末尾)。必须满足以下全部硬性技术契约(产物会被自动构建校验,违反将被判失败):
 
-1. **技术栈**:React 19 + TypeScript + Vite + 纯 CSS(每个组件配套同名 .css)。**禁止 Tailwind、禁止任何 UI 组件库、禁止任何 CDN / 远程资源 / 远程字体 / 运行时网络请求。** 注意:由 image-assets 技能在构建期生成、保存在 `src/assets/` 下的本地图片**不算**远程资源(它们会被 Vite 打包成本地文件,运行时不发任何网络请求),可放心使用。
+1. **技术栈**:React 19 + TypeScript + Vite + 纯 CSS(每个组件配套同名 .css)。**禁止 Tailwind、禁止任何 UI 组件库、禁止任何 CDN / 远程字体 / 第三方外部资源请求(外部 JS/CSS、图床、外部 API、远程字体等)。** ⚠ 这里禁止的是"**第三方外部**"网络请求;**全栈模式下对自己的同源后端 API(经平台反代的 `/api/...`)的请求是必须的、不在禁止之列**——禁令的目的是杜绝外部依赖,不是阻断你调用自己的后端。注意:由 image-assets 技能在构建期生成、保存在 `src/assets/` 下的本地图片**不算**远程资源(它们会被 Vite 打包成本地文件,运行时不发任何外部网络请求),可放心使用。
 
 2. **工程结构**:组件拆到 `src/components/`;状态用 React hooks;类型集中在 `src/types.ts`;图片资源统一放 `src/assets/`。组织上对齐开发流程的模块(M)划分。**数据持久化分两种模式**:
    - **全栈模式(上方「共享 API 契约」非空)**:前端所有数据读写都**调用真实后端**,不要用 localStorage 充当数据源。封装一个 API 客户端,基址按如下顺序解析:`window.__API_BASE__`(部署时由平台注入)→ `import.meta.env.VITE_API_BASE_URL` → 默认 `'/api'`;然后**严格按共享 API 契约**逐端点调用(method/path/字段与契约一致,路径相对基址,如 `${base}/orders`)。要处理 loading / error / 空态。仅 UI 偏好等非业务数据可用 localStorage。
+   - **接口规范:统一拆信封(全栈模式必做 — 与后端出参逐字一致)**:后端所有响应都是统一信封——成功 `{ success:true, data, message }`,失败 `{ success:false, error, message }`。**API 客户端在一处统一处理**:HTTP 非 2xx **或** `success===false` 一律当失败抛出(带上 `error` 码与 `message` 给 UI 展示),成功则**只取 `resp.data` 作为业务数据**交给上层(组件不要各自去摸 `success`/外壳)。列表分页固定从 `data.items` / `data.total` / `data.page` / `data.page_size` 读取;**不要假设后端返回裸数组**。字段名严格按契约 schema(snake_case、id 为字符串、时间 ISO-8601),不要在前端臆改字段名。
    - **独立模式(契约为空)**:沿用 localStorage 持久化,并在首次加载时播种合理的示例数据。
+   - **登录鉴权(全栈模式且契约含 `/auth/login` 时必做 — 与后端登录口径逐字一致,固定不可发挥)**:实现真实登录页与登录态,**token 字段名 / 请求头 / `/auth/*` 路径必须与契约逐字一致**,任何不一致都会导致登录失败或 `401` 风暴。
+     1. **登录**:向 `${base}/auth/login` POST `{ email, password }`(passwordless 则按契约先 `${base}/auth/request-code` 取码,再 `${base}/auth/login` 提交 `{ phone/email, code }`);**成功后从 `resp.data.token` 读取 token(随统一信封落在 `data.token`,固定就叫 `token`,是 JWT 字符串)**,连同 `resp.data.user` 存入 localStorage——**token 固定存到键 `auth_token`**。
+     2. **带 token**:API 客户端在**每个请求**上,当本地存在 token 时附加请求头 `Authorization: Bearer <token>`(**固定用此头,不要用 cookie / query / 自定义头**)。
+     3. **前端如何验证通过(登录态判据)**:以「本地是否存在有效 token」为登录态——未登录时用路由守卫把受保护页面挡在登录页之外;应用启动时可调 `GET ${base}/auth/me` 校验本地 token 是否仍有效,无效则清除并回登录页。
+     4. **401 兜底**:任意请求返回 `401` 时,统一清除本地 `auth_token` 并跳转登录页(token 过期/失效的兜底);并提供登出(清 token 回登录页)。
+     5. 登录页可预填 demo 凭据(`demo@example.com` / `Demo1234!`,passwordless 则提示固定开发验证码 `000000`)方便体验。
 
 3. **vite.config.ts 必须设置 `base: './'`(相对路径)**,以便构建产物能在子路径下的 iframe 内预览。
 
@@ -92,8 +99,10 @@
 
 # PRE-DELIVERY SELF-CHECK(交付前自检 — 全部满足才能交付)
 - [ ] **构建通过**:`npm install` 与 `npm run build` 都已亲自运行且成功,无报错;未启动任何长驻进程。
-- [ ] **技术栈合规**:React 19 + TS + Vite + 纯 CSS(每组件配套 .css),`vite.config.ts` 设了 `base: './'`;无 Tailwind/UI 库/CDN/远程资源/远程字体/运行时网络请求。
+- [ ] **技术栈合规**:React 19 + TS + Vite + 纯 CSS(每组件配套 .css),`vite.config.ts` 设了 `base: './'`;无 Tailwind/UI 库/CDN/远程字体/第三方外部资源请求(同源后端 API 请求允许且全栈模式必需,不算违规)。
 - [ ] **结构合规**:组件在 `src/components/`、类型在 `src/types.ts`、状态用 hooks、图片在 `src/assets/`。数据持久化按模式:全栈模式经 `window.__API_BASE__` 解析基址、严格按契约调用真实后端(含 loading/error/空态),独立模式用 localStorage 并首次播种示例。
+- [ ] **接口规范一致(全栈模式)**:API 客户端在一处统一拆信封——非 2xx 或 `success===false` 当失败抛出(带 `error`/`message`),成功只取 `resp.data`;分页从 `data.items`/`data.total` 读;未假设裸数组;字段名严格按契约(snake_case/id 字符串/时间 ISO-8601)未臆改。
+- [ ] **登录鉴权一致(全栈且契约含 `/auth/login` 时)**:登录调 `${base}/auth/login`、从 `resp.data.token` 读 token 存到 `auth_token`;每个请求带 `Authorization: Bearer <token>`;有路由守卫按本地 token 验证登录态;任意 `401` 清除 token 并回登录页;字段名/请求头/`/auth/*` 路径与契约逐字一致。
 - [ ] **逐 FR 可验证**:每条 FR 都有可操作的界面入口与真实行为,能演示;无死控件、无 `href="#"`、无空事件处理器、无 TODO/FIXME/占位/mock/"coming soon"。
 - [ ] **真实图片硬验收**:确已执行 `gen-assets` 生成 3~6 张 PNG 到 `src/assets/`(已用 `ls src/assets` 核对),并在组件中 import 引用;失败已写明原因且未用 emoji 充当图片。
 - [ ] **视觉保真**:状态/空态/加载态/留白/层级打磨到位,文案/人名/数据真实可信,无 Lorem ipsum 占位;emoji 未被当作图标/插画/Logo/头像/装饰。

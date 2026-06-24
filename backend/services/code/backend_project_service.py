@@ -469,13 +469,17 @@ class BackendProjectService:
         return bool(os.getenv("OPENAI_API_KEY"))
 
     def review_project(
-        self, *, source_digest: str, contract_summary: str, on_model_call=None
+        self, *, source_digest: str, contract_summary: str,
+        requirements_doc: str = "", development_flow: str = "", on_model_call=None
     ) -> Optional[dict]:
         """Acceptance review of the generated backend against the shared contract.
 
         One text-model call -> ``{verdict, endpoint_coverage, issues, summary}``.
-        Advisory: returns ``None`` when no provider is configured or on any
-        failure (never raises, never blocks publish)."""
+        ``requirements_doc`` / ``development_flow`` inject the canonical FR/NFR/M
+        anchor lists so the critic can do real traceability (the contract alone
+        may not preserve anchor numbering). Advisory: returns ``None`` when no
+        provider is configured or on any failure (never raises, never blocks
+        publish)."""
         from backend.services.ai import get_text_provider
 
         provider = get_text_provider()
@@ -485,7 +489,14 @@ class BackendProjectService:
             template = self._load_prompt("backend_project_critic_prompt.txt")
         except Exception:  # noqa: BLE001
             return None
-        prompt = self._fill(template, CONTRACT=contract_summary or "", SOURCE=source_digest or "")
+        _cap = 24000
+        prompt = self._fill(
+            template,
+            CONTRACT=contract_summary or "",
+            REQUIREMENTS_DOC=(requirements_doc or "")[:_cap],
+            DEVELOPMENT_FLOW=(development_flow or "")[:_cap],
+            SOURCE=source_digest or "",
+        )
         provider_name = getattr(provider, "provider_name", None)
         model_name = getattr(provider, "model", None)
         try:
@@ -764,15 +775,18 @@ class BackendProjectService:
         failures + container stack traces + contract). Returns ``{ran, summary,
         cost_usd}``; ``ran`` is False when ``OPENAI_API_KEY`` is unset (the caller then
         skips the repair rung and proceeds best-effort)."""
-        # Keep the HEAD of the digest (data-layer state + smoke 5xx + itest cases +
-        # stack-trace logs are front-loaded by _build_comprehensive_digest; the
-        # contract reference trails). A tail-slice here would drop exactly the
-        # data-layer + smoke sections the comprehensive brief exists to feed. The
-        # prompt rides a temp file in-container (no argv limit), so the cap is just a
-        # generous guard above the bounded digest size.
+        # Keep the HEAD of the digest (data-layer state + frontend real-source
+        # reference + smoke 5xx + itest cases + stack-trace logs are front-loaded by
+        # _build_comprehensive_digest; the contract reference trails). A tail-slice
+        # here would drop exactly the data-layer + FE-source + smoke sections the
+        # comprehensive brief exists to feed. 32000 leaves comfortable headroom over
+        # the worst-case default brief (~24.6k) so the trailing itest failures + logs
+        # + contract are NOT truncated even when APP_ITEST_MAX_TESTS is raised above
+        # its default — the prompt rides a temp file in-container (no argv limit), so a
+        # larger cap only trades a little cost/latency for completeness.
         prompt = (
             self._load_prompt("backend_project_5xx_repair_prompt.txt")
-            + "\n\n" + (failures_digest or "")[:18000]
+            + "\n\n" + (failures_digest or "")[:32000]
         )
         return self._run_codex_repair_agent(workdir, prompt, on_log=on_log, is_cancelled=is_cancelled)
 

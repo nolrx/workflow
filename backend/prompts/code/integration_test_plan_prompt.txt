@@ -6,7 +6,7 @@
 2. **只测可安全重复调用的端点**:`method` 只用 `GET` 或 `POST`;**不要**出 `PUT`/`PATCH`/`DELETE`(会改/删既有数据,可能破坏首屏)。`path` **不得含路径参数**(不要出现 `{id}` 这类段——平台无法安全伪造 id)。POST 只对**创建类、可重复、无破坏性**的端点出,并给出最小可用 `body`。
 3. **鉴权按需**:若该端点需要登录态,置 `auth: true`(平台会用 demo 账号登录后注入 `Authorization` 头);公开端点置 `auth: false`。
 4. **分级**:`severity` 取 `critical` 或 `warning`。**首屏 / 核心业务闭环依赖的端点用 `critical`**(其确定性失败会回滚部署);边角、非关键端点用 `warning`(只告警不回滚)。
-5. **字段以契约 schema 为准**:`required_fields` 取契约 `components.schemas` 中该响应模型的关键字段,并与前端读取的键名交叉核对;**只列你确信前端会解析、且契约声明会返回的字段**,宁缺毋滥(避免误杀)。
+5. **字段以契约 schema 为准**:`required_fields` 取契约 `components.schemas` 中该响应模型的关键字段,并与前端读取的键名交叉核对;**只列你确信前端会解析、且契约声明会返回的字段**,宁缺毋滥(避免误杀)。**响应是统一信封(成功 `{success,data,message}`)**:`required_fields` 只列**信封 `data` 内业务对象、或分页 `data.items` 元素上的业务字段**(如 `id`/`title`/`status`),**不要列信封级 `success`/`data`/`message`**——平台判定会自动下钻到 `data`/`items` 内核对这些业务字段。
 6. **务实有界**:聚焦核心闭环,产出 8~14 条即可,不必穷举。
 
 # 输入(视为既定事实)

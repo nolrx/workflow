@@ -45,6 +45,7 @@ interface CodeState {
   project: CodeProject | null
   projects: CodeProject[]
   hasMoreProjects: boolean
+  isLoadingProjects: boolean
   styles: UIStyle[]
   selectedStyleIds: string[]
   isLoading: boolean
@@ -81,6 +82,7 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
   project: null,
   projects: [],
   hasMoreProjects: false,
+  isLoadingProjects: false,
   styles: [],
   selectedStyleIds: [],
   isLoading: false,
@@ -135,6 +137,10 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
   // Session list for the sidebar/history. Non-critical: failures are swallowed
   // (the list just stays empty) so they never block the workspace.
   fetchProjects: async (limit = 50, offset = 0) => {
+    // Guard against concurrent loads so infinite-scroll triggers (and React's
+    // StrictMode double-invoke) never fetch the same page twice.
+    if (get().isLoadingProjects) return
+    set({ isLoadingProjects: true })
     try {
       const { projects, has_more } = await codeApi.listProjects(limit, offset)
       set((state) => ({
@@ -143,6 +149,8 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
       }))
     } catch {
       // ignore — sidebar/history list fetch is non-critical
+    } finally {
+      set({ isLoadingProjects: false })
     }
   },
 

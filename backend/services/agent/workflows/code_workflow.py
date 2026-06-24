@@ -512,7 +512,7 @@ def run_code_workflow(ctx, recorder) -> dict:
             step.set_output(
                 output_summary="需求文档已根据调整重新生成，请再次确认。" if revise
                 else "需求文档已生成，请确认或提出调整意见。",
-                reasoning_summary="把需求展开为产品定位、目标用户、核心场景、功能范围、贴合该项目的技术架构与待确认问题，并写入共识账本。",
+                reasoning_summary="把需求展开为产品定位、目标用户、核心场景、功能范围、贴合该项目的技术架构与待确认问题；技术架构为**推荐方向**，作为待确认约束暂存账本以保持下游口径一致，待澄清问卷确认或采用默认后再固化（高杠杆项不当作已定论）。",
                 self_check=f"文档长度约 {len(doc)} 字符；生成 {clarify_count} 个澄清问题。",
                 next_action="等待用户确认；确认后生成开发流程。",
             )
@@ -598,7 +598,10 @@ def run_code_workflow(ctx, recorder) -> dict:
             ):
                 extra_credits += pricing.CODE_CONTEXT_VERIFY
                 ai_result = run_ai_consistency_gate(
-                    ledger=ledger, new_product_summary=flow[:2000], step_key="flow"
+                    # 8000 (was 2000): the adversarial consistency gate must see
+                    # most of the flow doc — a 2000-char window dropped the later
+                    # sections (后端服务 / AI链路 / 里程碑) where drift often hides.
+                    ledger=ledger, new_product_summary=flow[:8000], step_key="flow"
                 )
             else:
                 recorder.emit(

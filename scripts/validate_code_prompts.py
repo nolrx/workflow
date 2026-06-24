@@ -98,7 +98,14 @@ MANIFEST: dict[str, dict] = {
     "frontend_project_prompt.txt": {
         "mode": "fill",
         "placeholders": ["CONTEXT_LEDGER", "REQUIREMENT", "REQUIREMENTS_DOC", "DEVELOPMENT_FLOW", "DOCUMENTS", "STYLE_PROMPT", "UI_BASELINE", "FIGMA_DESIGN", "CONTRACT"],
-        "must_contain": ["gen-assets", "base: './'", "npm run build", "npm install", "src/assets", "src/components", "src/types.ts", "React", "Vite", "localStorage", "window.__API_BASE__"],
+        "must_contain": ["gen-assets", "base: './'", "npm run build", "npm install", "src/assets", "src/components", "src/types.ts", "React", "Vite", "localStorage", "window.__API_BASE__",
+            # Login/auth consistency: the frontend must consume the contract's
+            # fixed auth shape — read `resp.data.token`, persist it, send it as
+            # `Authorization: Bearer`, and gate routes on it (this is "前端怎么验证通过").
+            "/auth/login", "Authorization: Bearer", "auth_token", "/auth/me",
+            # API spec consistency: the client must uniformly unwrap the envelope
+            # (take resp.data, treat success===false as error, read data.items).
+            "resp.data", "data.items", "success===false"],
     },
     "frontend_project_repair_prompt.txt": {
         "mode": "plain",
@@ -134,6 +141,16 @@ MANIFEST: dict[str, dict] = {
         "must_contain": [
             '"openapi"', '"api_summary"', '"tech_stack"', '"middleware"',
             '"datastores"', "/health", "PORT", "DATABASE_URL",
+            # Login/auth single-source-of-truth: the contract is the only place
+            # the token field name + carrier header are pinned. Guard the fixed
+            # shape so a future trim can't drop it back to heuristic auth (the
+            # cause of front/back login drift the harness has to guess around).
+            "/auth/login", "securitySchemes", "bearerAuth", '"token"', "Authorization",
+            # API spec single-source-of-truth: the uniform success/error envelope,
+            # error-code vocabulary, pagination shape and field conventions are
+            # pinned here so front/back can't drift on response shape (the cause of
+            # "前端解析后端响应报错/白屏"). Guard so a trim can't drop the envelope.
+            "ApiError", '"success"', '"items"', "VALIDATION_ERROR", "page_size", "snake_case",
         ],
     },
     "backend_project_prompt.txt": {
@@ -158,6 +175,13 @@ MANIFEST: dict[str, dict] = {
             # trim can't regress to an email/password-only mandate (the cause of the
             # SMS-login app whose /auth/login 400s after deploy).
             "验证码", "无外部依赖",
+            # Login/auth consistency: the generated backend must implement the
+            # contract's fixed auth shape verbatim (`data.token` JWT + a
+            # `Authorization: Bearer` carrier) or the frontend can't log in.
+            "/auth/login", "Authorization: Bearer", "bearerAuth",
+            # API spec consistency: every handler must emit the uniform envelope
+            # via shared helpers (success/error) or the frontend parse drifts.
+            "success_response", "ApiError", "VALIDATION_ERROR", "snake_case",
         ],
     },
     "backend_project_reinforce_prompt.txt": {
@@ -174,11 +198,18 @@ MANIFEST: dict[str, dict] = {
             # Deployment-usable login: reinforce must re-check the demo login works
             # for the app's auth method (SMS/OTP fixed dev 验证码), not just seeding.
             "验证码",
+            # Login/auth consistency: reinforce re-checks the fixed token field +
+            # bearer header so a drifted auth shape gets repaired, not just seeded.
+            "/auth/login", "Authorization: Bearer",
+            # API spec consistency: reinforce re-checks the uniform envelope.
+            "success_response", "ApiError",
         ],
     },
     "backend_project_critic_prompt.txt": {
         "mode": "fill",
-        "placeholders": ["CONTRACT", "SOURCE"],
+        # Anchor sources injected so the critic can do real FR/NFR/M traceability
+        # (the contract alone may not preserve anchor numbering).
+        "placeholders": ["CONTRACT", "REQUIREMENTS_DOC", "DEVELOPMENT_FLOW", "SOURCE"],
         "must_contain": [
             '"verdict"', '"endpoint_coverage"', '"fr_coverage"', '"issues"', '"summary"', "PASS", "CONCERNS", "FAIL",
             # Acceptance must check first-screen visibility (demo self-seed).
@@ -186,6 +217,12 @@ MANIFEST: dict[str, dict] = {
             # ...and that the demo login is usable in the deployed env (SMS/OTP
             # logins need a fixed dev 验证码, else /auth/login 400s post-deploy).
             "验证码",
+            # Login/auth consistency: acceptance must flag a drifted token field
+            # name or bearer header (front/back login mismatch) as an issue.
+            "/auth/login", "Authorization: Bearer",
+            # API spec consistency: acceptance must flag responses that bypass the
+            # uniform envelope / drift fields (front/back parse mismatch).
+            "ApiError",
         ],
     },
     "backend_project_repair_prompt.txt": {
@@ -298,6 +335,114 @@ def validate_one(name: str, spec: dict, text: str) -> list[str]:
     return errs
 
 
+# --- cross-prompt semantic checks --------------------------------------------
+# These go BEYOND per-file token presence: they assert that the SEMANTICS agreed
+# across prompts stay mutually consistent. Per-file must_contain can pass 28/28
+# while two prompts still contradict each other on the SAME protocol (the login
+# token location, the frontend network-request rule). Each check below encodes
+# one such cross-file invariant so a future single-file edit can't silently
+# re-introduce a contradiction the mechanical checks don't see.
+
+# Prompts that describe the login/auth protocol — all must pin token at data.token.
+_AUTH_PROMPTS = [
+    "contract_synthesis_prompt.txt",
+    "backend_project_prompt.txt",
+    "frontend_project_prompt.txt",
+    "backend_project_critic_prompt.txt",
+    "backend_project_reinforce_prompt.txt",
+]
+# Prescriptive "token lives at the top level" claims — the OLD convention, now
+# wrong. NB: only PRESCRIPTIVE phrasings are listed; the corrected prompts contain
+# PROSCRIPTIVE wording ("不得移出 data 放到响应体顶层") which must NOT match here.
+_FORBIDDEN_TOPLEVEL_TOKEN = ["顶层固定 `token`", "响应体顶层固定 `token`", "置于响应体顶层"]
+
+
+def cross_prompt_checks(texts: dict[str, str]) -> list[str]:
+    """Assert cross-file semantic invariants. ``texts`` maps filename -> content.
+    Returns a list of human-readable violations (empty == all consistent)."""
+    errs: list[str] = []
+
+    # 1) Login token location is uniformly `data.token` (no front/back drift).
+    for name in _AUTH_PROMPTS:
+        text = texts.get(name, "")
+        if "data.token" not in text:
+            errs.append(f"{name}: auth prompt must pin the login token at `data.token` (not found)")
+        for bad in _FORBIDDEN_TOPLEVEL_TOKEN:
+            if bad in text:
+                errs.append(f"{name}: contains stale top-level-token claim {bad!r} — token must be `data.token`")
+
+    # 2) Frontend must NOT forbid its own same-origin backend API while requiring it.
+    fe = texts.get("frontend_project_prompt.txt", "")
+    if "同源后端 API" not in fe:
+        errs.append("frontend_project_prompt.txt: must explicitly allow same-origin backend API "
+                    "(the '禁止运行时网络请求' rule otherwise contradicts fullstack mode)")
+
+    # 3) The backend critic must be FED the anchor sources it is asked to verify.
+    critic = texts.get("backend_project_critic_prompt.txt", "")
+    for ph in ("[[REQUIREMENTS_DOC]]", "[[DEVELOPMENT_FLOW]]"):
+        if ph not in critic:
+            errs.append(f"backend_project_critic_prompt.txt: must inject {ph} to verify FR/NFR/M traceability")
+
+    return errs
+
+
+# Prompts with a FIXED enumerated `## section` contract: the heading set + order
+# + the self-check's stated section COUNT must agree. Catches the style 9-vs-8
+# class of self-contradiction (output contract lists 9 sections, self-check says
+# "八个") that per-file must_contain sails right past.
+_NUMERALS = {6: "六", 7: "七", 8: "八", 9: "九", 10: "十"}
+STRUCTURED_SECTIONS: dict[str, list[str]] = {
+    "requirements_prompt.txt": [
+        "## 产品定位", "## 目标用户", "## 核心场景", "## 功能范围", "## 用户流程",
+        "## 权限与账户", "## 数据对象", "## 非功能要求", "## 技术架构建议", "## 边界与待确认问题",
+    ],
+    "development_flow_prompt.txt": [
+        "## 技术假设", "## 模块拆分", "## 数据设计", "## 接口设计", "## 前端页面/状态",
+        "## 后端服务", "## AI/提示词链路", "## 开发里程碑", "## 验收标准", "## 风险清单",
+    ],
+    "style_prompt.txt": [
+        "## 视觉定位", "## 基调", "## 布局规则", "## 组件风格", "## 色彩与字体",
+        "## 交互反馈", "## 禁用事项", "## 缩略图生成提示词", "## 后续代码开发 UI 基调提示词",
+    ],
+}
+
+
+def structural_checks(texts: dict[str, str]) -> list[str]:
+    """Assert each fixed-section prompt lists every required `## heading` IN ORDER
+    and that its self-check states the matching section COUNT word (so adding /
+    dropping a section can't leave the self-check claiming the wrong number)."""
+    errs: list[str] = []
+    for name, headings in STRUCTURED_SECTIONS.items():
+        text = texts.get(name, "")
+        last = -1
+        for h in headings:
+            idx = text.find(h)
+            if idx < 0:
+                errs.append(f"{name}: missing required section heading {h!r}")
+            elif idx < last:
+                errs.append(f"{name}: section {h!r} is out of the contract order")
+            else:
+                last = idx
+        numeral = _NUMERALS.get(len(headings))
+        if numeral and f"{numeral}个" not in text:
+            errs.append(f"{name}: self-check must state '{numeral}个' sections "
+                        f"({len(headings)} `##` sections in the output contract)")
+        for n, w in _NUMERALS.items():
+            if n != len(headings) and f"{w}个内容小节" in text:
+                errs.append(f"{name}: self-check claims '{w}个内容小节' but the "
+                            f"contract enumerates {len(headings)} sections")
+    return errs
+
+
+def _load_all_texts() -> dict[str, str]:
+    out: dict[str, str] = {}
+    for name in MANIFEST:
+        path = PROMPT_DIR / name
+        if path.is_file():
+            out[name] = path.read_text(encoding="utf-8")
+    return out
+
+
 def main() -> int:
     total = len(MANIFEST)
     failed = 0
@@ -318,7 +463,21 @@ def main() -> int:
         else:
             print(f"✓ {name}: ok  ({MANIFEST[name]['mode']}, {len(text)} chars)")
 
-    print(f"\n{total - failed}/{total} passed.")
+    all_texts = _load_all_texts()
+    semantic_ok = True
+    for label, errs in (("cross-prompt semantics", cross_prompt_checks(all_texts)),
+                        ("structural sections", structural_checks(all_texts))):
+        if errs:
+            semantic_ok = False
+            failed += 1
+            print(f"\n✗ {label}: FAIL")
+            for e in errs:
+                print(f"    - {e}")
+        else:
+            print(f"\n✓ {label}: ok")
+
+    print(f"\n{total - failed}/{total} per-file passed"
+          f"{' (+ semantic ok)' if semantic_ok else ' (semantic FAILED)'}.")
     return 1 if failed else 0
 
 

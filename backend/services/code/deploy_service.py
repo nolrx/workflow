@@ -78,6 +78,37 @@ _MIDDLEWARE_WORKFLOW = "code_middleware_provisioning"
 _FRONTEND_WORKFLOW = "code_frontend_project_generation"
 _BUILT = (AgentRunStatus.COMPLETED, AgentRunStatus.PARTIAL)
 
+# The generated FRONTEND source is staged into the SAME comprehensive-repair workdir
+# under this reference-only subdir so the Codex repair pass can READ the real
+# frontend code (which endpoints it calls, and HOW it parses each response — field
+# names, envelope shape, types) in the SAME directory it edits the backend in, then
+# make the backend's responses fit what the frontend actually parses. It is strictly
+# REFERENCE-ONLY: removed from the workdir BEFORE every ``docker build`` (so it is
+# NEVER baked into the backend image) and excluded from the promoted source
+# (``_REPAIR_EXCLUDE_DIRS``); the repair prompt forbids editing or compiling it.
+_FE_REFERENCE_DIR = "__frontend_src__"
+# When staging the FE reference tree, keep readable source/config and skip build
+# output + binaries (the repair only needs the call/parse code, not bundles/images).
+_FE_REF_SKIP_SUFFIX = (
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".ico", ".bmp", ".pdf", ".svg",
+    ".woff", ".woff2", ".ttf", ".eot", ".mp4", ".mov", ".webm", ".map", ".lock",
+)
+_FE_REF_MAX_FILE = int(os.getenv("APP_FE_REF_MAX_FILE", str(512 * 1024)))         # 512KB/file
+_FE_REF_MAX_TOTAL = int(os.getenv("APP_FE_REF_MAX_TOTAL", str(8 * 1024 * 1024)))  # 8MB total
+# Below this size a staged FE file is NOT fingerprinted for the leaked-copy purge:
+# tiny/empty files (empty __init__.py, one-line config) collide across unrelated
+# files, which would risk a false-positive deletion of a real backend file.
+_FE_FINGERPRINT_MIN = 64
+# Build-managed lock/checksum manifests a native build (npm ci / go build / mvn …)
+# rewrites in place WITHOUT a real source change. Ignored when deciding whether a
+# repair pass actually CHANGED the backend source — otherwise a healthy app gets
+# needlessly rebuilt+bounced just because Codex ran a dependency install. They are
+# still collected/PROMOTED normally (they belong in the deployable source).
+_NOOP_IGNORE_FILES = frozenset({
+    "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml",
+    "go.sum", "Cargo.lock", "composer.lock", "Gemfile.lock", "poetry.lock", "uv.lock",
+})
+
 
 def _container_name(project_id: str) -> str:
     return f"app-{middleware_service._sanitized_db_name(project_id)[4:]}"[:60] or f"app-{project_id[:12]}"
@@ -215,6 +246,156 @@ def _resolve_backend_source(project_id: str, user_id: str, backend_run: AgentRun
         if files:
             return files
     return _load_backend_source(backend_run)
+
+
+# --- frontend reference (read-only, for the comprehensive repair) ------------
+def _repair_frontend_files(run: Optional[AgentRun]) -> dict:
+    """The generated FRONTEND source ({rel: bytes}) for use as a read-only repair
+    reference. Reuses the integration-test loader (same published project zip), so
+    the deploy has one source of truth for "the frontend's real code". Empty dict
+    when there is no frontend run / the zip is unreadable — the repair then degrades
+    to contract-only knowledge (still runs; 5xx are still fixed)."""
+    if not run:
+        return {}
+    try:
+        from backend.services.code.fullstack import integration_test_service
+        return integration_test_service._load_frontend_source(run)
+    except Exception:  # noqa: BLE001 — never let a reference-load problem sink the deploy
+        logger.warning("could not load frontend source for repair reference", exc_info=True)
+        return {}
+
+
+def _repair_frontend_digest(fe_files: dict, max_chars: int = 5000) -> str:
+    """A compact digest of the frontend's API-calling code (+ type defs) for the
+    repair brief — points Codex at the most relevant call/parse code, while the FULL
+    tree is also staged under ``_FE_REFERENCE_DIR`` for it to read. Reuses the
+    integration-test picker so both judge "frontend API code" identically."""
+    if not fe_files:
+        return ""
+    try:
+        from backend.services.code.fullstack import integration_test_service
+        return integration_test_service._frontend_api_digest(fe_files, max_chars=max_chars)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _stage_frontend_reference(workdir: Path, fe_files: dict) -> tuple[int, bool]:
+    """Write the frontend SOURCE tree into ``workdir/__frontend_src__`` so the Codex
+    repair pass can read the real frontend call/parse code IN THE SAME directory it
+    repairs the backend in. Reference-only: skips build output (node_modules / dist /
+    …) and binaries, caps per-file + total size. Re-stages cleanly each round.
+    Returns ``(staged_count, truncated)`` where ``truncated`` is True if a source
+    file was skipped purely for the total-size budget (so the caller can narrate it;
+    the most relevant call/parse code is still inlined in the brief digest). Always
+    paired with ``_unstage_frontend_reference`` BEFORE any ``docker build`` so it
+    never enters the backend image build context."""
+    root = workdir / _FE_REFERENCE_DIR
+    shutil.rmtree(root, ignore_errors=True)  # never mix stale files across rounds
+    if not fe_files:
+        return 0, False
+    root.mkdir(parents=True, exist_ok=True)
+    staged, truncated, budget = 0, False, _FE_REF_MAX_TOTAL
+    for rel, content in fe_files.items():
+        if not isinstance(rel, str) or not rel or rel.endswith("/"):
+            continue
+        # Skip build output / vcs (node_modules, dist, build, .git…) and binaries —
+        # the repair needs the call/parse SOURCE, not bundles or assets.
+        if set(Path(rel).parts) & _REPAIR_EXCLUDE_DIRS:
+            continue
+        if rel.lower().endswith(_FE_REF_SKIP_SUFFIX):
+            continue
+        data = content if isinstance(content, (bytes, bytearray)) else str(content or "").encode("utf-8")
+        if len(data) > _FE_REF_MAX_FILE:
+            continue
+        if len(data) > budget:  # total-size budget hit — record so the caller warns
+            truncated = True
+            continue
+        target = root / rel
+        # Defend against a zip entry escaping the reference dir (zip-slip).
+        try:
+            target.resolve().relative_to(root.resolve())
+        except (ValueError, OSError):
+            continue
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(bytes(data))
+        except OSError:
+            continue
+        budget -= len(data)
+        staged += 1
+    return staged, truncated
+
+
+def _unstage_frontend_reference(workdir: Path) -> None:
+    """Remove the frontend reference subdir so it is NEVER part of the docker build
+    context (and thus the produced backend image). Called before every rebuild."""
+    shutil.rmtree(workdir / _FE_REFERENCE_DIR, ignore_errors=True)
+
+
+def _frontend_fingerprints(fe_files: dict) -> set:
+    """sha256 of each non-trivial frontend source file (the same set staged as the
+    read-only reference). Used to detect — and purge — any VERBATIM copy the repair
+    agent may have materialized OUTSIDE the reference dir into the backend tree,
+    closing the only path by which frontend content could otherwise slip into the
+    backend image / the promoted source. Trivial / empty files are skipped: their
+    content collides across unrelated files (an empty ``__init__.py``, a one-line
+    ``.gitignore``) and would risk a false-positive purge of a real backend file."""
+    import hashlib
+
+    prints: set = set()
+    if not fe_files:
+        return prints
+    for rel, content in fe_files.items():
+        if not isinstance(rel, str) or not rel or rel.endswith("/"):
+            continue
+        if set(Path(rel).parts) & _REPAIR_EXCLUDE_DIRS:
+            continue
+        if rel.lower().endswith(_FE_REF_SKIP_SUFFIX):
+            continue
+        data = content if isinstance(content, (bytes, bytearray)) else str(content or "").encode("utf-8")
+        if len(data) < _FE_FINGERPRINT_MIN:
+            continue
+        prints.add(hashlib.sha256(bytes(data)).hexdigest())
+    return prints
+
+
+def _purge_leaked_frontend_files(workdir: Path, fingerprints: set, original_rels: set) -> list:
+    """Remove any file OUTSIDE the reference dir whose content byte-matches a staged
+    frontend file — i.e. a verbatim copy the repair agent materialized into the
+    backend tree — so frontend content can NEVER enter the docker build context or
+    the promoted source. NEVER touches an ORIGINAL backend file (matched by rel) or
+    anything inside the reference dir, so a legitimate backend file is never deleted.
+    Returns the removed (relative) paths. Defence-in-depth: the prompt also forbids
+    copying the reference out; this enforces it regardless of what the agent does."""
+    import hashlib
+
+    if not fingerprints:
+        return []
+    removed: list = []
+    for p in workdir.rglob("*"):
+        if not p.is_file():
+            continue
+        try:
+            rel = p.relative_to(workdir).as_posix()
+        except ValueError:
+            continue
+        if rel in original_rels:  # never delete a pre-existing backend file
+            continue
+        if _FE_REFERENCE_DIR in Path(rel).parts:  # the reference dir itself: unstage handles it
+            continue
+        try:
+            if p.stat().st_size < _FE_FINGERPRINT_MIN:
+                continue
+            digest = hashlib.sha256(p.read_bytes()).hexdigest()
+        except OSError:
+            continue
+        if digest in fingerprints:
+            try:
+                p.unlink()
+                removed.append(rel)
+            except OSError:
+                continue
+    return removed
 
 
 def _load_init_sql(run: Optional[AgentRun]) -> str:
@@ -544,7 +725,15 @@ def deploy(
         # (liveness is the sole hard gate here); a harness bug fails OPEN.
         max_repair_rounds = int(os.getenv("APP_DEPLOY_REPAIR_ROUNDS", "3"))
         post_start_defect = (itest.get("gate") == "fail") or (not smoke_ok)
-        if max_repair_rounds > 0 and post_start_defect and not cancelled():
+        # ALWAYS run the comprehensive repair ladder at least once — even with NO
+        # observed 5xx / itest failure — to PROACTIVELY align the backend with what the
+        # frontend actually parses, resolving latent 2xx field/shape/pagination
+        # mismatches that never surface as a 5xx ("最大程度解决前后端之间的错误"). The first
+        # round's brief is flavoured defect-fix vs proactive-alignment by
+        # ``post_start_defect``; ops can restore defect-only with APP_DEPLOY_ALWAYS_REPAIR=0.
+        always_repair = os.getenv("APP_DEPLOY_ALWAYS_REPAIR", "1") not in ("0", "false", "False", "")
+        if max_repair_rounds > 0 and (always_repair or post_start_defect) and not cancelled():
+            fe_files: dict = {}  # bound before the try so the except handler is always safe
             try:
                 from backend.services.code.fullstack import (
                     contract_service,
@@ -554,47 +743,101 @@ def deploy(
                 contract_block = integration_test_service._render_contract_block(
                     _row.get_api_contract() if _row else {}
                 )
-                # If the initial itest harness threw (itest_plan is None) but we still
-                # entered the ladder via a smoke 5xx, seed a deterministic fallback plan
-                # so the synchronized re-check REUSES it (no AI re-plan, no re-charge).
+                # A deterministic plan is needed for EVERY synchronized re-check
+                # (including the proactive-alignment pass that runs with no prior itest
+                # failure): seed it from the contract when the AI plan didn't run / threw.
                 if itest_plan is None:
                     itest_plan = integration_test_service._contract_fallback_plan(
                         _row.get_api_contract() if _row else {}
                     )
-                # Snapshot the source the CURRENTLY-running image was built from
-                # BEFORE any round dirties the workdir, so a failed round can never
-                # cause us to promote source that doesn't match the running image.
+                # Load the generated FRONTEND source ONCE so each repair round can
+                # stage it as a read-only reference IN THE SAME workdir (so Codex
+                # reads the real call/parse code, then fixes the backend to match).
+                # The digest points at the most relevant call/parse files; the full
+                # tree is staged per round (and removed before each rebuild).
+                fe_files = _repair_frontend_files(frontend_run)
+                fe_digest = _repair_frontend_digest(fe_files)
+                # Fingerprints of the staged FE files — used after each pass to purge
+                # any verbatim copy the agent may have materialized into the backend
+                # tree (keeps FE content out of the image AND the promoted source).
+                fe_fingerprints = _frontend_fingerprints(fe_files)
+                if fe_files:
+                    phase("repair", f"已加载前端源码作为修复参考({len(fe_files)} 个文件):"
+                          "Codex 将先读前端真实代码,分析其调用的端点与响应解析,再对齐/修复后端")
+                else:
+                    phase("repair", "未找到可用的前端源码,Codex 将仅依据共享契约修复/对齐后端")
+                # Snapshot the source the CURRENTLY-running image was built from BEFORE
+                # any round dirties the workdir, so a failed round can never promote
+                # source that doesn't match the running image. ``current_built_source``
+                # tracks exactly what ``running_image`` was built from, so a pass that
+                # changes nothing can SKIP the rebuild/swap (a healthy app is left
+                # untouched instead of needlessly bounced).
                 good_source = _collect_repaired_source(workdir, set(source.keys())) if workdir else None
+                current_built_source = good_source if good_source is not None else dict(source)
                 round_n = 0
-                while (((itest.get("gate") == "fail") or (not smoke_ok))
-                       and round_n < max_repair_rounds and not cancelled()):
+                while round_n < max_repair_rounds and not cancelled():
                     round_n += 1
-                    # Pull a generous log tail AFTER detection so the smoke/itest 5xx
-                    # stack traces (runtime + DB errors) are in the brief.
+                    # This round's baseline = what the running image currently achieves.
+                    # No defect → this is a PROACTIVE FE↔BE alignment pass; a defect →
+                    # the usual comprehensive fix. Both read the FE source first.
+                    start_smoke_ok = smoke_ok
+                    start_itest_fail = (itest.get("gate") == "fail")
+                    has_defect = (not start_smoke_ok) or start_itest_fail
                     logs = _docker(["logs", "--tail", "200", container], 30)
+                    # Stage the frontend reference INTO the repair workdir for this
+                    # pass (same directory Codex repairs the backend in). Removed again
+                    # right after the pass, BEFORE the rebuild, so it never enters the
+                    # backend image. fe_count drives the brief's "read the FE first".
+                    fe_count, fe_truncated = _stage_frontend_reference(workdir, fe_files)
+                    if fe_truncated:
+                        phase("repair", f"前端参考目录较大,仅 stage 了 {fe_count} 个源文件,其余超 "
+                              f"{_FE_REF_MAX_TOTAL // (1024 * 1024)}MB 预算略过;关键调用/解析代码已在摘要中")
                     digest = _build_comprehensive_digest(
                         itest=itest, smoke_results=smoke_detail,
                         container_logs=(logs.stdout or logs.stderr or ""),
                         contract_block=contract_block, prov=prov, init_applied=init_applied,
+                        fe_digest=fe_digest, fe_count=fe_count, has_defect=has_defect,
                     )
-                    phase("repair", f"启动 Codex 彻底修复(第 {round_n}/{max_repair_rounds} 轮,一次修完 数据库 + 运行报错 + 接口,只改后端、不动前端)")
+                    if has_defect:
+                        phase("repair", f"启动 Codex 彻底修复(第 {round_n}/{max_repair_rounds} 轮,先读前端源码分析数据响应/解析,再一次修完 数据库 + 运行报错(5xx) + 接口,只改后端、不动前端)")
+                    else:
+                        phase("repair", f"启动 Codex 主动对齐前后端(第 {round_n}/{max_repair_rounds} 轮,无 5xx;先读前端源码,逐端点核对响应结构/字段/分页是否与前端解析一致并修复隐性不一致,只改后端、不动前端)")
                     rep = get_backend_project_service().repair_5xx(
                         workdir=str(workdir), failures_digest=digest,
                         on_log=lambda m: phase("repair", m), is_cancelled=cancelled,
                     )
+                    # Remove the FE reference NOW — before any rebuild — so the
+                    # backend image build context never includes the frontend source.
+                    _unstage_frontend_reference(workdir)
+                    # Defence-in-depth: also purge any VERBATIM copy of a frontend
+                    # file the agent may have materialized into the backend tree, so
+                    # FE content can never reach the rebuilt image or the promoted
+                    # source (the dir itself is already gone via unstage above).
+                    leaked = _purge_leaked_frontend_files(workdir, fe_fingerprints, set(source.keys()))
+                    if leaked:
+                        phase("repair", f"⚠ 检测到前端参考文件被复制进后端工程({len(leaked)} 个),"
+                              f"已剔除以保证镜像/产物纯净:{leaked[:5]}")
                     if not rep.get("ran"):
                         phase("repair", "Codex 修复不可用(未配置 OPENAI_API_KEY),按尽力放行继续")
                         break
                     if rep.get("summary"):
                         fix_notes.append(rep["summary"])
+                    # No-op pass: if the agent changed NO backend source (ignoring
+                    # lockfile churn from its native build verification), the running
+                    # container is already aligned — don't rebuild/swap a healthy app.
+                    cand_source = _collect_repaired_source(workdir, set(source.keys())) if workdir else current_built_source
+                    if not _source_changed_meaningfully(cand_source, current_built_source):
+                        phase("repair", f"本轮核对未发现需修改的源码不一致(仅锁文件等无关变更),保持当前镜像不变(第 {round_n} 轮)"
+                              + ("" if has_defect else ",前后端已对齐"))
+                        break
                     new_tag = f"{image_tag}-fix{round_n}"
-                    phase("repair", "彻底修复完成,重新自建镜像(docker build)")
+                    phase("repair", "修复/对齐完成,重新自建镜像(docker build)")
                     build = _docker(["build", "-t", new_tag, str(workdir)], BUILD_TIMEOUT)
                     if build.returncode != 0:
                         phase("repair", "修复后镜像重建失败,保留修复前容器,停止修复(尽力放行)")
                         break
                     rollback.append(lambda t=new_tag: _docker(["image", "rm", "-f", t], 60))
-                    # Swap the container to the repaired image; if it won't start /
+                    # Swap the container to the candidate image; if it won't start /
                     # go healthy, restore the last-known-good image so repair never
                     # leaves the app worse than before.
                     swap = _run_container(container, new_tag, prov)
@@ -618,28 +861,83 @@ def deploy(
                             )
                         phase("repair", "修复后容器无法启动/健康检查未过,已恢复修复前镜像,停止修复(尽力放行)")
                         break
-                    running_image = new_tag
-                    itest_repaired_rounds = round_n
-                    # This round built + swapped + passed health → the workdir matches
-                    # the new running image; advance the promotable snapshot.
-                    good_source = _collect_repaired_source(workdir, set(source.keys())) if workdir else good_source
-                    # --- SYNCHRONIZED re-check: smoke + itest against the fixed image -
+                    # Candidate is healthy → SYNCHRONIZED re-check (smoke + itest).
                     phase("repair", "同步复检:契约冒烟 + 前后端接口联调")
-                    smoke_ok, smoke_detail = _smoke_test(container, BACKEND_PORT, project.id, cancelled)
-                    itest = integration_test_service.run_integration_tests(
+                    cand_smoke_ok, cand_smoke_detail = _smoke_test(container, BACKEND_PORT, project.id, cancelled)
+                    cand_itest = integration_test_service.run_integration_tests(
                         project_id=project.id, user_id=user_id, team_id=team_id,
                         container=container, port=BACKEND_PORT, frontend_run=frontend_run,
                         run_id=run_id, cancelled=cancelled, plan=itest_plan,
                     )
+                    # AVAILABILITY GUARD: never adopt a candidate that REGRESSES this
+                    # round's baseline on any OBSERVED axis — per-endpoint smoke (incl.
+                    # ok→inconclusive, which the aggregate bool + /health miss) and itest
+                    # coverage/cases, not just the gate. A proactive pass on a healthy app
+                    # must not make it worse. Confirm a suspected regression with ONE more
+                    # measurement first, so a transient cold-start blip doesn't discard a
+                    # genuine fix; only a CONFIRMED regression reverts to the pre-round image.
+                    regressed, reason = _repair_regressed(
+                        has_defect=has_defect, start_smoke=smoke_detail, cand_smoke=cand_smoke_detail,
+                        start_itest=itest, cand_itest=cand_itest)
+                    if regressed and not cancelled():
+                        phase("repair", f"复检疑似回退({reason}),二次确认中…")
+                        cand_smoke_ok, cand_smoke_detail = _smoke_test(container, BACKEND_PORT, project.id, cancelled)
+                        cand_itest = integration_test_service.run_integration_tests(
+                            project_id=project.id, user_id=user_id, team_id=team_id,
+                            container=container, port=BACKEND_PORT, frontend_run=frontend_run,
+                            run_id=run_id, cancelled=cancelled, plan=itest_plan)
+                        regressed, reason = _repair_regressed(
+                            has_defect=has_defect, start_smoke=smoke_detail, cand_smoke=cand_smoke_detail,
+                            start_itest=itest, cand_itest=cand_itest)
+                    if regressed:
+                        phase("repair", f"⚠ 复检确认相比修复前出现回退({reason}),回滚到修复前镜像并停止修复(尽力放行)")
+                        rb = _run_container(container, running_image, prov)
+                        reverted = rb.returncode == 0 and _wait_healthy(
+                            container, BACKEND_PORT, HEALTH_TIMEOUT, cancelled)[0]
+                        if not reverted:
+                            return _fail(
+                                dep, rollback,
+                                "对齐修复引入回退,且回滚到修复前镜像也未能恢复健康",
+                                narrate=phase,
+                            )
+                        dep.set_detail({**dep.get_detail(), "repair_reverted_regression": {
+                            "round": round_n, "reason": reason,
+                            "smoke": cand_smoke_detail,
+                            "integration_test": cand_itest.get("summary"),
+                        }})
+                        db.session.commit()
+                        break
+                    # Adopt the candidate (healthy AND not a regression). Advance the
+                    # running image + the promotable snapshot together so they stay in
+                    # lockstep, and carry the recheck result as the new baseline.
+                    running_image = new_tag
+                    current_built_source = cand_source
+                    good_source = cand_source
+                    itest_repaired_rounds = round_n
+                    smoke_ok, smoke_detail = cand_smoke_ok, cand_smoke_detail
+                    itest = cand_itest
                     itest_plan = itest.get("plan") or itest_plan
                     dep.set_detail({**dep.get_detail(),
                                     "smoke": smoke_detail,
                                     "integration_test": itest.get("summary")})
                     db.session.commit()
+                    # Aligned/clean now → stop; otherwise loop to fix the remaining defect.
+                    if smoke_ok and (itest.get("gate") != "fail"):
+                        break
                 if itest_repaired_rounds and (itest.get("gate") != "fail") and smoke_ok:
-                    phase("repair", f"Codex 彻底修复后复检通过(仅改后端,修复 {itest_repaired_rounds} 轮)",
+                    phase("repair", f"Codex 修复/对齐后复检通过(仅改后端,落地 {itest_repaired_rounds} 轮)",
                           {"integration_test": itest.get("summary")})
             except Exception:  # noqa: BLE001 — repair harness bug must not sink the deploy
+                # Ensure the FE reference (and any verbatim copy of it) never lingers
+                # in the workdir — it would otherwise risk leaking into a later
+                # rebuild / the promoted source.
+                if workdir:
+                    _unstage_frontend_reference(workdir)
+                    try:
+                        _purge_leaked_frontend_files(
+                            workdir, _frontend_fingerprints(fe_files), set(source.keys()))
+                    except Exception:  # noqa: BLE001
+                        pass
                 try:
                     db.session.rollback()
                 except Exception:  # noqa: BLE001
@@ -797,6 +1095,9 @@ _REPAIR_EXCLUDE_DIRS = {
     "node_modules", "target", "build", "dist", "out", ".git", "__pycache__",
     ".venv", "venv", ".gradle", ".next", ".nuxt", "coverage", ".pytest_cache",
     "bin", "obj", ".idea", ".vscode", ".mypy_cache", ".ruff_cache",
+    # The read-only frontend repair reference is never part of the backend source:
+    # exclude it from the promoted (deploy-repaired) source zip.
+    _FE_REFERENCE_DIR,
 }
 _REPAIR_EXCLUDE_SUFFIX = (".class", ".pyc", ".pyo", ".o", ".a", ".so", ".log")
 _MAX_REPAIR_FILE = int(os.getenv("APP_REPAIR_MAX_FILE", str(2 * 1024 * 1024)))  # 2MB/file
@@ -839,6 +1140,17 @@ def _collect_repaired_source(workdir: Path, original_rels: set) -> dict:
         except OSError:
             continue
     return files
+
+
+def _source_changed_meaningfully(cand: dict, base: dict) -> bool:
+    """True if ``cand`` differs from ``base`` in any file OTHER than a build-managed
+    lock/checksum manifest — i.e. the repair pass made a REAL source change worth a
+    rebuild. A pass whose ONLY diff is lockfile churn (from Codex's native build
+    verification: ``npm ci`` / ``go build`` / ``mvn`` rewriting package-lock.json /
+    go.sum / …) is treated as a no-op, so a healthy app isn't needlessly bounced."""
+    def _strip(d: dict) -> dict:
+        return {k: v for k, v in d.items() if Path(k).name not in _NOOP_IGNORE_FILES}
+    return _strip(cand) != _strip(base)
 
 
 def _stage_source(workdir: Path, files: dict) -> None:
@@ -954,12 +1266,86 @@ def _smoke_test(container: str, port: int, project_id: str, cancelled) -> tuple[
     return ok, results
 
 
+def _itest_critical_fail_endpoints(it: dict) -> set:
+    """The set of endpoints with a CRITICAL deterministic failure in an itest result
+    (from both the per-case list and the slim summary). Used to detect a repair pass
+    that swaps one broken endpoint for another (a per-endpoint regression the
+    aggregate gate misses)."""
+    eps: set = set()
+    for c in (it or {}).get("cases") or []:
+        if c.get("deterministic_fail") and str(c.get("severity") or "critical").lower() == "critical":
+            if c.get("endpoint"):
+                eps.add(c["endpoint"])
+    for c in ((it or {}).get("summary") or {}).get("failed") or []:
+        if isinstance(c, dict) and c.get("endpoint"):
+            eps.add(c["endpoint"])
+    return eps
+
+
+def _repair_regressed(
+    *, has_defect: bool, start_smoke: list, cand_smoke: list,
+    start_itest: dict, cand_itest: dict,
+) -> tuple[bool, str]:
+    """Did the candidate image REGRESS the round's baseline on any OBSERVED axis?
+
+    The availability guard for the (now always-on) repair ladder: a pass must never
+    leave the app worse than it was. Compares PER-ENDPOINT (not just the aggregate
+    gate, which misses ok→inconclusive collapses). HARD checks — a previously-OK
+    endpoint now 5xx, or a NEW critical endpoint now failing — apply in EVERY round.
+    The stricter coverage-collapse checks — a previously-reachable endpoint now
+    unreachable/inconclusive, itest pass→inconclusive, lost demo token, or shrunken
+    executed coverage — apply only to a PROACTIVE pass on an already-healthy baseline
+    (``not has_defect``); a defect round legitimately changes coverage as it fixes,
+    so penalising that would block real repairs. Returns ``(regressed, reason)``.
+    """
+    def _smoke_map(results: list) -> dict:
+        m: dict = {}
+        for r in results or []:
+            if isinstance(r, dict) and r.get("endpoint"):
+                m[r["endpoint"]] = r.get("result")
+        return m
+
+    s0, s1 = _smoke_map(start_smoke), _smoke_map(cand_smoke)
+    # HARD: a previously-reachable endpoint now returns a definitive 5xx.
+    for ep, r0 in s0.items():
+        if r0 == "ok" and s1.get(ep) == "5xx":
+            return True, f"契约冒烟回退:{ep} 由可达变为 5xx"
+    # HARD: a critical endpoint that wasn't failing before is failing now.
+    new_fail = _itest_critical_fail_endpoints(cand_itest) - _itest_critical_fail_endpoints(start_itest)
+    if new_fail:
+        return True, f"接口联调回退:新增确定性失败端点 {sorted(new_fail)[:5]}"
+    if not has_defect:
+        # Proactive pass on a healthy baseline — protect it strictly. A previously-OK
+        # endpoint going inconclusive (handler now hangs / resets) is a degradation
+        # /health + the aggregate smoke bool can't see; the caller re-measures once to
+        # rule out a transient cold-start blip before acting on this.
+        for ep, r0 in s0.items():
+            if r0 == "ok" and s1.get(ep) != "ok":
+                return True, f"契约冒烟回退:{ep} 由可达变为不可达/未定论"
+        g0 = (start_itest or {}).get("gate")
+        g1 = (cand_itest or {}).get("gate")
+        sum0 = (start_itest or {}).get("summary") or {}
+        sum1 = (cand_itest or {}).get("summary") or {}
+        if g0 != "fail" and g1 == "fail":
+            return True, "接口联调回退:由通过/未定论变为确定性失败"
+        if g0 == "pass" and g1 == "inconclusive":
+            return True, "接口联调回退:由通过塌缩为未定论(覆盖丢失)"
+        if sum0.get("token") and not sum1.get("token"):
+            return True, "接口联调回退:demo 登录由可用变为不可用(鉴权链路被改坏)"
+        ex0, ex1 = int(sum0.get("executed") or 0), int(sum1.get("executed") or 0)
+        if ex0 and ex1 < ex0:
+            return True, f"接口联调回退:可执行用例由 {ex0} 降到 {ex1}(覆盖缩小)"
+    return False, ""
+
+
 def _build_comprehensive_digest(
     *, itest: dict, smoke_results: list, container_logs: str,
     contract_block: str, prov, init_applied: bool,
+    fe_digest: str = "", fe_count: int = 0, has_defect: bool = True,
 ) -> str:
     """Aggregate EVERY observed post-start defect into one brief for the Codex
     comprehensive-repair pass: the data-layer state, the smoke 5xx endpoints, the
+    REAL frontend call/parse source (staged in-workdir for Codex to read first), the
     itest deterministic failures, the container stack traces (runtime + DB errors)
     and the shared contract. One brief → one Codex pass fixes database + runtime +
     interface together. The itest-failures + logs + contract tail reuses the
@@ -967,12 +1353,57 @@ def _build_comprehensive_digest(
     from backend.services.code.fullstack import integration_test_service
 
     parts: list[str] = []
+    # Repair mode banner. When NO defect was observed this is a PROACTIVE FE↔BE
+    # alignment pass (the deploy now runs the ladder at least once regardless): frame
+    # the task as "verify every endpoint the frontend calls returns exactly what it
+    # parses, fix latent 2xx mismatches; if truly already aligned, change nothing".
+    if not has_defect:
+        parts.append(
+            "## 本轮修复模式:主动对齐前后端(未观测到 5xx / 确定性失败)\n"
+            "当前后端在部署环境已 `/health` 通过、契约冒烟无 5xx、前后端接口联调也未发现确定性失败。"
+            "但仍要求你执行一次彻底的「前后端对齐」复核:对照 `__frontend_src__/` 前端真实源码,"
+            "逐一核对前端会调用的每个端点——后端 2xx 响应的**字段名 / 数据结构 / 嵌套 / 分页信封"
+            "(data/items/total)/ 类型 / 空值处理**是否与前端解析**完全一致**;凡发现前端读取的字段缺失、"
+            "命名不符、结构对不上等**不报 5xx 的隐性不一致**,一律修复到位,把前后端之间的不一致降到最低。"
+            "⚠ 只做**真实存在的不一致**的最小修复:若逐项核对后确认确实完全一致、无需改动,则**不要为改而改**"
+            "(保持现状即可,平台会据此保留当前镜像);也**绝不能破坏**任何当前已正常工作的端点。"
+        )
     # Data-layer state (lets Codex tell schema drift / empty-DB from app bugs).
     dl = [f"- 中间件引擎:{getattr(prov, 'engine_kind', '?')}"]
     if getattr(prov, "db_name", None):
         dl.append(f"- 数据库:{prov.db_name}(部署环境真实库,可能为空 — 后端须能在空库上自建表)")
     dl.append(f"- 启动时已应用生成的 init.sql 兜底:{'是' if init_applied else '否(依赖后端自迁移)'}")
     parts.append("## 运行时 / 数据层状态\n" + "\n".join(dl))
+    # Frontend real source: the full tree is staged read-only at _FE_REFERENCE_DIR/
+    # in THIS workdir; tell Codex to read it FIRST (it is the authority on which
+    # endpoints are called and how each response is parsed), and inline the most
+    # relevant call/parse code so the analysis starts even before it opens a file.
+    if fe_count:
+        fe_section = [
+            f"## 前端真实源码(已挂在工程根目录的只读子目录 `{_FE_REFERENCE_DIR}/` 下,共 {fe_count} 个源文件)",
+            "⚠ 这是前端已构建产物对应的源码,**只读参考**:严禁修改、严禁编译/纳入本后端工程构建,它不属于本后端工程。",
+            f"请**第一步**就通读 `{_FE_REFERENCE_DIR}/`(重点看 api / services / hooks / store / "
+            "request / http / query / types 等目录)——逐一弄清:前端实际调用了哪些后端端点、"
+            "用什么 method / path / query / body 发起请求、以及拿到响应后**如何解析**"
+            "(读取哪些字段、期望的数据结构与分页信封 data/items/total 形状、字段命名与类型)。"
+            "再以「让后端响应严丝合缝地满足前端这些解析」为目标,结合下方契约与失败证据定位并修复后端。",
+        ]
+        if fe_digest:
+            fe_section.append(f"\n### `{_FE_REFERENCE_DIR}/` 中与接口调用/响应解析最相关的代码摘要(完整文件见该目录):")
+            fe_section.append(fe_digest)
+        parts.append("\n".join(fe_section))
+    else:
+        # Degraded path (no frontend run / unreadable zip): there is NO
+        # __frontend_src__/ directory this round. State it explicitly so the brief
+        # stays coherent with the prompt's "read the frontend source first" wording —
+        # Codex must not hunt for a directory that isn't there; 5xx + contract
+        # conformance still apply, judged from the failure evidence + contract below.
+        parts.append(
+            "## 前端真实源码:本轮未提供\n"
+            f"(无可用前端源码,工程根**没有** `{_FE_REFERENCE_DIR}/` 目录)。"
+            "提示词中「先读前端源码 / 通读 `__frontend_src__/`」相关步骤本轮不适用——"
+            "请直接依据下方契约与失败证据修复后端;**5xx 与接口契约仍须修复**。"
+        )
     # Smoke 5xx endpoints (route exists, handler crashes).
     fivexx = [r for r in (smoke_results or [])
               if isinstance(r, dict) and r.get("result") == "5xx"]

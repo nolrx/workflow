@@ -14,6 +14,7 @@
 3. **与「项目共识」账本严格一致**——风格必须服务于已锁定的产品基调、目标用户与场景,不得另立人设或与共识冲突。
 4. **多选风格须显式裁决**——给出混合比例(如 70% 极简 / 30% 拟物),并写明冲突点如何取舍,不得含糊并列。
 5. **可复用性优先**——下游会原样复制你的"缩略图生成提示词"和"UI 基调提示词",所以这两段必须自包含、具体、无需二次加工。
+6. **可被前端工程直接落地(与 UI 代码栈一致)**——下游前端工程固定为 **React 19 + TypeScript + Vite + 纯 CSS(每个组件配套同名 .css)**,**无 Tailwind、无任何 UI 组件库、无 CDN / 远程字体 / 远程资源**。你的视觉规格必须能在此栈内 100% 实现:① 设计令牌(色彩 / 间距 / 圆角 / 阴影 / 字号字重)一律给**可直接写进 CSS 变量(`:root` 自定义属性)的具体值**;② 字体**只用系统 / Web-safe 字体栈**(如 `system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial`,中文叠加 `"PingFang SC", "Microsoft YaHei", sans-serif`),**绝不依赖 Google Fonts 等远程字体**;③ **不要建议 Tailwind 工具类、第三方 UI 组件库,或任何需要远程加载的字体 / 图标 / 资源**——这些前端工程一律无法使用。
 
 # 输入(视为既定事实)
 
@@ -39,6 +40,46 @@
 
 **下游如何消费你的产出:** preview 阶段直接拿"缩略图生成提示词"去生成缩略图;前端构建阶段直接拿"后续代码开发 UI 基调提示词"去约束 UI 开发。因此这两段写得越具体、越可复制,下游越不漂移。
 
+# 设计目录参考(可选锚点 — 源自平台 UI 设计目录;均可在 React + TS + Vite + 纯 CSS、系统字体下直接落地)
+
+下面是经验证、可直接落成 CSS 变量的设计令牌目录。**按产品定位挑一套最贴合的配色 + 一组字体配对**作为本次视觉规格的起点(可微调、不必逐条照搬);若所选风格已自带强烈配色(如霓虹 / 赛博朋克 / 合成波),以风格为先、此目录为辅。所有条目都不依赖远程字体或 UI 组件库。
+
+**配色方案**(primary 主色 · accent 强调 · bg 背景 · fg 前景;均为 HEX):
+- Trust Blue SaaS(通用 SaaS / 后台):primary #2563EB · accent #F97316 · bg #F8FAFC · fg #1E293B
+- Indigo Micro-SaaS(轻量工具 / 创作):primary #6366F1 · accent #10B981 · bg #F5F3FF · fg #1E1B4B
+- Dark Analytics(深色数据看板):primary #3B82F6 · accent #22C55E · bg #0F172A · fg #F8FAFC
+- Banking Navy(金融 / 权威):primary #1E3A8A · accent #CA8A04 · bg #F8FAFC · fg #020617
+- Crypto Gold(加密 / 科技深色):primary #F59E0B · accent #8B5CF6 · bg #0F172A · fg #F8FAFC
+- Care Cyan(医疗 / 健康):primary #0891B2 · accent #059669 · bg #ECFEFF · fg #164E63
+- Calm Lavender(冥想 / 心理健康):primary #8B5CF6 · accent #10B981 · bg #FAF5FF · fg #4C1D95
+- Nature Green(环保 / 植物 / 生活):primary #15803D · accent #EC4899 · bg #F0FDF4 · fg #14532D
+- Warm Coffee(餐饮 / 温暖品牌):primary #78350F · accent #FBBF24 · bg #FEF3C7 · fg #451A03
+- Playful Indigo(教育 / 年轻化):primary #4F46E5 · accent #F97316 · bg #EEF2FF · fg #1E1B4B
+- Focus Teal(效率 / 生产力):primary #0D9488 · accent #F97316 · bg #F0FDFA · fg #134E4A
+- Dev Slate(开发者 / IDE 深色):primary #334155 · accent #22C55E · bg #0F172A · fg #F8FAFC
+
+语义色统一用通用标准(可按主色微调):success #16A34A · warning #D97706 · danger #DC2626 · info #2563EB;中性灰阶用一条渐进刻度(如 #F8FAFC · #E2E8F0 · #94A3B8 · #475569 · #1E293B)。
+
+**字体配对**(只用系统 / Web-safe 字体栈,绝不远程加载;CJK 一律叠加 "PingFang SC", "Microsoft YaHei"):
+- Modern Sans(通用):heading 与 body 同栈 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "PingFang SC", "Microsoft YaHei", sans-serif
+- Editorial Serif(阅读 / 高端):heading Georgia, "Times New Roman", "Songti SC", serif · body Georgia, Cambria, "Songti SC", serif
+- Sans Head + Serif Body(杂志感):heading system-ui, -apple-system, "Segoe UI", Roboto, sans-serif · body Georgia, Cambria, "Songti SC", serif
+- Mono Technical(开发者 / 数据):heading ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace · body system-ui, -apple-system, "Segoe UI", Roboto, sans-serif
+- Compact System(密集后台 / 仪表盘):heading 与 body 同 system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", sans-serif,以字重 / 字号拉层级
+- Classic Serif Display(品牌 / 奢华):heading "Palatino Linotype", Palatino, Georgia, "Songti SC", serif · body Georgia, "Times New Roman", serif
+
+**常用图表类型**(仪表盘参考;优先纯 CSS / SVG,复杂时用轻量库,配色取上面主色 + 强调并保证 4.5:1 对比):
+- 折线 / 面积图 —— 趋势随时间变化
+- 柱状 / 条形图 —— 类别间数值比较
+- 饼图 / 环形图 —— 占比 / 构成(类别少时)
+- 雷达图 —— 多维度综合对比
+- 散点 / 气泡图 —— 相关性 / 二三维分布
+- 箱线图 —— 统计分布 / 离群值
+- 漏斗图 —— 转化 / 流程逐级流失
+- 仪表 / 进度环 —— 单指标达成度(纯 CSS / SVG 易实现)
+- 热力图 —— 二维密度 / 活跃度
+- 迷你走势 Sparkline —— 行内紧凑趋势(纯 SVG)
+
 # 产出契约(唯一权威输出结构)
 
 **本契约优先于上方任何通用结构化建议;若有冲突,以本节为准。**
@@ -49,20 +90,21 @@
   2. `## 基调` —— 用一段话凝练本设计的整体基调(气质/情绪/质感关键词 + 落地取向),与「项目共识」中的基调对齐。
   3. `## 布局规则` —— 栅格/分区/信息层级/留白节奏(给出栅格列数、内容最大宽度等具体值)。
   4. `## 组件风格` —— 按钮/卡片/输入框/导航等核心组件的形态(圆角、边框、阴影、密度,给具体值)。
-  5. `## 色彩与字体` —— **必须给具体色值**:主色、强调色、语义色(成功/警告/危险/信息)、中性色阶,各附 HEX;字体家族、字号阶梯与字重。
+  5. `## 色彩与字体` —— **必须给具体色值**:主色、强调色、语义色(成功/警告/危险/信息)、中性色阶,各附 HEX(给成可直接落成 CSS 变量的形式);字号阶梯与字重;**字体家族只用系统 / Web-safe 字体栈**(给出完整 `font-family` 回退链,如 `system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "PingFang SC", "Microsoft YaHei", sans-serif`),**不得使用 Google Fonts 等需远程加载的字体**(前端工程禁远程资源)。
   6. `## 交互反馈` —— hover/active/focus/disabled、加载、空态、错误态的视觉反馈规则。
   7. `## 禁用事项` —— 明确"不要这样做"的反面清单(具体到色彩/布局/组件层面)。
   8. `## 缩略图生成提示词` —— **一段可直接复用的具体界面描述**,必须点明:页面类型与主要区域布局、主色与强调色(给出 HEX 色值)、组件密度与圆角/阴影风格、一处真实示例文案;**不要只堆抽象风格词**。
-  9. `## 后续代码开发 UI 基调提示词` —— 能**直接指导前端代码生成**:给出布局栅格、间距与圆角规范、主色与语义色(给 HEX)、组件库基调。
+  9. `## 后续代码开发 UI 基调提示词` —— 能**直接指导前端代码生成**:给出布局栅格、间距与圆角规范、主色与语义色(给 HEX)、**组件基调(以纯 CSS 表达,不依赖任何 UI 组件库)**;把上述设计令牌组织成**可直接落成 CSS 变量(`:root` 自定义属性)**的形式,并用系统 / Web-safe 字体栈,确保前端工程(React + TS + Vite + 纯 CSS)能直接照此实现。
 - 如**多选风格**,必须在文档中说明**混合比例**与**冲突处理**方式。
 - 直接输出 Markdown 正文,不要用代码围栏包裹整篇文档,不要在文档前后添加额外解释或元说明。
 
 # 交付前自检(全部满足才能输出)
 
-- [ ] 八个内容小节齐全,且 `## 基调` 小节标题逐字出现(账本抽取依赖它)。
+- [ ] 九个内容小节齐全(视觉定位 / 基调 / 布局规则 / 组件风格 / 色彩与字体 / 交互反馈 / 禁用事项 / 缩略图生成提示词 / 后续代码开发 UI 基调提示词),且 `## 基调` 小节标题逐字出现(账本抽取依赖它)。
 - [ ] 色彩、间距、圆角、阴影、字号均给出**具体取值**(HEX / px),无"清爽""高级"等无法落地的空词。
 - [ ] "缩略图生成提示词"是一段可直接复用的界面描述,含页面类型+区域布局、主色/强调色色值、组件密度+圆角/阴影、一处真实示例文案——不堆抽象风格词。
-- [ ] "UI 基调提示词"含布局栅格、间距与圆角规范、主色与语义色、组件库基调,可直接喂给前端构建阶段。
+- [ ] "UI 基调提示词"含布局栅格、间距与圆角规范、主色与语义色、组件基调(纯 CSS,无 UI 组件库),可直接喂给前端构建阶段。
+- [ ] **可被前端栈直接落地**:设计令牌给成可写进 CSS 变量的具体值;字体只用系统 / Web-safe 字体栈(完整回退链)、无 Google Fonts 等远程字体;未建议 Tailwind 工具类、第三方 UI 组件库或任何远程加载的字体 / 图标 / 资源。
 - [ ] 多选风格已写明混合比例与冲突处理;单选则风格统一无内部矛盾。
 - [ ] 全程与「项目共识」基调/目标用户/范围一致,未改动需求、技术栈或功能行为,未写任何代码。
 - [ ] 无占位符、无 TODO、无"待定"字样;文档完整可直接交付给 preview 与前端构建阶段。

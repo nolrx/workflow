@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useEffect, useRef } from "react"
 import { Link, useLocation, useNavigate } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 import {
@@ -9,6 +9,7 @@ import {
   ChevronDown,
   ScrollText,
   CornerDownRight,
+  Loader2,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -33,6 +34,9 @@ interface SidebarContentProps {
   onNavigate?: () => void
 }
 
+/** How many sessions to fetch per page (initial load + each scroll page). */
+const SESSIONS_PAGE_SIZE = 15
+
 export function SidebarContent({ onNavigate }: SidebarContentProps) {
   const location = useLocation()
   const navigate = useNavigate()
@@ -42,18 +46,48 @@ export function SidebarContent({ onNavigate }: SidebarContentProps) {
   const codeProjects = useCodeStore((s) => s.projects)
   const currentProject = useCodeStore((s) => s.project)
   const fetchCodeProjects = useCodeStore((s) => s.fetchProjects)
+  const hasMoreProjects = useCodeStore((s) => s.hasMoreProjects)
+  const isLoadingProjects = useCodeStore((s) => s.isLoadingProjects)
 
   const balance = useCreditStore((s) => s.balance)
   const fetchBalance = useCreditStore((s) => s.fetchBalance)
   const isAdmin = useAuthStore((s) => s.user?.role === "admin")
 
+  // Lazy-load: fetch only the first page on mount; later pages stream in via
+  // the infinite-scroll observer below — we never load every session at once.
   useEffect(() => {
-    void fetchCodeProjects(15, 0)
+    void fetchCodeProjects(SESSIONS_PAGE_SIZE, 0)
   }, [fetchCodeProjects])
 
   useEffect(() => {
     void fetchBalance()
   }, [fetchBalance])
+
+  // Infinite scroll: when the sentinel at the list's bottom enters the
+  // scroll viewport, append the next page. Re-created on each length change so
+  // a still-visible sentinel keeps chaining until it scrolls out of view or
+  // the server reports no more. Concurrent fetches are de-duped in the store.
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const sentinelRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    const root = scrollRef.current
+    const sentinel = sentinelRef.current
+    if (!root || !sentinel || !hasMoreProjects) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          void fetchCodeProjects(
+            SESSIONS_PAGE_SIZE,
+            useCodeStore.getState().projects.length
+          )
+        }
+      },
+      { root, rootMargin: "120px" }
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [hasMoreProjects, codeProjects.length, fetchCodeProjects])
 
   const untitled = t("sidebar.untitled")
   const sessions: SessionItem[] = codeProjects.map((p) => ({
@@ -112,15 +146,17 @@ export function SidebarContent({ onNavigate }: SidebarContentProps) {
       )}
 
       {/* Recent sessions */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
         <div className="px-3 py-2 text-xs font-medium uppercase text-muted-foreground">
           {t("sidebar.recentSessions")}
         </div>
         <nav className="space-y-0">
           {sessions.length === 0 ? (
-            <p className="px-3 py-3 text-sm text-muted-foreground">
-              {t("sidebar.noSessions")}
-            </p>
+            !isLoadingProjects && (
+              <p className="px-3 py-3 text-sm text-muted-foreground">
+                {t("sidebar.noSessions")}
+              </p>
+            )
           ) : (
             sessions.map((session) => {
               const isActive = location.pathname.includes(session.id)
@@ -143,6 +179,13 @@ export function SidebarContent({ onNavigate }: SidebarContentProps) {
             })
           )}
         </nav>
+        {/* Sentinel + spinner that drive/indicate infinite-scroll loading. */}
+        {hasMoreProjects && <div ref={sentinelRef} className="h-px" />}
+        {isLoadingProjects && (
+          <div className="flex items-center justify-center py-3 text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+          </div>
+        )}
       </div>
 
       {/* Settings nav */}

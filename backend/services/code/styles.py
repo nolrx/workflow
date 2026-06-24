@@ -3,7 +3,6 @@ UI style catalog for software creation.
 """
 from dataclasses import asdict, dataclass
 
-
 STYLE_SOURCE_URL = "https://www.uiprompt.site/zh/styles"
 
 
@@ -76,12 +75,13 @@ UI_STYLES = [
     ),
     UIStyle(
         id="mobile-native",
-        name="Mobile Native",
-        description="移动端原生产品感，适合先移动后桌面的应用。",
+        name="Mobile-First Web",
+        description="移动优先的响应式 Web 视感:拇指友好、底部操作与原生式列表,以响应式 Web 实现。",
         prompt=(
-            "Use a mobile-native app style: thumb-friendly controls, bottom actions, "
-            "native list patterns, clear empty states, high legibility, and compact "
-            "screen-by-screen progression."
+            "Use a mobile-first responsive web style: thumb-friendly controls, bottom "
+            "action bars, native-like list patterns, clear empty states, high legibility, "
+            "and compact screen-by-screen progression — delivered as a responsive web app "
+            "(not a native binary)."
         ),
     ),
     UIStyle(
@@ -826,13 +826,13 @@ UI_STYLES = [
     ),
     UIStyle(
         id="utility-first",
-        name="Utility First",
-        description="实用优先:Tailwind 式工具类组合、克制定制与高可维护,适合快速迭代的产品。",
+        name="Design Tokens",
+        description="系统化设计令牌:一致的间距/字号/圆角刻度与克制定制,高可维护,适合快速迭代的产品(以纯 CSS 变量实现,不依赖 Tailwind)。",
         prompt=(
-            "Use a utility-first style: composition from small reusable utility "
-            "classes, consistent spacing and typography scales, minimal custom CSS, "
-            "systematic design tokens, and pragmatic, highly maintainable component "
-            "patterns."
+            "Use a systematic design-token style: consistent spacing, type and radius "
+            "scales, a small set of reusable design tokens, restrained custom styling, "
+            "and pragmatic, highly maintainable component patterns — expressed in plain "
+            "CSS custom properties, without any utility-class framework."
         ),
     ),
     UIStyle(

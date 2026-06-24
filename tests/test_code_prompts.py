@@ -38,3 +38,21 @@ def test_manifest_files_all_exist():
     mod = _load_validator()
     missing = [name for name in mod.MANIFEST if not (mod.PROMPT_DIR / name).is_file()]
     assert not missing, f"manifest references missing prompt files: {missing}"
+
+
+def test_cross_prompt_semantics():
+    """Cross-file semantic invariants hold (login token at data.token, frontend
+    allows same-origin API, critic is fed its anchor sources). These catch
+    contradictions BETWEEN prompts that per-file token checks pass right over."""
+    mod = _load_validator()
+    errs = mod.cross_prompt_checks(mod._load_all_texts())
+    assert not errs, "cross-prompt semantic violations:\n" + "\n".join(errs)
+
+
+def test_structural_sections():
+    """Fixed-section prompts list every `## heading` in order and the self-check
+    states the matching section count (catches the style 9-vs-8 self-contradiction
+    the per-file token checks miss)."""
+    mod = _load_validator()
+    errs = mod.structural_checks(mod._load_all_texts())
+    assert not errs, "structural section violations:\n" + "\n".join(errs)

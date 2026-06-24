@@ -370,6 +370,8 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
             review = service.review_project(
                 source_digest=_source_digest(src_files),
                 contract_summary=contract_block,
+                requirements_doc=project.requirements_doc or "",
+                development_flow=project.development_flow or "",
             )
             if review:
                 verdict = str(review.get("verdict") or "").upper()

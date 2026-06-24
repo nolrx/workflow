@@ -144,16 +144,7 @@ class CodeGenerationService:
             context_ledger=context_ledger,
             requirement=requirement,
         )
-        fallback = (
-            "# 软件需求文档\n\n"
-            "## 产品定位\n"
-            f"围绕用户提出的需求构建一个可快速验证的软件产品：{requirement}\n\n"
-            "## 目标用户\n- 需要快速获得产品效果和开发方向的创业者、产品经理、设计师或开发者。\n\n"
-            "## 核心场景\n- 用户输入业务需求。\n- 系统生成需求文档、开发流程和开发分文档。\n- 用户逐步编辑确认后生成 UI 风格缩略图和应用基调。\n\n"
-            "## 功能范围\n- 需求文档生成\n- 开发流程生成\n- 文档拆分与编辑\n- 场景化提示词专家建议\n- 多风格 UI 缩略图生成\n\n"
-            "## 待确认问题\n- 目标平台是 Web、移动端还是多端？\n- 是否需要真实代码生成和部署能力？\n"
-        )
-        return prompt, fallback
+        return prompt, self._requirements_fallback(requirement)
 
     def generate_requirements(self, requirement: str, on_model_call=None, context_ledger: str = "") -> str:
         """Generate a product requirements document from the user input."""
@@ -501,18 +492,7 @@ class CodeGenerationService:
             context_ledger=context_ledger,
             requirements_doc=requirements_doc,
         )
-        fallback = (
-            "# 软件开发流程\n\n"
-            "## 技术假设\n- 前端使用 React/TypeScript，后端使用 Flask，数据存储使用现有数据库。\n\n"
-            "## 模块拆分\n- 需求输入与项目创建\n- 需求文档编辑\n- 开发流程生成\n- 开发文档拆分\n- UI 风格选择与预览\n- UI 基调确认\n\n"
-            "## 开发里程碑\n"
-            "1. 完成项目模型和 API。\n"
-            "2. 完成单一主界面工作流。\n"
-            "3. 接入风格提示词和缩略图生成。\n"
-            "4. 完成用户确认与验收状态。\n\n"
-            "## 验收标准\n- 用户可以从一句需求推进到可编辑文档和已确认 UI 基调。\n"
-        )
-        return prompt, fallback
+        return prompt, self._development_flow_fallback()
 
     def generate_development_flow(
         self, requirements_doc: str, on_model_call=None, context_ledger: str = ""
@@ -839,7 +819,77 @@ class CodeGenerationService:
             "order_index": index,
         }
 
+    @staticmethod
+    def _requirements_fallback(requirement: str) -> str:
+        """Minimal but contract-shaped requirements doc for degraded mode (no
+        provider configured / model failure). Mirrors requirements_prompt's
+        10-section + FR/NFR contract so the downstream flow/documents stages don't
+        choke on a malformed fallback. Generic-but-legal, and narrows the target
+        to a Web app (the only form the implementation stage can deliver) — it must
+        NOT promise a platform the pipeline can't build."""
+        req = (requirement or "").strip() or "用户未提供详细需求"
+        return (
+            "# 软件需求文档\n\n"
+            f"## 产品定位\n围绕用户原始需求构建一个可快速验证的 Web 应用：{req}\n\n"
+            "## 目标用户\n- 提出该需求、需要尽快看到可用产品形态的业务方与最终使用者。\n\n"
+            "## 核心场景\n- 用户登录后进入应用，完成其需求所描述的核心任务，并查看与管理产生的数据。\n\n"
+            "## 功能范围\n"
+            "- FR1 提供需求所描述的核心业务主流程，可创建并提交关键数据。\n"
+            "- FR2 提供已创建数据的列表、详情查看与编辑、删除。\n"
+            "- FR3 提供账户登录与基于登录态的个人数据隔离。\n\n"
+            "## 用户流程\n- 登录 → 进入主界面 → 创建 / 查看核心数据 → 编辑或删除 → 退出。\n\n"
+            "## 权限与账户\n- 需要账户体系：用户登录后仅可访问归属本人的数据。\n\n"
+            "## 数据对象\n- 用户（User）：账号与登录凭据。\n- 核心业务实体（按需求命名）：归属用户，含创建 / 更新时间。\n\n"
+            "## 非功能要求\n"
+            "- NFR1 关键操作响应及时，列表分页可用。\n"
+            "- NFR2 服务端对所有输入做权威校验，账户数据严格按用户隔离。\n\n"
+            "## 技术架构建议\n"
+            "- 应用形态：Web 单页应用（本平台仅交付 Web 应用）。\n"
+            "- 前端：React 19 + TypeScript + Vite（推荐）。\n"
+            "- 后端：轻量 REST 后端（推荐(待确认)：具体语言 / 框架在契约阶段沿用并锁定）。\n"
+            "- 数据存储：关系型数据库（推荐）。\n\n"
+            "## 边界与待确认问题\n"
+            "- 待确认：核心业务实体的确切字段与状态机。\n"
+            "- 待确认：是否需要多角色权限。\n"
+            "- 说明：本文为模型不可用时的降级最小文档，建议恢复 AI 后重新生成以贴合真实需求。\n"
+        )
+
+    @staticmethod
+    def _development_flow_fallback() -> str:
+        """Minimal but contract-shaped development-flow doc for degraded mode.
+        Mirrors development_flow_prompt's 10-section + M/MS traceability contract;
+        no hard-coded Flask — the stack stays generic and is locked at the
+        contract stage (so the fallback can't silently re-decide the backend)."""
+        return (
+            "# 软件开发流程\n\n"
+            "## 技术假设\n- 沿用需求文档技术方向：Web 单页应用，前端 React 19 + TypeScript + Vite；后端为轻量 REST 服务（具体语言 / 框架在契约阶段沿用并锁定）；关系型数据库存储。\n\n"
+            "## 模块拆分\n"
+            "- M1 账户与鉴权（覆盖 FR3, NFR2）：登录、登录态校验、按用户隔离数据。\n"
+            "- M2 核心业务（覆盖 FR1, FR2, NFR1）：核心实体的增删改查与列表分页。\n"
+            "- M3 数据与持久化（覆盖 FR1, FR2）：实体建表、读写与归属约束。\n\n"
+            "## 数据设计\n- 用户表与核心业务实体表（服务 M1/M2/M3）：字符串主键、含创建 / 更新时间、业务实体归属用户。\n\n"
+            "## 接口设计\n- 登录、当前用户、核心实体列表 / 详情 / 创建 / 更新 / 删除（所属 M1/M2）。\n\n"
+            "## 前端页面/状态\n- 登录页、主列表页、详情 / 编辑页（覆盖 FR1, FR2, FR3，所属 M1/M2）；状态含当前用户、列表数据、表单草稿。\n\n"
+            "## 后端服务\n- 提供上述 REST 接口，服务端权威校验与按用户过滤（所属 M1/M2/M3）。\n\n"
+            "## AI/提示词链路\n- 本降级文档暂不涉及 AI 链路；若需求实际涉及，请恢复 AI 后重新生成以细化。\n\n"
+            "## 开发里程碑\n"
+            "- MS1（覆盖 FR3）：完成账户与登录态。\n"
+            "- MS2（覆盖 FR1, FR2）：完成核心业务增删改查与列表。\n"
+            "- MS3（覆盖 FR1, FR2, NFR1）：完成分页、校验与数据归属，联调通过。\n\n"
+            "## 验收标准\n- 用户可登录并仅看到本人数据；核心实体可创建、查看、编辑、删除；列表分页可用（对应 FR1, FR2, FR3, NFR1）。\n\n"
+            "## 风险清单\n- 模型不可用导致本流程为最小降级版：建议恢复 AI 后重新生成以贴合真实需求。\n"
+        )
+
     def _fallback_documents(self, requirements_doc: str, development_flow: str) -> list[dict]:
+        """Degraded-mode split documents — the SIX baseline doc types the
+        document_split contract mandates (product_spec / frontend_spec /
+        backend_spec / data_model / prompt_spec / acceptance_plan). The previous
+        fallback emitted a non-baseline ``development_plan`` and OMITTED
+        ``data_model``, which broke the 'each doc feeds the next stage' contract;
+        this returns exactly the six, with ``development_flow`` feeding the
+        engineering specs as context."""
+        flow_note = (development_flow or "").strip()
+        flow_ctx = f"\n\n## 上游开发流程要点\n{flow_note[:400]}" if flow_note else ""
         return [
             {
                 "document_type": "product_spec",
@@ -849,38 +899,38 @@ class CodeGenerationService:
                 "order_index": 0,
             },
             {
-                "document_type": "development_plan",
-                "title": "开发流程文档",
-                "content": development_flow,
-                "prompt_expert": "你是技术规划提示词专家，请把开发流程拆成低风险、可连续实现的工程任务。",
-                "order_index": 1,
-            },
-            {
                 "document_type": "frontend_spec",
                 "title": "前端实现文档",
-                "content": "## 页面\n- 主创作页\n- 文档编辑区\n- 风格预览区\n\n## 状态\n- 当前项目\n- 当前步骤\n- 文档草稿\n- 已选风格\n",
-                "prompt_expert": "你是前端提示词专家，请强调 React 组件拆分、状态管理、响应式布局和可编辑体验。",
-                "order_index": 2,
+                "content": "## 页面\n- 登录页\n- 核心业务列表页\n- 详情 / 编辑页\n\n## 状态\n- 当前登录用户\n- 列表数据与分页\n- 表单草稿\n",
+                "prompt_expert": "你是前端提示词专家，请强调 React 组件拆分、状态管理、响应式布局与按契约调用后端。",
+                "order_index": 1,
             },
             {
                 "document_type": "backend_spec",
                 "title": "后端实现文档",
-                "content": "## API\n- 创建项目\n- 更新文档\n- 生成开发流程\n- 生成风格提示词\n- 生成预览图\n\n## 约束\n- 复用认证、团队和积分体系。\n",
-                "prompt_expert": "你是后端提示词专家，请强调 API 契约、数据一致性、权限校验和错误响应。",
+                "content": "## API\n- 登录与当前用户\n- 核心实体的列表 / 详情 / 创建 / 更新 / 删除\n\n## 约束\n- 统一响应信封与错误码、服务端权威校验、按用户隔离数据。" + flow_ctx,
+                "prompt_expert": "你是后端提示词专家，请强调 API 契约、数据一致性、鉴权与权威校验、统一错误响应。",
+                "order_index": 2,
+            },
+            {
+                "document_type": "data_model",
+                "title": "数据模型文档",
+                "content": "## 实体\n- 用户（users）：字符串主键、账号、登录凭据、created_at/updated_at。\n- 核心业务实体：字符串主键、归属用户外键、业务字段、created_at/updated_at。\n\n## 约束\n- 主键统一字符串/UUID；业务实体按用户隔离；关键字段建索引。\n",
+                "prompt_expert": "你是数据建模提示词专家，请定义实体、字段、关系、主键与索引，保证可迁移、可扩展。",
                 "order_index": 3,
             },
             {
                 "document_type": "prompt_spec",
                 "title": "AI 提示词链路文档",
-                "content": "## 链路\n用户需求 -> 需求文档 -> 开发流程 -> 分文档 -> 风格文档 -> 缩略图提示词 -> UI 基调。\n",
-                "prompt_expert": "你是 AI 提示词专家，请为每个代码生成场景定义角色、输入、输出格式和质量约束。",
+                "content": "## 链路\n- 本产品若涉及 AI 能力，在此定义每个 AI 场景的角色、输入、输出格式与质量约束；若不涉及，说明本产品无 AI 链路。\n",
+                "prompt_expert": "你是 AI 提示词专家，请为每个 AI 场景定义角色、输入、输出格式与质量约束。",
                 "order_index": 4,
             },
             {
                 "document_type": "acceptance_plan",
                 "title": "测试验收文档",
-                "content": "## 验收\n- 每一步可生成、可编辑、可保存。\n- 风格多选后能生成风格文档。\n- 缩略图确认后成为 UI 基调。\n",
-                "prompt_expert": "你是测试提示词专家，请生成覆盖主流程、异常状态和权限边界的验收用例。",
+                "content": "## 验收\n- 用户可登录并仅看到本人数据。\n- 核心实体可创建、查看、编辑、删除，列表分页可用。\n- 所有接口走统一响应信封，异常返回规范错误码。\n",
+                "prompt_expert": "你是测试提示词专家，请生成覆盖主流程、异常状态与权限边界的验收用例。",
                 "order_index": 5,
             },
         ]

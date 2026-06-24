@@ -308,6 +308,34 @@ body {
   min-height: 100dvh;
 }
 
+/* Theme-aware, slim scrollbars that adapt to the active color theme. */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in oklch, var(--color-muted-foreground) 60%, transparent);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-primary);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--color-muted-foreground) 60%, transparent) transparent;
+}
+
 /* Mobile sidebar drawer: smoother slide + staggered menu reveal. */
 .mobile-sidebar-sheet[data-state="open"] {
   animation-duration: 0.45s;

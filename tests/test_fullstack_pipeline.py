@@ -454,15 +454,56 @@ def test_smoke_test_5xx_fails_but_conn_error_is_inconclusive(monkeypatch):
     assert any(r.get("result") == "5xx" for r in results2)
 
 
-def test_deploy_phase_progress_is_monotonic_six_steps():
+def test_deploy_phase_progress_is_monotonic_seven_steps():
     """The deploy workflow's phase→progress map advances monotonically across the
-    6 CI stages (health and smoke occupy DISTINCT slots — no stuck progress bar)."""
+    7 CI stages (health, smoke and the integration test occupy DISTINCT slots —
+    no stuck progress bar)."""
     from backend.services.agent.workflows import code_fullstack_deploy_workflow as wf
 
-    assert wf.TOTAL_STEPS == 6
+    assert wf.TOTAL_STEPS == 7
     pp = wf._PHASE_PROGRESS
-    assert pp["provision"] < pp["migrate"] < pp["build"] < pp["start"] < pp["health"] < pp["smoke"]
-    assert pp["smoke"] == wf.TOTAL_STEPS == pp["done"]
+    assert (pp["provision"] < pp["migrate"] < pp["build"] < pp["start"]
+            < pp["health"] < pp["smoke"] < pp["itest"])
+    assert pp["itest"] == wf.TOTAL_STEPS == pp["done"]
+
+
+# --- deploy-time backend auto-repair: promote (clean source collection) -------
+def test_is_excluded_path():
+    from backend.services.code import deploy_service as ds
+
+    assert ds._is_excluded_path("node_modules/lib/index.js") is True
+    assert ds._is_excluded_path("target/app.jar") is True
+    assert ds._is_excluded_path("__pycache__/m.cpython-311.pyc") is True
+    assert ds._is_excluded_path("src/App.class") is True   # excluded suffix
+    assert ds._is_excluded_path("src/main.py") is False
+    assert ds._is_excluded_path("Dockerfile") is False
+    assert ds._is_excluded_path("README.md") is False
+
+
+def test_collect_repaired_source_excludes_build_output(tmp_path):
+    """Promotion must package source ONLY — never the in-container native build's
+    node_modules / target / __pycache__ pollution — while keeping every original
+    file plus any new source the repair agent created."""
+    from backend.services.code import deploy_service as ds
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_bytes(b"print('fixed')")  # original, edited
+    (tmp_path / "Dockerfile").write_bytes(b"FROM python")           # original
+    (tmp_path / "src" / "util.py").write_bytes(b"x = 1")            # NEW source file
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / "lib.js").write_bytes(b"junk")     # build pollution
+    (tmp_path / "__pycache__").mkdir()
+    (tmp_path / "__pycache__" / "main.cpython-311.pyc").write_bytes(b"\x00")
+
+    original = {"src/main.py", "Dockerfile", "deleted.py"}  # deleted.py no longer on disk
+    files = ds._collect_repaired_source(tmp_path, original)
+
+    assert files["src/main.py"] == b"print('fixed')"
+    assert "Dockerfile" in files
+    assert "src/util.py" in files                       # new source picked up
+    assert "node_modules/lib.js" not in files           # build output excluded
+    assert not any(k.endswith(".pyc") for k in files)   # bytecode excluded
+    assert "deleted.py" not in files                    # gone from workdir → not collected
 
 
 # --- trio idempotency (double-submit guard) ----------------------------------

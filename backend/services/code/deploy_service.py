@@ -9,6 +9,9 @@ rollback on any failure (so a half-deployed app never lingers):
       → docker build the generated backend image (its OWN Dockerfile)
       → docker run a long-lived container on the shared app network
       → health-check  GET http://app-<pid>:<port>/health
+      → contract smoke   (sampled GETs must not 5xx)
+      → integration test (pull FE call-code + contract → AI plan → EXECUTE against
+                          the live container; deterministic, tiered hard gate)
       → register the deployment  (the /app/<pid>/api reverse proxy resolves here)
 
 The backend container joins the same docker network as this platform's backend,
@@ -112,6 +115,29 @@ def _remove_container(name: str) -> None:
         pass
 
 
+def _run_container(container: str, image_tag: str, prov) -> subprocess.CompletedProcess:
+    """(Re)start the backend container from ``image_tag`` on the shared network with
+    the injected runtime env. Removes any existing container first so it is safe to
+    call both for the initial start and to swap in a repaired image."""
+    _remove_container(container)
+    run_args = [
+        "run", "-d", "--name", container,
+        "--network", APP_NETWORK,
+        "--restart", "unless-stopped",
+        "--memory", CONTAINER_MEM,
+        "-e", f"PORT={BACKEND_PORT}",
+        "-e", "NODE_ENV=production",
+    ]
+    if prov.database_url:
+        run_args += ["-e", f"DATABASE_URL={prov.database_url}"]
+    if prov.redis_url:
+        run_args += ["-e", f"REDIS_URL={prov.redis_url}"]
+    if prov.redis_prefix:
+        run_args += ["-e", f"REDIS_PREFIX={prov.redis_prefix}"]
+    run_args += [image_tag]
+    return _docker(run_args, 120)
+
+
 # --- artifact loading --------------------------------------------------------
 def _latest_run(project_id: str, user_id: str, workflow: str) -> Optional[AgentRun]:
     return (
@@ -141,6 +167,51 @@ def _load_backend_source(run: AgentRun) -> dict:
                 continue
             files[name] = archive.read(name)
     return files
+
+
+def _load_zip_artifact(art: Optional[AgentArtifact]) -> dict:
+    """Unzip a source-zip artifact into ``{rel: bytes}`` (empty on any problem)."""
+    if not art or not art.storage_path:
+        return {}
+    abs_path = artifact_abs_path(art.storage_path)
+    if not os.path.exists(abs_path):
+        return {}
+    files: dict[str, bytes] = {}
+    try:
+        with zipfile.ZipFile(abs_path, "r") as archive:
+            for name in archive.namelist():
+                if name.endswith("/"):
+                    continue
+                files[name] = archive.read(name)
+    except Exception:  # noqa: BLE001 — corrupt/unreadable zip → caller falls back
+        logger.warning("could not read source zip artifact %s", art.id, exc_info=True)
+        return {}
+    return files
+
+
+def _latest_repaired_artifact(project_id: str, user_id: str) -> Optional[AgentArtifact]:
+    """The most recent PROMOTED (deploy-repaired) backend source zip for a project,
+    owned by ``user_id``. Promotion publishes it on the deploy run with this type."""
+    return (
+        AgentArtifact.query.filter_by(
+            domain_ref_type="code_backend_project_repaired_zip", domain_ref_id=project_id
+        )
+        .join(AgentRun, AgentArtifact.run_id == AgentRun.id)
+        .filter(AgentRun.user_id == user_id)
+        .order_by(AgentArtifact.created_at.desc())
+        .first()
+    )
+
+
+def _resolve_backend_source(project_id: str, user_id: str, backend_run: AgentRun) -> dict:
+    """Backend source to deploy. Prefers the latest promoted (deploy-repaired) zip so
+    a re-deploy builds from the FIXED code; falls back to the generation run's zip."""
+    rep = _latest_repaired_artifact(project_id, user_id)
+    if rep:
+        files = _load_zip_artifact(rep)
+        if files:
+            return files
+    return _load_backend_source(backend_run)
 
 
 def _load_init_sql(run: Optional[AgentRun]) -> str:
@@ -195,6 +266,7 @@ def deploy(
     team_id: Optional[str] = None,
     on_phase: Optional[Callable[[str, str, dict], None]] = None,
     is_cancelled: Optional[Callable[[], bool]] = None,
+    run_id: Optional[str] = None,
 ) -> dict:
     """Atomically deploy the generated full-stack app. Returns a result dict.
 
@@ -220,7 +292,9 @@ def deploy(
     frontend_run = _latest_run(project.id, user_id, _FRONTEND_WORKFLOW)
     middleware_run = _latest_run(project.id, user_id, _MIDDLEWARE_WORKFLOW)
 
-    source = _load_backend_source(backend_run)
+    # Prefer the latest PROMOTED (deploy-repaired) backend source so a re-deploy
+    # builds from the fixed code; fall back to the backend-generation run's zip.
+    source = _resolve_backend_source(project.id, user_id, backend_run)
     if not source:
         return {"success": False, "error": "后端源码产物缺失,无法部署", "status": DeploymentStatus.FAILED}
 
@@ -237,6 +311,12 @@ def deploy(
 
     rollback: list[Callable[[], None]] = []
     workdir: Optional[Path] = None
+    # Auto-repair (best-effort) bookkeeping: the image actually running (may advance
+    # to a repaired tag), how many itest repair rounds landed, and the agent's
+    # per-round fix notes — used to PROMOTE the repaired source after a green deploy.
+    running_image = image_tag
+    itest_repaired_rounds = 0
+    fix_notes: list[str] = []
     try:
         _ensure_network()
 
@@ -336,23 +416,7 @@ def deploy(
         dep.status = DeploymentStatus.STARTING
         db.session.commit()
         phase("start", "启动后端容器并接入共享网络")
-        _remove_container(container)  # clear any stale container from a prior deploy
-        run_args = [
-            "run", "-d", "--name", container,
-            "--network", APP_NETWORK,
-            "--restart", "unless-stopped",
-            "--memory", CONTAINER_MEM,
-            "-e", f"PORT={BACKEND_PORT}",
-            "-e", "NODE_ENV=production",
-        ]
-        if prov.database_url:
-            run_args += ["-e", f"DATABASE_URL={prov.database_url}"]
-        if prov.redis_url:
-            run_args += ["-e", f"REDIS_URL={prov.redis_url}"]
-        if prov.redis_prefix:
-            run_args += ["-e", f"REDIS_PREFIX={prov.redis_prefix}"]
-        run_args += [image_tag]
-        run = _docker(run_args, 120)
+        run = _run_container(container, image_tag, prov)  # clears any stale container first
         if run.returncode != 0:
             return _fail(dep, rollback, f"后端容器启动失败:{(run.stderr or run.stdout)[-600:]}", narrate=phase)
         rollback.append(lambda: _remove_container(container))
@@ -398,11 +462,12 @@ def deploy(
             return _fail(dep, rollback, f"后端健康检查未通过:{detail}", narrate=phase)
         dep.health = "healthy"
 
-        # --- 6. Smoke test (contract liveness) -------------------------------
+        # --- 6. Smoke test (contract liveness — non-blocking signal) ---------
         # /health proved the process is up; now hit a few idempotent no-param GET
-        # endpoints from the shared contract to catch obvious route/contract drift
-        # before exposing the app. Only a 5xx rolls back (a slow cold first hit /
-        # connection timeout is recorded but tolerated — /health already passed).
+        # endpoints to catch obvious route/contract drift. NON-BLOCKING: a 5xx here
+        # is NOT a rollback — the deeper integration test (next) tests a superset and
+        # will AUTO-REPAIR the backend, and per the best-effort-proceed policy a
+        # residual interface defect ships with a warning rather than blocking the user.
         if cancelled():
             return _abort(dep, rollback, "已取消")
         phase("smoke", "契约冒烟:抽样调用幂等 GET 端点确认路由可达")
@@ -410,11 +475,140 @@ def deploy(
         dep.set_detail({**dep.get_detail(), "smoke": smoke_detail})
         db.session.commit()
         if not smoke_ok:
-            logs = _docker(["logs", "--tail", "60", container], 30)
-            dep.set_detail({**dep.get_detail(), "container_logs": (logs.stdout or logs.stderr or "")[-2000:]})
+            phase("smoke", f"⚠ 契约冒烟发现 5xx,转入接口联调 + 自动修复处理:{smoke_detail}",
+                  {"smoke": smoke_detail})
+        else:
+            phase("smoke", "契约冒烟通过(抽样端点路由可达)", {"smoke": smoke_detail})
+
+        # --- 6a. Frontend↔backend integration test + auto-repair -------------
+        # Pull the generated FRONTEND's actual API-calling code + the shared contract,
+        # distill a TARGETED test plan (which endpoints the frontend really calls and
+        # which response fields it parses), then EXECUTE that plan against the live
+        # container and DETERMINISTICALLY judge it. On a `critical` deterministic
+        # failure (5xx / JSON the frontend can't parse / missing required field / auth
+        # 5xx), enter an AUTO-REPAIR ladder: self-heal the BACKEND ONLY to conform to
+        # the contract, rebuild + restart + re-test (≤ APP_ITEST_REPAIRS rounds). The
+        # frontend dist is NEVER touched (it was built against the contract). Per the
+        # best-effort-proceed policy this stage NEVER rolls a health-green deploy back
+        # — an unfixable residual ships with a warning. A harness bug fails OPEN.
+        if cancelled():
+            return _abort(dep, rollback, "已取消")
+        itest: dict = {}
+        itest_plan = None
+        try:
+            from backend.services.code.fullstack import integration_test_service
+
+            phase("itest", "前后端接口联调:拉取前端调用代码 + 共享契约,生成并执行全面接口测试")
+            itest = integration_test_service.run_integration_tests(
+                project_id=project.id, user_id=user_id, team_id=team_id,
+                container=container, port=BACKEND_PORT, frontend_run=frontend_run,
+                run_id=run_id, cancelled=cancelled,
+            )
+            itest_plan = itest.get("plan")
+        except Exception:  # noqa: BLE001 — harness bug must NEVER sink a green deploy
+            try:
+                db.session.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            logger.warning("integration test harness failed (fail-open)", exc_info=True)
+            phase("itest", "接口联调步骤自身异常,已跳过(不阻断部署;health 已通过)")
+            itest = {}
+        if itest:
+            dep.set_detail({**dep.get_detail(), "integration_test": itest.get("summary")})
             db.session.commit()
-            return _fail(dep, rollback, f"契约冒烟未通过(抽样端点返回 5xx):{smoke_detail}", narrate=phase)
-        phase("smoke", "契约冒烟通过(抽样端点路由可达)", {"smoke": smoke_detail})
+
+        # --- 6a-bis. Backend-only auto-repair ladder (best-effort) -----------
+        max_itest_repairs = int(os.getenv("APP_ITEST_REPAIRS", "2"))
+        if itest.get("gate") == "fail" and max_itest_repairs > 0 and not cancelled():
+            try:
+                from backend.services.code.fullstack import (
+                    contract_service,
+                    integration_test_service,
+                )
+                _row = contract_service.get_ledger(project.id)
+                contract_block = integration_test_service._render_contract_block(
+                    _row.get_api_contract() if _row else {}
+                )
+                round_n = 0
+                while (itest.get("gate") == "fail" and round_n < max_itest_repairs
+                       and not cancelled()):
+                    round_n += 1
+                    logs = _docker(["logs", "--tail", "120", container], 30)
+                    digest = integration_test_service.format_failures_for_repair(
+                        itest, contract_block=contract_block,
+                        logs=(logs.stdout or logs.stderr or ""),
+                    )
+                    phase("itest", f"接口联调发现确定性失败,启动后端定向修复(第 {round_n}/{max_itest_repairs} 轮,只改后端、不动前端)")
+                    rep = get_backend_project_service().repair_contract(
+                        workdir=str(workdir), failures_digest=digest,
+                        on_log=lambda m: phase("itest", m), is_cancelled=cancelled,
+                    )
+                    if not rep.get("ran"):
+                        phase("itest", "AI 修复不可用(未配置密钥),按尽力放行继续")
+                        break
+                    if rep.get("summary"):
+                        fix_notes.append(rep["summary"])
+                    new_tag = f"{image_tag}-itest{round_n}"
+                    build = _docker(["build", "-t", new_tag, str(workdir)], BUILD_TIMEOUT)
+                    if build.returncode != 0:
+                        phase("itest", "修复后镜像重建失败,保留修复前容器,停止修复(尽力放行)")
+                        break
+                    rollback.append(lambda t=new_tag: _docker(["image", "rm", "-f", t], 60))
+                    # Swap the container to the repaired image; if it won't start /
+                    # go healthy, restore the last-known-good image so repair never
+                    # leaves the app worse than before.
+                    swap = _run_container(container, new_tag, prov)
+                    healthy = False
+                    if swap.returncode == 0:
+                        healthy, hdetail = _wait_healthy(container, BACKEND_PORT, HEALTH_TIMEOUT, cancelled)
+                    if not healthy:
+                        _run_container(container, running_image, prov)
+                        _wait_healthy(container, BACKEND_PORT, HEALTH_TIMEOUT, cancelled)
+                        phase("itest", "修复后容器无法启动/健康检查未过,已恢复修复前镜像,停止修复(尽力放行)")
+                        break
+                    running_image = new_tag
+                    itest_repaired_rounds = round_n
+                    itest = integration_test_service.run_integration_tests(
+                        project_id=project.id, user_id=user_id, team_id=team_id,
+                        container=container, port=BACKEND_PORT, frontend_run=frontend_run,
+                        run_id=run_id, cancelled=cancelled, plan=itest_plan,
+                    )
+                    dep.set_detail({**dep.get_detail(), "integration_test": itest.get("summary")})
+                    db.session.commit()
+                if itest_repaired_rounds and itest.get("gate") != "fail":
+                    phase("itest", f"自动修复后接口联调通过(仅改后端,修复 {itest_repaired_rounds} 轮)",
+                          {"integration_test": itest.get("summary")})
+            except Exception:  # noqa: BLE001 — repair harness bug must not sink the deploy
+                try:
+                    db.session.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                logger.warning("integration-test repair ladder failed (fail-open)", exc_info=True)
+                phase("itest", "自动修复过程异常,已跳过(尽力放行)")
+
+        # Record whichever image is actually running now (a repaired tag, if any).
+        if running_image != image_tag:
+            dep.image_tag = running_image
+            db.session.commit()
+
+        # Terminal: BEST-EFFORT PROCEED (尽力放行) — never roll back on itest grounds.
+        if itest.get("gate") == "fail":
+            phase("itest",
+                  f"⚠ 接口联调仍有未修复的确定性失败,按尽力放行策略继续部署(残留降为告警):{itest.get('reason')}",
+                  {"integration_test": itest.get("summary")})
+        elif itest:  # ran cleanly → narrate the pass / warn / inconclusive outcome
+            summary = itest.get("summary") or {}
+            warns = summary.get("warnings") or []
+            executed = summary.get("executed", 0)
+            if itest.get("gate") == "inconclusive":
+                phase("itest", f"接口联调未下定论(不阻断部署):{itest.get('reason') or '无可执行的契约端点'}",
+                      {"integration_test": summary})
+            elif warns:
+                phase("itest", f"接口联调通过(执行 {executed} 项,{len(warns)} 项告警,详见部署详情)",
+                      {"integration_test": summary})
+            else:
+                phase("itest", f"接口联调通过(执行 {executed} 项关键接口,响应结构符合前端解析预期)",
+                      {"integration_test": summary})
 
         # --- 6b. First-screen visibility (advisory) --------------------------
         # /health + smoke prove the app is up and routes resolve, but a list
@@ -457,6 +651,34 @@ def deploy(
         if cancelled():
             return _abort(dep, rollback, "已取消")
 
+        # --- 6c. PROMOTE the repaired source ---------------------------------
+        # If the build and/or itest repair ladders edited the source, the workdir now
+        # differs from the original artifact and IS exactly what the running image was
+        # built from. Collect the (clean) repaired source BEFORE cleanup so the
+        # workflow can publish it — download / GitHub sync / re-deploy then use the
+        # fixed code ("logical overwrite, physical additive"). Only the BACKEND is
+        # ever repaired; the frontend dist is untouched.
+        build_rounds = int(dep.get_detail().get("build_repaired_rounds") or 0)
+        repaired_source: dict = {}
+        fix_summary: Optional[dict] = None
+        if (build_rounds or itest_repaired_rounds) and workdir and workdir.exists():
+            collected = _collect_repaired_source(workdir, set(source.keys()))
+            changed = sorted(rel for rel in collected if collected.get(rel) != source.get(rel))
+            if changed:
+                repaired_source = collected
+                fix_summary = {
+                    "build_repaired_rounds": build_rounds,
+                    "itest_repaired_rounds": itest_repaired_rounds,
+                    "changed_files": changed,
+                    "notes": [n for n in fix_notes if n],
+                }
+                dep.set_detail({**dep.get_detail(), "promoted_fix": {
+                    "build_repaired_rounds": build_rounds,
+                    "itest_repaired_rounds": itest_repaired_rounds,
+                    "changed_files": changed,
+                }})
+                db.session.commit()
+
         # --- 7. Register (the proxy resolves here) ---------------------------
         dep.status = DeploymentStatus.RUNNING
         dep.deploy_run_id = None  # set by the workflow caller if applicable
@@ -469,10 +691,14 @@ def deploy(
             "success": True,
             "status": DeploymentStatus.RUNNING,
             "container": container,
-            "image": image_tag,
+            "image": running_image,
             "api_base": dep.api_base_path,
             "preview_url": f"/preview/{project.id}/",
             "middleware": prov.to_dict(),
+            # Promote the repaired backend source to the user (workflow publishes it).
+            "repaired": bool(fix_summary),
+            "repaired_source": repaired_source,
+            "fix_summary": fix_summary,
         }
     except subprocess.TimeoutExpired as error:
         return _fail(dep, rollback, f"部署超时:{error}", narrate=phase)
@@ -482,6 +708,57 @@ def deploy(
     finally:
         if workdir and workdir.exists() and dep.status != DeploymentStatus.RUNNING:
             shutil.rmtree(workdir, ignore_errors=True)
+
+
+# Build-output dirs / files the in-container native build (npm ci / mvn package /
+# pip install …) may leave in the workdir — excluded when collecting the repaired
+# SOURCE so the promoted zip stays source-only (mirrors the original artifact).
+_REPAIR_EXCLUDE_DIRS = {
+    "node_modules", "target", "build", "dist", "out", ".git", "__pycache__",
+    ".venv", "venv", ".gradle", ".next", ".nuxt", "coverage", ".pytest_cache",
+    "bin", "obj", ".idea", ".vscode", ".mypy_cache", ".ruff_cache",
+}
+_REPAIR_EXCLUDE_SUFFIX = (".class", ".pyc", ".pyo", ".o", ".a", ".so", ".log")
+_MAX_REPAIR_FILE = int(os.getenv("APP_REPAIR_MAX_FILE", str(2 * 1024 * 1024)))  # 2MB/file
+
+
+def _is_excluded_path(rel: str) -> bool:
+    if set(Path(rel).parts) & _REPAIR_EXCLUDE_DIRS:
+        return True
+    return rel.endswith(_REPAIR_EXCLUDE_SUFFIX)
+
+
+def _collect_repaired_source(workdir: Path, original_rels: set) -> dict:
+    """Collect the (clean) backend source from a possibly-repaired workdir.
+
+    Always includes every ORIGINAL file that still exists (guaranteed source, even
+    if it lives under a name the exclude list would otherwise drop), then adds any
+    NEW source files the agent created — filtering out build artifacts the
+    in-container native build may have produced, and oversized files."""
+    files: dict[str, bytes] = {}
+    for rel in original_rels:
+        p = workdir / rel
+        if p.is_file():
+            try:
+                files[rel] = p.read_bytes()
+            except OSError:
+                continue
+    for p in workdir.rglob("*"):
+        if not p.is_file():
+            continue
+        try:
+            rel = p.relative_to(workdir).as_posix()
+        except ValueError:
+            continue
+        if rel in files or _is_excluded_path(rel):
+            continue
+        try:
+            if p.stat().st_size > _MAX_REPAIR_FILE:
+                continue
+            files[rel] = p.read_bytes()
+        except OSError:
+            continue
+    return files
 
 
 def _stage_source(workdir: Path, files: dict) -> None:

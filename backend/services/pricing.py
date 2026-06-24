@@ -90,6 +90,13 @@ CODE_MIDDLEWARE_PROVISIONING = _credits("PRICE_CODE_MIDDLEWARE", 0)
 # per-project middleware namespace, starts the long-lived container, wires the
 # reverse proxy and health-checks — with rollback on any failure.
 CODE_FULLSTACK_DEPLOY = _credits("PRICE_CODE_FULLSTACK_DEPLOY", 0)
+# Deploy-time frontend↔backend integration test: one AI call reads the shared
+# contract + the generated frontend's API-calling code and distills a targeted
+# test plan, which the deploy then EXECUTES against the live backend container to
+# gate on real interface defects (5xx / response-shape mismatch). Charged per-call
+# as the gate fires (folded into the deploy run like CODE_CONTEXT_VERIFY, not the
+# up-front reservation) so a deploy with no provider configured isn't over-charged.
+CODE_FULLSTACK_INTEGRATION_TEST = _credits("PRICE_CODE_FULLSTACK_ITEST", 0)
 
 
 # Operation label -> (resource_type, unit_cost). Used when writing CreditTransaction
@@ -107,4 +114,5 @@ OPERATION = {
     "code_backend_project": ("agent_run", CODE_BACKEND_PROJECT_GENERATION),
     "code_middleware": ("agent_run", CODE_MIDDLEWARE_PROVISIONING),
     "code_fullstack_deploy": ("agent_run", CODE_FULLSTACK_DEPLOY),
+    "code_fullstack_itest": ("agent_run", CODE_FULLSTACK_INTEGRATION_TEST),
 }

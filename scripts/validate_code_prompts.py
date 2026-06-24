@@ -193,6 +193,20 @@ MANIFEST: dict[str, dict] = {
         "placeholders": [],
         "must_contain": ["Dockerfile", "/health", "PORT", "DATABASE_URL", "docker build"],
     },
+    "backend_project_contract_repair_prompt.txt": {
+        "mode": "plain",
+        "placeholders": [],
+        "must_contain": ["/health", "契约", "5xx", "前端", "最小改动", "docker build"],
+    },
+    "integration_test_plan_prompt.txt": {
+        "mode": "fill",
+        "placeholders": ["CONTRACT", "FRONTEND_API_CODE"],
+        "must_contain": [
+            '"tests"', '"method"', '"path"', '"auth"', '"expect"',
+            '"required_fields"', '"severity"', '"frontend_reads"',
+            "critical", "warning", "/health", "GET", "POST",
+        ],
+    },
     "middleware_prompt.txt": {
         "mode": "fill",
         "placeholders": ["DATA_DESIGN", "MANIFEST", "CONTRACT"],

@@ -667,6 +667,46 @@ class BackendProjectService:
         ``{ran, summary, cost_usd}``; ``ran`` is False when no provider is
         configured (deploy then skips the repair rung).
         """
+        prompt = self._load_prompt("backend_project_repair_prompt.txt") + "\n\n" + (build_log or "")[-8000:]
+        return self._run_repair_agent(workdir, prompt, on_log=on_log, is_cancelled=is_cancelled)
+
+    def repair_contract(
+        self,
+        *,
+        workdir: str,
+        failures_digest: str,
+        on_log: Optional[Callable[[str], None]] = None,
+        is_cancelled: Optional[Callable[[], bool]] = None,
+    ) -> dict:
+        """AI self-heal a RUNNING backend whose deploy-time frontend↔backend
+        integration test found interface defects (5xx / missing response fields /
+        non-JSON). Same in-place mechanism as ``repair_build`` (mounts the staged
+        source at ``/out``, pipes the prompt over stdin, claude edits files), but
+        the prompt is the contract-conformance repair template + the failing test
+        cases / container logs / contract digest. The deploy step then re-builds the
+        image, restarts the container and re-runs the SAME test plan. Returns
+        ``{ran, summary, cost_usd}``."""
+        prompt = (
+            self._load_prompt("backend_project_contract_repair_prompt.txt")
+            + "\n\n" + (failures_digest or "")[-12000:]
+        )
+        return self._run_repair_agent(workdir, prompt, on_log=on_log, is_cancelled=is_cancelled)
+
+    def _run_repair_agent(
+        self,
+        workdir: str,
+        prompt: str,
+        *,
+        on_log: Optional[Callable[[str], None]] = None,
+        is_cancelled: Optional[Callable[[], bool]] = None,
+    ) -> dict:
+        """Run the in-place be-agent repair container with a ready-built prompt.
+
+        Shared by ``repair_build`` (build/startup failures) and ``repair_contract``
+        (interface defects). The prompt is piped over stdin so it never pollutes the
+        docker build context. Returns ``{ran, summary, cost_usd}``; ``ran`` is False
+        when no provider is configured (the caller then skips the repair rung).
+        """
         if not self.is_configured():
             return {"ran": False, "summary": "", "cost_usd": 0.0, "error": "ANTHROPIC_API_KEY not configured"}
         wd = Path(workdir)
@@ -675,7 +715,6 @@ class BackendProjectService:
         # The container runs as the non-root ``node`` uid; make the staged tree
         # writable so claude can edit the existing (backend-written) files.
         self._make_writable(wd)
-        prompt = self._load_prompt("backend_project_repair_prompt.txt") + "\n\n" + (build_log or "")[-8000:]
         api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
         cmd = [
             self.docker, "run", "--rm", "-i", "--user", "node",

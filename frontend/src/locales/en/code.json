@@ -36,12 +36,14 @@
     "title": "Editable Development Docs",
     "count": "{{count}} docs",
     "content": "Content",
+    "preview": "Preview",
     "promptExpert": "Prompt Expert"
   },
   "style": {
     "title": "App Style",
     "generate": "Generate style doc",
-    "placeholder": "Select styles to generate a tailored style document."
+    "placeholder": "Select styles to generate a tailored style document.",
+    "documentTitle": "Style Document"
   },
   "styleSelect": {
     "title": "Choose UI style(s) (multi-select, at least one), then generate the style document.",

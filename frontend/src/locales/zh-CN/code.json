@@ -36,12 +36,14 @@
     "title": "可编辑开发文档",
     "count": "{{count}} 份文档",
     "content": "文档内容",
+    "preview": "预览",
     "promptExpert": "提示词专家"
   },
   "style": {
     "title": "应用风格",
     "generate": "生成风格文档",
-    "placeholder": "选择风格后生成专属风格文档。"
+    "placeholder": "选择风格后生成专属风格文档。",
+    "documentTitle": "风格文档"
   },
   "styleSelect": {
     "title": "请选择 UI 风格（可多选，至少一个），确认后生成风格文档",

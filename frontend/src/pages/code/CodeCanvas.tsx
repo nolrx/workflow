@@ -70,22 +70,26 @@ function CanvasInner() {
 
   return (
     <div className="flex h-screen flex-col">
-      <header className="flex items-center gap-2 border-b px-4 py-2">
+      <header className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
         <Button asChild variant="ghost" size="sm">
           <Link to={`/code/${projectId}`}>
-            <ArrowLeft className="mr-1 h-4 w-4" /> {t("back")}
+            <ArrowLeft className="mr-1 h-4 w-4" />
+            <span className="hidden sm:inline">{t("back")}</span>
           </Link>
         </Button>
         <span className="text-sm font-medium">{t("title")}</span>
         <div className="mx-2 h-4 w-px bg-border" />
         <Button variant="outline" size="sm" onClick={() => addNode("agent")}>
-          <Bot className="mr-1 h-4 w-4" /> {t("toolbar.addAgent")}
+          <Bot className="mr-1 h-4 w-4" />
+          <span className="hidden sm:inline">{t("toolbar.addAgent")}</span>
         </Button>
         <Button variant="outline" size="sm" onClick={() => addNode("merge")}>
-          <Combine className="mr-1 h-4 w-4" /> {t("toolbar.addMerge")}
+          <Combine className="mr-1 h-4 w-4" />
+          <span className="hidden sm:inline">{t("toolbar.addMerge")}</span>
         </Button>
         <Button variant="outline" size="sm" onClick={() => addNode("branch")}>
-          <GitBranch className="mr-1 h-4 w-4" /> {t("toolbar.addBranch")}
+          <GitBranch className="mr-1 h-4 w-4" />
+          <span className="hidden sm:inline">{t("toolbar.addBranch")}</span>
         </Button>
         <div className="ml-auto flex items-center gap-3">
           <span className="text-xs text-muted-foreground">
@@ -107,7 +111,9 @@ function CanvasInner() {
             ) : (
               <Play className="mr-1 h-4 w-4" />
             )}
-            {running ? t("toolbar.running") : t("toolbar.run")}
+            <span className="hidden sm:inline">
+              {running ? t("toolbar.running") : t("toolbar.run")}
+            </span>
           </Button>
         </div>
       </header>

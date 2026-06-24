@@ -91,5 +91,25 @@
       "description": "최근 결제 및 청구서",
       "empty": "결제 기록이 없습니다"
     }
+  },
+  "appearance": {
+    "title": "외관",
+    "subtitle": "화면 스타일을 사용자 지정",
+    "theme": {
+      "label": "테마",
+      "description": "기본 색상 스타일 선택",
+      "default": "기본",
+      "vscode": "VS Code",
+      "game-engine": "게임 엔진",
+      "synthwave84": "SynthWave '84",
+      "mint": "민트",
+      "paper": "페이퍼",
+      "ocean": "오션",
+      "lavender": "라벤더"
+    },
+    "language": {
+      "label": "언어",
+      "description": "선호하는 언어를 선택하세요"
+    }
   }
 }

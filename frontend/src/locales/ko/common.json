@@ -86,6 +86,7 @@
   },
   "a11y": {
     "notifications": "알림",
-    "profile": "프로필"
+    "profile": "프로필",
+    "openMenu": "메뉴 열기"
   }
 }

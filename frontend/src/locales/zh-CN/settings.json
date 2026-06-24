@@ -91,5 +91,25 @@
       "description": "您最近的支付和发票",
       "empty": "暂无支付记录"
     }
+  },
+  "appearance": {
+    "title": "外观",
+    "subtitle": "自定义界面风格",
+    "theme": {
+      "label": "主题",
+      "description": "选择主体配色风格",
+      "default": "默认",
+      "vscode": "VS Code",
+      "game-engine": "游戏引擎",
+      "synthwave84": "SynthWave '84",
+      "mint": "薄荷绿",
+      "paper": "羊皮纸",
+      "ocean": "海洋蓝",
+      "lavender": "薰衣草"
+    },
+    "language": {
+      "label": "语言",
+      "description": "选择您偏好的语言"
+    }
   }
 }

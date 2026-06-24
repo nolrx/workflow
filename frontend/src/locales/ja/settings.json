@@ -91,5 +91,25 @@
       "description": "最近の支払いと請求書",
       "empty": "支払い履歴がありません"
     }
+  },
+  "appearance": {
+    "title": "外観",
+    "subtitle": "見た目をカスタマイズ",
+    "theme": {
+      "label": "テーマ",
+      "description": "プライマリカラーのスタイルを選択",
+      "default": "デフォルト",
+      "vscode": "VS Code",
+      "game-engine": "ゲームエンジン",
+      "synthwave84": "SynthWave '84",
+      "mint": "ミント",
+      "paper": "ペーパー",
+      "ocean": "オーシャン",
+      "lavender": "ラベンダー"
+    },
+    "language": {
+      "label": "言語",
+      "description": "表示言語を選択"
+    }
   }
 }

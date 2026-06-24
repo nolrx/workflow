@@ -92,5 +92,25 @@
       "description": "Your recent payments and invoices",
       "empty": "No payment history yet"
     }
+  },
+  "appearance": {
+    "title": "Appearance",
+    "subtitle": "Customize the look and feel",
+    "theme": {
+      "label": "Theme",
+      "description": "Choose a primary color style",
+      "default": "Default",
+      "vscode": "VS Code",
+      "game-engine": "Game Engine",
+      "synthwave84": "SynthWave '84",
+      "mint": "Mint",
+      "paper": "Paper",
+      "ocean": "Ocean",
+      "lavender": "Lavender"
+    },
+    "language": {
+      "label": "Language",
+      "description": "Select your preferred language"
+    }
   }
 }

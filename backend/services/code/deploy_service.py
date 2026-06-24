@@ -51,6 +51,21 @@ CONTAINER_MEM = os.getenv("APP_CONTAINER_MEM", "512m")
 # a /health-green deploy — only a definitive 5xx does.
 SMOKE_TIMEOUT = int(os.getenv("APP_SMOKE_TIMEOUT", "15"))  # per-endpoint, seconds
 SMOKE_MAX_ENDPOINTS = int(os.getenv("APP_SMOKE_MAX_ENDPOINTS", "3"))
+# First-screen visibility probe: after smoke, log in with the generated backend's
+# mandated demo account and assert a core owner-filtered list is non-empty. This
+# turns the silently-empty first screen ("进入系统后什么都没有") from an invisible
+# success into a recorded signal. Purely advisory — never rolls a deploy back.
+# Credentials MUST mirror the demo self-seed contract in backend_project_prompt.txt.
+FIRST_SCREEN_PROBE = os.getenv("APP_FIRST_SCREEN_PROBE", "1") not in ("0", "false", "False", "")
+FIRST_SCREEN_TIMEOUT = int(os.getenv("APP_FIRST_SCREEN_TIMEOUT", "15"))  # per-request, seconds
+SEED_DEMO_EMAIL = os.getenv("APP_SEED_DEMO_EMAIL", "demo@example.com")
+SEED_DEMO_PASSWORD = os.getenv("APP_SEED_DEMO_PASSWORD", "Demo1234!")
+# Passwordless (phone / SMS / email-code / OTP) demo login. The deployed env has
+# no real SMS/email channel, so the generated backend's demo mandate ships a fixed
+# dev verification code for the demo identifier; the probe replays that exact path
+# so SMS/OTP apps get a real seeded/empty signal instead of always 'inconclusive'.
+SEED_DEMO_PHONE = os.getenv("APP_SEED_DEMO_PHONE", "13800000000")
+SEED_DEMO_OTP = os.getenv("APP_SEED_DEMO_OTP", "000000")
 
 _BACKEND_WORKFLOW = "code_backend_project_generation"
 _MIDDLEWARE_WORKFLOW = "code_middleware_provisioning"
@@ -401,6 +416,41 @@ def deploy(
             return _fail(dep, rollback, f"契约冒烟未通过(抽样端点返回 5xx):{smoke_detail}", narrate=phase)
         phase("smoke", "契约冒烟通过(抽样端点路由可达)", {"smoke": smoke_detail})
 
+        # --- 6b. First-screen visibility (advisory) --------------------------
+        # /health + smoke prove the app is up and routes resolve, but a list
+        # endpoint returning an empty 200 is indistinguishable from success —
+        # exactly the "进入系统后什么都没有" the generated backend's demo self-seed
+        # mandate fixes. Log in with the seeded demo account and assert a core list
+        # is non-empty. Purely advisory: it records the signal + narrates a warning
+        # when empty, but NEVER rolls back (a cold/slow list or an unguessable login
+        # shape must not sink a /health-green deploy). Fully isolated so a probe bug
+        # can never reach the deploy's rollback path.
+        if FIRST_SCREEN_PROBE:
+            try:
+                if not cancelled():  # cancel check inside the try → can't reach rollback
+                    phase("verify", "首屏校验:用 demo 账号登录并抽查核心列表是否非空(建议性,不回滚)")
+                    fs = _first_screen_probe(container, BACKEND_PORT, project.id, cancelled)
+                    dep.set_detail({**dep.get_detail(), "first_screen": fs})
+                    db.session.commit()
+                    state = fs.get("state")
+                    if state == "empty":
+                        phase("verify",
+                              f"⚠ 首屏疑似为空:{fs.get('detail')};部署仍继续——请检查生成后端的 "
+                              "demo self-seed(SEED_DEMO_DATA 默认开)是否生效", {"first_screen": fs})
+                    elif state == "seeded":
+                        phase("verify", f"首屏校验通过:{fs.get('detail')}", {"first_screen": fs})
+                    else:
+                        phase("verify", f"首屏校验未下定论(不影响部署):{fs.get('detail')}", {"first_screen": fs})
+            except Exception:  # noqa: BLE001 — advisory only; must NEVER affect deploy outcome
+                # Critical: roll the session back so a failed probe commit can't
+                # leave it in a PendingRollback state that would make the
+                # downstream RUNNING-commit throw and sink a health-green deploy.
+                try:
+                    db.session.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                logger.warning("first-screen probe failed (advisory)", exc_info=True)
+
         # A cancel landing mid-smoke leaves _smoke_test returning ok=True (it just
         # breaks the loop), so re-check here before committing the deploy as RUNNING
         # — otherwise a late cancel would be swallowed and the app registered anyway.
@@ -545,6 +595,259 @@ def _smoke_test(container: str, port: int, project_id: str, cancelled) -> tuple[
         except Exception as error:  # noqa: BLE001 — inconclusive, not a 5xx
             results.append({"endpoint": f"GET {path}", "result": f"inconclusive ({type(error).__name__})"})
     return ok, results
+
+
+# --- first-screen visibility probe (advisory) --------------------------------
+def _find_token(obj, depth: int = 0):
+    """Recursively pull a bearer-ish token out of a login response JSON."""
+    if depth > 4 or obj is None:
+        return None
+    if isinstance(obj, dict):
+        for key in ("access_token", "accessToken", "token", "jwt", "id_token", "idToken", "accessJwt"):
+            v = obj.get(key)
+            if isinstance(v, str) and v:
+                return v
+        for v in obj.values():
+            found = _find_token(v, depth + 1)
+            if found:
+                return found
+    elif isinstance(obj, list):
+        for v in obj:
+            found = _find_token(v, depth + 1)
+            if found:
+                return found
+    return None
+
+
+def _classify_list_payload(payload) -> str:
+    """Classify a GET body for the first-screen probe.
+
+    Returns ``'data'`` (a non-empty collection), ``'empty'`` (a list-shaped but
+    empty collection), or ``'unknown'`` (not a recognizable collection — a single
+    object / scalar like ``GET /me`` or ``{"version":"1.0"}``). The probe uses
+    this to bias toward 'inconclusive' rather than a false 'empty' warning on
+    endpoints that simply aren't list endpoints. Handles a bare array, the common
+    pagination envelopes (optionally nested), and a positive ``total``/``count``
+    (authoritative: ``{"data":[],"total":5}`` is 'data', not 'empty').
+    """
+    if isinstance(payload, list):
+        return "data" if payload else "empty"
+    if isinstance(payload, dict):
+        for key in ("total", "count", "totalCount", "total_count"):
+            v = payload.get(key)
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+                return "data"
+        saw_collection = False
+        for key in ("data", "items", "results", "records", "list", "rows", "content"):
+            v = payload.get(key)
+            if isinstance(v, list):
+                if v:
+                    return "data"
+                saw_collection = True
+            elif isinstance(v, dict):
+                inner = _classify_list_payload(v)
+                if inner == "data":
+                    return "data"
+                if inner == "empty":
+                    saw_collection = True
+        return "empty" if saw_collection else "unknown"
+    return "unknown"
+
+
+def _looks_non_empty(payload) -> bool:
+    """True when a GET response carries at least one business record."""
+    return _classify_list_payload(payload) == "data"
+
+
+def _login_endpoints(project_id: str) -> list[str]:
+    """Contract POST paths (no path params) that look like an auth/login entry."""
+    from backend.services.code.fullstack import contract_service
+
+    scored: list[tuple[int, str]] = []
+    try:
+        row = contract_service.get_ledger(project_id)
+        contract = row.get_api_contract() if row else {}
+        spec_paths = ((contract or {}).get("openapi") or {}).get("paths") or {}
+        if isinstance(spec_paths, dict):
+            for path, ops in spec_paths.items():
+                if not isinstance(path, str) or "{" in path or not isinstance(ops, dict):
+                    continue
+                if "post" not in {str(k).lower() for k in ops}:
+                    continue
+                low = path.lower()
+                if not any(h in low for h in ("login", "signin", "sign-in", "session", "token", "authenticate")):
+                    continue
+                score = 0 if "login" in low else (1 if ("signin" in low or "sign-in" in low) else 2)
+                scored.append((score, path))
+    except Exception:  # noqa: BLE001 — advisory; unreadable contract → no login probe
+        logger.warning("first-screen: could not read contract for %s", project_id, exc_info=True)
+        return []
+    # Cap the fan-out: each candidate costs up to 3 credential attempts ×
+    # FIRST_SCREEN_TIMEOUT, so an unbounded list of 'token'/'session'-ish POST
+    # paths could add minutes to every deploy. Keep the 3 most login-ish.
+    return [p for _, p in sorted(scored)][:3]
+
+
+def _otp_request_endpoints(project_id: str) -> list[str]:
+    """Contract POST paths (no path params) that look like 'send a verification code'.
+
+    For passwordless logins (phone/SMS/email-code/OTP) the app first POSTs here to
+    request a code, then logs in with it. The deployed env has no real SMS/email
+    channel, so this request is fire-and-forget — the demo account's fixed dev code
+    works regardless; we still hit it in case the app gates login on a prior request.
+    """
+    from backend.services.code.fullstack import contract_service
+
+    paths: list[str] = []
+    try:
+        row = contract_service.get_ledger(project_id)
+        contract = row.get_api_contract() if row else {}
+        spec_paths = ((contract or {}).get("openapi") or {}).get("paths") or {}
+        if isinstance(spec_paths, dict):
+            for path, ops in spec_paths.items():
+                if not isinstance(path, str) or "{" in path or not isinstance(ops, dict):
+                    continue
+                if "post" not in {str(k).lower() for k in ops}:
+                    continue
+                low = path.lower()
+                if any(h in low for h in ("login", "signin", "sign-in", "authenticate")):
+                    continue  # that's the login itself, not the code-request
+                if any(h in low for h in ("sms", "otp", "code", "captcha", "verif", "/send")):
+                    paths.append(path)
+    except Exception:  # noqa: BLE001 — advisory; unreadable contract → no otp probe
+        return []
+    return paths[:2]  # bound the fan-out, like _login_endpoints
+
+
+def _first_screen_probe(container: str, port: int, project_id: str, cancelled) -> dict:
+    """Advisory check that a freshly-deployed app's first screen has data.
+
+    Samples owner-filtered GET list endpoints (anonymously first, then logged in
+    with the mandated demo account) and asserts at least one returns a non-empty
+    payload. Returns ``{state: seeded|empty|inconclusive, detail}``. Purely
+    advisory: any failure resolves to 'inconclusive' and the deploy proceeds
+    unchanged — this NEVER rolls a deploy back. It exists to surface the silently-
+    empty first screen ('进入系统后什么都没有') that /health + smoke can't see.
+    """
+    import requests
+
+    base = f"http://{container}:{port}"
+    list_paths = [p for p in _smoke_endpoints(project_id) if p != HEALTH_PATH]
+    if not list_paths:
+        return {"state": "inconclusive", "detail": "契约无可抽样的列表端点"}
+
+    def _sample(headers: dict):
+        """Tri-state over the sampled endpoints:
+
+        ``True``  — at least one returned a non-empty collection (data present).
+        ``False`` — a list-shaped response was seen and ALL such were empty.
+        ``None``  — inconclusive: no list-shaped response was readable (only
+                    object/scalar endpoints, all unreachable), or a cancel landed.
+
+        Biasing object/scalar-only responses to None (not False) avoids a false
+        '首屏为空' warning on apps whose sampled no-param GETs aren't collections.
+        """
+        saw_empty_list = False
+        for path in list_paths:
+            if cancelled():
+                return None  # don't record a partial 'empty' for a cancelled run
+            try:
+                resp = requests.get(f"{base}{path}", headers=headers, timeout=FIRST_SCREEN_TIMEOUT)
+            except Exception:  # noqa: BLE001 — unreachable endpoint, skip
+                continue
+            if resp.status_code >= 400:
+                continue
+            try:
+                cls = _classify_list_payload(resp.json())
+            except ValueError:  # non-JSON body — can't judge
+                continue
+            if cls == "data":
+                return True
+            if cls == "empty":
+                saw_empty_list = True
+        return False if saw_empty_list else None
+
+    # 1) Anonymous first — no-auth apps expose their data directly.
+    anon = _sample({})
+    if anon is True:
+        return {"state": "seeded", "detail": "匿名抽样命中非空列表"}
+
+    # 2) Authenticated — log in with the seeded demo account, retry with the token.
+    token, login_tried = None, False
+    for path in _login_endpoints(project_id):
+        if cancelled() or token:
+            break
+        login_tried = True
+        for body in (
+            {"email": SEED_DEMO_EMAIL, "password": SEED_DEMO_PASSWORD},
+            {"username": SEED_DEMO_EMAIL, "password": SEED_DEMO_PASSWORD},
+            {"username": SEED_DEMO_EMAIL.split("@")[0], "password": SEED_DEMO_PASSWORD},
+        ):
+            try:
+                resp = requests.post(f"{base}{path}", json=body, timeout=FIRST_SCREEN_TIMEOUT)
+            except Exception:  # noqa: BLE001
+                continue
+            if resp.status_code >= 400:
+                continue
+            try:
+                token = _find_token(resp.json())
+            except ValueError:
+                token = None
+            if token:
+                break
+
+    # 2b) Passwordless / OTP fallback — apps that log in by phone/email verification
+    # code. No real SMS/email channel in the deployed env, so we replay the demo
+    # mandate's fixed dev code (SEED_DEMO_OTP) for the demo identifier: best-effort
+    # request a code (ignored if it 4xxs — the fixed code works anyway), then submit
+    # it against each login endpoint. Only runs when password login yielded nothing.
+    if not token and not cancelled():
+        for path in _otp_request_endpoints(project_id):
+            for body in ({"phone": SEED_DEMO_PHONE}, {"mobile": SEED_DEMO_PHONE},
+                         {"phone_number": SEED_DEMO_PHONE}, {"email": SEED_DEMO_EMAIL}):
+                try:
+                    requests.post(f"{base}{path}", json=body, timeout=FIRST_SCREEN_TIMEOUT)
+                except Exception:  # noqa: BLE001 — fire-and-forget code request
+                    pass
+        for path in _login_endpoints(project_id):
+            if cancelled() or token:
+                break
+            login_tried = True
+            for body in (
+                {"phone": SEED_DEMO_PHONE, "code": SEED_DEMO_OTP},
+                {"mobile": SEED_DEMO_PHONE, "code": SEED_DEMO_OTP},
+                {"phone_number": SEED_DEMO_PHONE, "code": SEED_DEMO_OTP},
+                {"phone": SEED_DEMO_PHONE, "otp": SEED_DEMO_OTP},
+                {"email": SEED_DEMO_EMAIL, "code": SEED_DEMO_OTP},
+            ):
+                try:
+                    resp = requests.post(f"{base}{path}", json=body, timeout=FIRST_SCREEN_TIMEOUT)
+                except Exception:  # noqa: BLE001
+                    continue
+                if resp.status_code >= 400:
+                    continue
+                try:
+                    token = _find_token(resp.json())
+                except ValueError:
+                    token = None
+                if token:
+                    break
+
+    if token:
+        auth = _sample({"Authorization": f"Bearer {token}"})
+        if auth is True:
+            return {"state": "seeded", "detail": "demo 账号登录后抽样命中非空列表"}
+        if auth is False:
+            return {"state": "empty", "detail": "demo 账号登录成功但核心列表为空(疑似 demo self-seed 未生效)"}
+        return {"state": "inconclusive", "detail": "demo 账号登录成功但列表端点不可读"}
+
+    if not login_tried:
+        if anon is False:
+            return {"state": "empty", "detail": "无鉴权应用,匿名核心列表为空(疑似 demo self-seed 未生效)"}
+        return {"state": "inconclusive", "detail": "无登录端点且列表端点不可读"}
+    return {"state": "inconclusive",
+            "detail": "demo 账号登录失败(密码与验证码/OTP 两种方式均未拿到 token——"
+                      "凭据/哈希口径不符,或验证码登录缺固定开发验证码),无法判定首屏"}
 
 
 def _fail(

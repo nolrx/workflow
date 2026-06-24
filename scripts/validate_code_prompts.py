@@ -148,6 +148,16 @@ MANIFEST: dict[str, dict] = {
             # 6-question doctrine + delivered scaffolding (else a future trim /
             # a stale Mongo override could silently ship a doctrine-less prompt).
             "ARCHITECTURE.md", "Makefile", "make test",
+            # First-screen visibility: guard the empty-DB demo self-seed mandate
+            # (the fix for "进入系统后什么都没有"). A future trim must not drop the
+            # loginnable demo account, the env switch, or the 首屏 anchor.
+            "SEED_DEMO_DATA", "demo@example.com", "自播种", "首屏",
+            # Deployment-usable login (auth-method-agnostic): the demo account must
+            # log in WITHOUT external deps — SMS/OTP/email-code logins need a fixed
+            # dev 验证码, OAuth-only needs a local fallback. Guard these anchors so a
+            # trim can't regress to an email/password-only mandate (the cause of the
+            # SMS-login app whose /auth/login 400s after deploy).
+            "验证码", "无外部依赖",
         ],
     },
     "backend_project_reinforce_prompt.txt": {
@@ -159,12 +169,24 @@ MANIFEST: dict[str, dict] = {
         "must_contain": [
             "功能锚点", "二次功能补强", "状态机", "AI/提示词链路",
             "DATABASE_URL", "REDIS_URL", "/health", "ARCHITECTURE.md", "make test", "TODO",
+            # First-screen visibility reinforcement (see backend_project_prompt).
+            "SEED_DEMO_DATA", "自播种", "demo 账号",
+            # Deployment-usable login: reinforce must re-check the demo login works
+            # for the app's auth method (SMS/OTP fixed dev 验证码), not just seeding.
+            "验证码",
         ],
     },
     "backend_project_critic_prompt.txt": {
         "mode": "fill",
         "placeholders": ["CONTRACT", "SOURCE"],
-        "must_contain": ['"verdict"', '"endpoint_coverage"', '"fr_coverage"', '"issues"', '"summary"', "PASS", "CONCERNS", "FAIL"],
+        "must_contain": [
+            '"verdict"', '"endpoint_coverage"', '"fr_coverage"', '"issues"', '"summary"', "PASS", "CONCERNS", "FAIL",
+            # Acceptance must check first-screen visibility (demo self-seed).
+            "首屏", "demo 账号",
+            # ...and that the demo login is usable in the deployed env (SMS/OTP
+            # logins need a fixed dev 验证码, else /auth/login 400s post-deploy).
+            "验证码",
+        ],
     },
     "backend_project_repair_prompt.txt": {
         "mode": "plain",
@@ -174,7 +196,13 @@ MANIFEST: dict[str, dict] = {
     "middleware_prompt.txt": {
         "mode": "fill",
         "placeholders": ["DATA_DESIGN", "MANIFEST", "CONTRACT"],
-        "must_contain": ['"init_sql"', '"seed_sql"', '"entities"', '"summary"'],
+        "must_contain": [
+            '"init_sql"', '"seed_sql"', '"entities"', '"summary"',
+            # Division of labour: middleware seed_sql must NOT mint login accounts;
+            # the loginnable demo account + first-screen data is the backend's
+            # boot-time self-seed job (avoids the hash-mismatch double-write trap).
+            "首屏", "自播种",
+        ],
     },
 }
 

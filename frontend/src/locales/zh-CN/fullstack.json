@@ -34,6 +34,8 @@
     "started": "全栈生成已启动(前端 / 后端 / 中间件并发)",
     "startFailed": "启动失败",
     "deployStarted": "原子部署已启动",
-    "deployFailed": "部署启动失败"
-  }
+    "deployFailed": "部署启动失败",
+    "downloadFailed": "下载失败"
+  },
+  "downloadSource": "下载源码"
 }

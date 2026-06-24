@@ -34,6 +34,8 @@
     "started": "フルスタック生成を開始しました(フロントエンド / バックエンド / ミドルウェア並行)",
     "startFailed": "開始に失敗しました",
     "deployStarted": "アトミックデプロイを開始しました",
-    "deployFailed": "デプロイの開始に失敗しました"
-  }
+    "deployFailed": "デプロイの開始に失敗しました",
+    "downloadFailed": "ダウンロードに失敗しました"
+  },
+  "downloadSource": "ソースをダウンロード"
 }

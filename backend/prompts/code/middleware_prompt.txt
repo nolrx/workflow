@@ -7,6 +7,7 @@
 3. **幂等友好**:DDL 尽量用 `CREATE TABLE IF NOT EXISTS`;种子数据避免重复插入冲突(可用 `ON CONFLICT DO NOTHING` 等)。
 4. **最小充分**:只为契约真正用到的实体建表;不为凑数堆叠表或索引。
 5. **与后端自迁移共存**:你产出的是兜底初始化——若后端自带迁移会优先生效,所以 DDL 必须能容忍"表已存在"的情况而不报错。
+6. **首屏数据归后端,此层不造登录账号**:登录后**首屏可见的 demo 业务数据与可登录账号,由生成后端在启动时幂等自播种(self-seed)负责**(密码哈希口径只有后端知道)。因此你产出的 `seed_sql` **不要创建登录/鉴权账号**——在此层造会与后端 self-seed 的 demo 账号冲突、且哈希对不上导致登不进。`seed_sql` 仅放与鉴权无关的**参考/字典/公开目录类**示例数据(分类、状态、地区、公开列表等),且仅作 postgres 非自迁移后端的兜底;此层不负责首屏可见性。
 
 # 输入(视为既定事实)
 
@@ -36,7 +37,7 @@
     { "name": "User", "table": "users", "fields": ["id", "email", "created_at"], "note": "覆盖契约 User 模型" }
   ],
   "init_sql": "CREATE TABLE IF NOT EXISTS users (\n  id VARCHAR(36) PRIMARY KEY,\n  email TEXT NOT NULL UNIQUE,\n  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()\n);\n",
-  "seed_sql": "可选:插入少量合理的示例数据(用 ON CONFLICT DO NOTHING 避免重复);不需要则留空字符串",
+  "seed_sql": "可选:插入与鉴权无关的参考/字典类示例数据(用 ON CONFLICT DO NOTHING 避免重复);不要创建登录账号(首屏 demo 数据与可登录账号由后端启动时 self-seed 负责);不需要则留空字符串",
   "notes": "对取舍/约束的一句话说明"
 }
 
@@ -44,11 +45,11 @@
 - **严格遵守上方注入的「数据库 Schema 一致性公约」**:init.sql 与后端 ORM 部署时作用于同一个库,结构必须逐字一致——主键统一用 `VARCHAR(36)`/`TEXT`(禁止 SERIAL/BIGSERIAL/自增整数主键),外键类型与之一致,每张表都带 `created_at`/`updated_at`(`TIMESTAMPTZ NOT NULL DEFAULT now()`),表名/列名/类型以契约数据模型为准不得各自改名改型。否则后端启动自迁移会与预置表冲突、健康检查失败、整次部署回滚。
 - `init_sql` 用标准、Postgres 兼容 SQL;表用 `CREATE TABLE IF NOT EXISTS`;字段类型、主键、外键、索引、非空/唯一约束齐备。
 - `entities` 与 `init_sql` 自洽;每个实体都能回溯到「数据设计」或契约数据模型。
-- 不需要种子数据时 `seed_sql` 填空字符串 `""`。
+- `seed_sql` 只放与鉴权无关的参考/字典类数据,**不得创建登录/鉴权账号**(首屏可见的 demo 账号与其归属业务数据,由后端启动时幂等 self-seed 负责);不需要时填空字符串 `""`。
 
 # 交付前自检(全部满足才能输出)
 
 - [ ] 只有一个 JSON 对象,无围栏、无对象外文字;字段为 summary / entities / init_sql / seed_sql / notes。
 - [ ] `init_sql` 为可移植标准 SQL,幂等(IF NOT EXISTS),约束齐备。
 - [ ] 每张表 / 实体都派生自「数据设计」或契约,未臆造。
-- [ ] `seed_sql` 要么是幂等的合理种子,要么为空字符串。
+- [ ] `seed_sql` 要么是幂等的参考/字典类合理种子(不含登录账号),要么为空字符串;首屏 demo 数据交由后端 self-seed。

@@ -15,6 +15,7 @@ import {
   ChevronDown,
   Circle,
   Database,
+  Download,
   ExternalLink,
   Loader2,
   Rocket,
@@ -23,7 +24,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
-import type { AgentRunStatus, AgentStepStatus } from "@/api/agent"
+import { agentApi, type AgentRunStatus, type AgentStepStatus } from "@/api/agent"
 import { tokenManager } from "@/api/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -47,6 +48,26 @@ const LANE_ICON: Record<Lane, typeof Server> = {
 const STATUS_VARIANT: Record<AgentRunStatus, "default" | "secondary" | "destructive" | "outline"> = {
   queued: "secondary", running: "secondary", paused: "default",
   completed: "default", partial: "secondary", failed: "destructive", cancelled: "outline",
+}
+
+// Lanes whose run publishes a downloadable source zip, keyed by the publish
+// step's artifact domain_ref_type. The backend project zip mirrors the frontend
+// project's download (CodeAppPreview); the deploy builds the image from this same
+// source. Frontend keeps its own download in CodeAppPreview; middleware has no
+// single source bundle, so neither is listed here.
+const LANE_SOURCE_ZIP: Partial<Record<Lane, { type: string; filename: string }>> = {
+  backend: { type: "code_backend_project_zip", filename: "backend_project.zip" },
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement("a")
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
 }
 
 function StepIcon({ status }: { status: AgentStepStatus }) {
@@ -84,6 +105,26 @@ function LaneCard({ lane }: { lane: Lane }) {
   const steps = run?.steps || []
   const events = state.events
 
+  // Source-zip download (backend lane): the publish step attaches the project's
+  // source bundle as an artifact; offer it for download once the run carries it.
+  const sourceZip = LANE_SOURCE_ZIP[lane]
+  const zipArtifactId = sourceZip
+    ? (run?.artifacts?.find((a) => a.domain_ref_type === sourceZip.type)?.id ?? null)
+    : null
+  const [downloading, setDownloading] = useState(false)
+  const handleDownloadSource = async () => {
+    if (!zipArtifactId || !sourceZip) return
+    setDownloading(true)
+    try {
+      const blob = await agentApi.downloadArtifact(zipArtifactId)
+      downloadBlob(blob, sourceZip.filename)
+    } catch {
+      toast.error(t("toast.downloadFailed"))
+    } finally {
+      setDownloading(false)
+    }
+  }
+
   return (
     <div className="rounded-lg border bg-card">
       <button
@@ -114,6 +155,23 @@ function LaneCard({ lane }: { lane: Lane }) {
           <span className="shrink-0 text-[10px] text-muted-foreground">
             {progress ? `${progress.completed_steps}/${progress.total_steps}` : "—"}
           </span>
+          {zipArtifactId && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 shrink-0 gap-1 px-2 text-[11px]"
+              onClick={handleDownloadSource}
+              disabled={downloading}
+              title={t("downloadSource")}
+            >
+              {downloading ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Download className="h-3 w-3" />
+              )}
+              {t("downloadSource")}
+            </Button>
+          )}
         </div>
       </div>
 

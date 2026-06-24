@@ -316,14 +316,28 @@ def proxy_to_backend(project_id: str, subpath: str):
     """Forward a request from the served frontend to the live backend container.
 
     The generated backend mounts its routes at root, so ``/app/<pid>/api/<sub>``
-    maps to ``http://<container>:<port>/<sub>``. Owner-scoped via the app cookie.
+    maps to ``http://<container>:<port>/<sub>``.
+
+    Access mirrors ``serve_project_preview``: the OWNER (proven by the app-token
+    cookie / one-shot ``?token=``) OR anyone when the project is public. A public
+    project's served frontend (``/preview/<pid>/``) is reachable anonymously, so its
+    same-origin API calls MUST be too — otherwise a shared app (e.g. a link opened
+    in WeChat / another browser that never ran the cookie-planting ``?token=``
+    entry) renders its shell but every ``/app/<pid>/api/*`` call 403s. The
+    deployment is always resolved against the project OWNER (an anonymous public
+    visitor has no identity of its own); the generated backend keeps its OWN auth,
+    so exposing the proxy for a public project grants nothing the public preview
+    didn't already expose.
     """
-    identity = _proxy_identity(project_id)
-    if not identity:
-        return error_response("FORBIDDEN", "无效的访问令牌", 403)
-    if not _owned_project(project_id, identity):
+    project = CodeProject.query.filter_by(id=project_id).first()
+    if not project:
         return error_response("NOT_FOUND", "项目不存在或无权访问", 404)
-    target = deploy_service.resolve_proxy_target(project_id, identity)
+    identity = _proxy_identity(project_id)
+    is_owner = bool(identity) and identity == project.user_id
+    is_public = project.visibility == "public"
+    if not (is_owner or is_public):
+        return error_response("FORBIDDEN", "无效的访问令牌", 403)
+    target = deploy_service.resolve_proxy_target(project_id, project.user_id)
     if not target:
         return error_response("NOT_FOUND", "后端尚未部署或未在运行", 404)
     container, port = target

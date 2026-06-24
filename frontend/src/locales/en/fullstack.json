@@ -34,6 +34,8 @@
     "started": "Full-stack generation started (frontend / backend / middleware concurrently)",
     "startFailed": "Failed to start",
     "deployStarted": "Atomic deploy started",
-    "deployFailed": "Failed to start deploy"
-  }
+    "deployFailed": "Failed to start deploy",
+    "downloadFailed": "Download failed"
+  },
+  "downloadSource": "Download source"
 }

@@ -34,6 +34,8 @@
     "started": "풀스택 생성을 시작했습니다 (프런트엔드 / 백엔드 / 미들웨어 동시)",
     "startFailed": "시작에 실패했습니다",
     "deployStarted": "원자적 배포를 시작했습니다",
-    "deployFailed": "배포 시작에 실패했습니다"
-  }
+    "deployFailed": "배포 시작에 실패했습니다",
+    "downloadFailed": "다운로드 실패"
+  },
+  "downloadSource": "소스 다운로드"
 }

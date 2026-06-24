@@ -317,6 +317,11 @@ def deploy(
     running_image = image_tag
     itest_repaired_rounds = 0
     fix_notes: list[str] = []
+    # The clean source snapshot that ``running_image`` was built from — tracked
+    # through the itest repair ladder so PROMOTE only ever ships source that MATCHES
+    # the running image (a failed round leaves the workdir dirty; we never promote
+    # that). None until the ladder runs; then it advances only on a healthy round.
+    good_source: Optional[dict] = None
     try:
         _ensure_network()
 
@@ -529,6 +534,10 @@ def deploy(
                 contract_block = integration_test_service._render_contract_block(
                     _row.get_api_contract() if _row else {}
                 )
+                # Snapshot the source the CURRENTLY-running image was built from
+                # BEFORE any round dirties the workdir, so a failed round can never
+                # cause us to promote source that doesn't match the running image.
+                good_source = _collect_repaired_source(workdir, set(source.keys())) if workdir else None
                 round_n = 0
                 while (itest.get("gate") == "fail" and round_n < max_itest_repairs
                        and not cancelled()):
@@ -562,12 +571,27 @@ def deploy(
                     if swap.returncode == 0:
                         healthy, hdetail = _wait_healthy(container, BACKEND_PORT, HEALTH_TIMEOUT, cancelled)
                     if not healthy:
-                        _run_container(container, running_image, prov)
-                        _wait_healthy(container, BACKEND_PORT, HEALTH_TIMEOUT, cancelled)
+                        # Revert to the last-known-good image. Liveness is a HARD gate
+                        # (best-effort-proceed covers interface grounds, NOT "is the app
+                        # up"): _run_container removed the good container to swap, so if
+                        # the revert can't bring a HEALTHY one back, roll the whole
+                        # deploy back rather than register a dead container as RUNNING.
+                        rb = _run_container(container, running_image, prov)
+                        reverted = rb.returncode == 0 and _wait_healthy(
+                            container, BACKEND_PORT, HEALTH_TIMEOUT, cancelled)[0]
+                        if not reverted:
+                            return _fail(
+                                dep, rollback,
+                                "修复后容器无法启动,且回滚到修复前镜像也未能恢复健康",
+                                narrate=phase,
+                            )
                         phase("itest", "修复后容器无法启动/健康检查未过,已恢复修复前镜像,停止修复(尽力放行)")
                         break
                     running_image = new_tag
                     itest_repaired_rounds = round_n
+                    # This round built + swapped + passed health → the workdir matches
+                    # the new running image; advance the promotable snapshot.
+                    good_source = _collect_repaired_source(workdir, set(source.keys())) if workdir else good_source
                     itest = integration_test_service.run_integration_tests(
                         project_id=project.id, user_id=user_id, team_id=team_id,
                         container=container, port=BACKEND_PORT, frontend_run=frontend_run,
@@ -652,38 +676,40 @@ def deploy(
             return _abort(dep, rollback, "已取消")
 
         # --- 6c. PROMOTE the repaired source ---------------------------------
-        # If the build and/or itest repair ladders edited the source, the workdir now
-        # differs from the original artifact and IS exactly what the running image was
-        # built from. Collect the (clean) repaired source BEFORE cleanup so the
-        # workflow can publish it — download / GitHub sync / re-deploy then use the
-        # fixed code ("logical overwrite, physical additive"). Only the BACKEND is
-        # ever repaired; the frontend dist is untouched.
+        # Publish the repaired backend source so download / re-deploy use the fixed
+        # code ("logical overwrite, physical additive"). It must EXACTLY match the
+        # running image: when the itest ladder ran, use ``good_source`` (the snapshot
+        # tracked to the last HEALTHY round — a failed round's dirty workdir is never
+        # promoted); otherwise (build-repair only, no itest ladder) the workdir is
+        # clean and matches the image, so collect it. Only the BACKEND is repaired;
+        # the frontend dist is untouched.
         build_rounds = int(dep.get_detail().get("build_repaired_rounds") or 0)
         repaired_source: dict = {}
         fix_summary: Optional[dict] = None
-        if (build_rounds or itest_repaired_rounds) and workdir and workdir.exists():
+        collected = good_source
+        if collected is None and build_rounds and workdir and workdir.exists():
             collected = _collect_repaired_source(workdir, set(source.keys()))
-            # Promote only if the source actually changed (edits / additions /
-            # deletions) — a repair round that produced byte-identical output is not
-            # promoted. `collected` empty (workdir vanished) is never promoted.
-            if collected and collected != source:
-                changed = sorted(rel for rel in collected if collected.get(rel) != source.get(rel))
-                removed = sorted(set(source) - set(collected))
-                repaired_source = collected
-                fix_summary = {
-                    "build_repaired_rounds": build_rounds,
-                    "itest_repaired_rounds": itest_repaired_rounds,
-                    "changed_files": changed,
-                    "removed_files": removed,
-                    "notes": [n for n in fix_notes if n],
-                }
-                dep.set_detail({**dep.get_detail(), "promoted_fix": {
-                    "build_repaired_rounds": build_rounds,
-                    "itest_repaired_rounds": itest_repaired_rounds,
-                    "changed_files": changed,
-                    "removed_files": removed,
-                }})
-                db.session.commit()
+        # Promote only if the source actually changed (edits / additions / deletions)
+        # — a repair round that produced byte-identical output is not promoted, and
+        # `collected` empty / None (workdir vanished, or nothing ran) never promotes.
+        if collected and collected != source:
+            changed = sorted(rel for rel in collected if collected.get(rel) != source.get(rel))
+            removed = sorted(set(source) - set(collected))
+            repaired_source = collected
+            fix_summary = {
+                "build_repaired_rounds": build_rounds,
+                "itest_repaired_rounds": itest_repaired_rounds,
+                "changed_files": changed,
+                "removed_files": removed,
+                "notes": [n for n in fix_notes if n],
+            }
+            dep.set_detail({**dep.get_detail(), "promoted_fix": {
+                "build_repaired_rounds": build_rounds,
+                "itest_repaired_rounds": itest_repaired_rounds,
+                "changed_files": changed,
+                "removed_files": removed,
+            }})
+            db.session.commit()
 
         # --- 7. Register (the proxy resolves here) ---------------------------
         dep.status = DeploymentStatus.RUNNING

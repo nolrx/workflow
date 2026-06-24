@@ -116,6 +116,30 @@ services:
             APP_BUILD_REPAIRS: "3"
             APP_BUILD_TIMEOUT: "1200"
             BE_AGENT_REPAIR_TIMEOUT: "900"
+            # Deploy CI smoke stage: after /health, hit a few idempotent contract
+            # GET endpoints (per-endpoint timeout). Only a 5xx rolls back.
+            APP_SMOKE_TIMEOUT: "15"
+            APP_SMOKE_MAX_ENDPOINTS: "3"
+            # Generation-time REAL build ladder (install -> compile -> test ->
+            # package-verify + bounded AI self-heal) — this is where "verify it can
+            # be packaged" actually happens (native build; no docker here). The
+            # generate + total budgets are "0" (run to completion, mirroring
+            # fe-agent) so the host never kills a long-but-legit build into an empty
+            # product (which would wrongly refund); the per-phase caps below stay
+            # finite so a single wedged stage can't hang forever.
+            BE_AGENT_TIMEOUT: "0"
+            BE_AGENT_TOTAL_TIMEOUT: "0"
+            BE_AGENT_INSTALL_TIMEOUT: "480"
+            BE_AGENT_BUILD_TIMEOUT_GEN: "480"
+            BE_AGENT_TEST_TIMEOUT: "300"
+            BE_AGENT_PACKAGE_TIMEOUT: "180"
+            BE_AGENT_GEN_REPAIRS: "1"
+            # BMAD second pass: after first-gen, before the build ladder, a second
+            # claude pass turns every FR/NFR/M functional anchor into a real
+            # end-to-end implementation (no stubs). 0 disables it (single gen).
+            # Its budget reuses BE_AGENT_TIMEOUT (=0 → run to completion).
+            BE_AGENT_REINFORCE: "1"
+            BE_AGENT_REINFORCE_TIMEOUT: "0"
             # fe-agent now runs TWO CLIs: Claude Code (writes the project) + Codex (real
             # image assets via the bundled image-assets skill). Codex reuses
             # OPENAI_API_KEY (from .env, the image key); the backend injects it per

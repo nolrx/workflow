@@ -16,7 +16,9 @@ from backend.services.prompts.store import prompt_store  # noqa: E402
 
 KEYS = [
     "code/backend_project_prompt.txt",
+    "code/backend_project_reinforce_prompt.txt",
     "code/backend_project_repair_prompt.txt",
+    "code/backend_project_critic_prompt.txt",
 ]
 
 db = get_mongo_db()

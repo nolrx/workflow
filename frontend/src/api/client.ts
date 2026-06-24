@@ -49,6 +49,12 @@ apiClient.interceptors.request.use(
   (error) => Promise.reject(error)
 )
 
+// Bounded retries for TRANSIENT infrastructure failures (e.g. the backend briefly
+// unreachable during a graceful redeploy). Only idempotent GETs are retried; a
+// deliberate "draining" 503 is surfaced immediately so the UI can tell the user
+// the platform is deploying.
+const MAX_TRANSIENT_RETRIES = 6
+
 // Response interceptor - handle token refresh
 let isRefreshing = false
 let failedQueue: Array<{
@@ -119,6 +125,28 @@ apiClient.interceptors.response.use(
         return Promise.reject(refreshError)
       } finally {
         isRefreshing = false
+      }
+    }
+
+    // Transient infrastructure failure (no response, or 502/503/504 — e.g. the
+    // backend swapping during a graceful redeploy): retry idempotent GETs a few
+    // times with backoff so a click in the deploy window rides through instead of
+    // hard-failing. A deliberate "draining" 503 is NOT retried — surface it so the
+    // UI can show "发布中，请稍后重试".
+    const cfg = error.config as
+      | (InternalAxiosRequestConfig & { _retryCount?: number })
+      | undefined
+    const status = error.response?.status
+    const isDraining =
+      status === 503 && (error.response?.data as ApiError | undefined)?.error === "DRAINING"
+    const transient = !error.response || status === 502 || status === 503 || status === 504
+    const idempotent = (cfg?.method ?? "get").toLowerCase() === "get"
+    if (cfg && idempotent && transient && !isDraining) {
+      const attempt = (cfg._retryCount ?? 0) + 1
+      if (attempt <= MAX_TRANSIENT_RETRIES) {
+        cfg._retryCount = attempt
+        await new Promise((r) => setTimeout(r, Math.min(400 * attempt, 2000)))
+        return apiClient(cfg)
       }
     }
 

@@ -32,6 +32,7 @@ from backend.services.agent.runtime import agent_runtime
 from backend.services.code import deploy_service
 from backend.services.code.fullstack import contract_service
 from backend.services.credit_service import InsufficientCreditsError, deduct_credits
+from backend.services.lifecycle import drain_guard
 from backend.utils.preview_token import preview_identity
 from backend.utils.response import error_response, success_response
 
@@ -122,6 +123,9 @@ def _active_pipeline_runs(project_id: str, user_id: str) -> dict:
 @jwt_required()
 def start_fullstack(project_id: str):
     """Synthesize the shared contract, then start the three concurrent runs."""
+    drained = drain_guard()  # starts three background runs — refuse while draining
+    if drained:
+        return drained
     user_id = get_jwt_identity()
     project = _owned_project(project_id, user_id)
     if not project:
@@ -171,6 +175,9 @@ def start_fullstack(project_id: str):
 @jwt_required()
 def start_deploy(project_id: str):
     """Start the atomic deploy run (requires the three generation runs done)."""
+    drained = drain_guard()  # starts a background deploy run — refuse while draining
+    if drained:
+        return drained
     user_id = get_jwt_identity()
     project = _owned_project(project_id, user_id)
     if not project:

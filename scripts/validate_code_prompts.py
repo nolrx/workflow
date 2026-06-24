@@ -142,12 +142,29 @@ MANIFEST: dict[str, dict] = {
             "CONTEXT_LEDGER", "REQUIREMENT", "REQUIREMENTS_DOC",
             "DEVELOPMENT_FLOW", "DOCUMENTS", "CONTRACT", "MIDDLEWARE",
         ],
-        "must_contain": ["Dockerfile", "/health", "PORT", "DATABASE_URL", "REDIS_URL", "EXPOSE 8080"],
+        "must_contain": [
+            "Dockerfile", "/health", "PORT", "DATABASE_URL", "REDIS_URL", "EXPOSE 8080",
+            # Architecture-discipline anchors: guard that the prompt keeps the
+            # 6-question doctrine + delivered scaffolding (else a future trim /
+            # a stale Mongo override could silently ship a doctrine-less prompt).
+            "ARCHITECTURE.md", "Makefile", "make test",
+        ],
+    },
+    "backend_project_reinforce_prompt.txt": {
+        "mode": "fill",
+        "placeholders": [
+            "CONTEXT_LEDGER", "REQUIREMENT", "REQUIREMENTS_DOC",
+            "DEVELOPMENT_FLOW", "DOCUMENTS", "CONTRACT", "MIDDLEWARE",
+        ],
+        "must_contain": [
+            "功能锚点", "二次功能补强", "状态机", "AI/提示词链路",
+            "DATABASE_URL", "REDIS_URL", "/health", "ARCHITECTURE.md", "make test", "TODO",
+        ],
     },
     "backend_project_critic_prompt.txt": {
         "mode": "fill",
         "placeholders": ["CONTRACT", "SOURCE"],
-        "must_contain": ['"verdict"', '"endpoint_coverage"', '"issues"', '"summary"', "PASS", "CONCERNS", "FAIL"],
+        "must_contain": ['"verdict"', '"endpoint_coverage"', '"fr_coverage"', '"issues"', '"summary"', "PASS", "CONCERNS", "FAIL"],
     },
     "backend_project_repair_prompt.txt": {
         "mode": "plain",

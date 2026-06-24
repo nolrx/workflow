@@ -74,10 +74,25 @@ def create_app(config_name: str = None) -> Flask:
     app.register_blueprint(app_proxy_bp, url_prefix="/app")
     app.register_blueprint(admin_bp, url_prefix="/api/admin")
 
-    # Health check endpoint
+    # Health checks — liveness vs readiness.
+    # Liveness: the process is up and can serve. Used by the Docker HEALTHCHECK and
+    # external probes; stays 200 even while draining (the process is still alive).
     @app.route("/health")
+    @app.route("/health/live")
     def health():
         return jsonify({"status": "healthy", "service": "ai-creative-studio"})
+
+    # Readiness: is this instance ready to take NEW work? Returns 503 while draining
+    # for a graceful redeploy, so the deploy script (and any future load balancer)
+    # stops routing to / waiting on the instance that is shutting down. See
+    # backend/services/lifecycle.py and scripts/deploy-backend.sh.
+    @app.route("/health/ready")
+    def health_ready():
+        from backend.services.lifecycle import is_draining
+
+        if is_draining():
+            return jsonify({"status": "draining", "ready": False}), 503
+        return jsonify({"status": "ready", "ready": True})
 
     @app.route("/")
     def index():

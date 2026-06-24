@@ -38,6 +38,7 @@ from backend.services.agent.bus import event_bus
 from backend.services.agent.files import artifact_abs_path
 from backend.services.agent.runtime import agent_runtime, get_workflow
 from backend.services.credit_service import InsufficientCreditsError, deduct_credits
+from backend.services.lifecycle import drain_guard
 from backend.utils.preview_token import PREVIEW_TOKEN_TTL, mint_preview_token, preview_identity
 from backend.utils.response import error_response, success_response
 
@@ -73,6 +74,11 @@ def _get_owned_run(run_id: str) -> AgentRun | None:
 @jwt_required()
 def create_run():
     """Create and start a workflow run after reserving credits."""
+    # Refuse new work while the platform is draining for a redeploy (in-flight runs
+    # keep going and resume on the new process; users just retry once it's back).
+    drained = drain_guard()
+    if drained:
+        return drained
     user_id = get_jwt_identity()
     data = request.get_json() or {}
     domain = (data.get("domain") or "").strip()
@@ -257,6 +263,9 @@ def resume_run(run_id: str):
     The directive is stashed on the run config; the worker is relaunched and the
     workflow rebuilds its state from the persisted cursor / ledger / project.
     """
+    drained = drain_guard()  # relaunching a worker counts as new work
+    if drained:
+        return drained
     run = _get_owned_run(run_id)
     if not run:
         return error_response("NOT_FOUND", "任务不存在", 404)
@@ -335,6 +344,9 @@ def retry_run(run_id: str):
     project). The worker keeps its original ``started_at`` so the runtime treats
     this as a continuation, not a fresh run.
     """
+    drained = drain_guard()  # relaunching a worker counts as new work
+    if drained:
+        return drained
     user_id = get_jwt_identity()
     run = _get_owned_run(run_id)
     if not run:

@@ -84,6 +84,34 @@ if [ ! -e "$PROJECT_ROOT/package.json" ] && [ ! -e "$PROJECT_ROOT/requirements.t
 fi
 echo "$PROJECT_ROOT" > /out/project_root
 
+# --- 1b. BMAD reinforce pass (functional completeness) --------------------
+# A SECOND autonomous-CLI pass over the just-generated project: turn every
+# FR/NFR/M anchor into a REAL end-to-end implementation (state machines /
+# server-side validation / async & scheduled jobs / AI call-chains) and kill
+# stubs/TODOs. NO docker, NO contract changes. Runs BEFORE the build ladder so
+# install/compile/test verify the REINFORCED tree. Prompt over stdin (E2BIG-safe);
+# the CLI runs INSIDE PROJECT_ROOT so it edits the generated files. Gated by
+# BE_AGENT_REINFORCE (default 1) AND a non-empty reinforce prompt (fail-soft skip).
+if [ "${BE_AGENT_REINFORCE:-1}" != "0" ] && [ -s /out/reinforce_prompt.txt ]; then
+  emit reinforce
+  ( cd "$PROJECT_ROOT" && run_capped "${BE_AGENT_REINFORCE_TIMEOUT:-${BE_AGENT_TIMEOUT:-900}}" \
+      claude -p $CLAUDE_FLAGS < /out/reinforce_prompt.txt )
+  echo "$?" > /out/reinforce_exit
+  # The reinforce agent may have created the manifest only on this pass; re-resolve
+  # PROJECT_ROOT the SAME way as after first-gen so detect/build see the right dir.
+  if [ ! -e "$PROJECT_ROOT/package.json" ] && [ ! -e "$PROJECT_ROOT/requirements.txt" ] \
+     && [ ! -e "$PROJECT_ROOT/pyproject.toml" ] && [ ! -e "$PROJECT_ROOT/go.mod" ] \
+     && [ ! -e "$PROJECT_ROOT/pom.xml" ] && [ ! -e "$PROJECT_ROOT/Dockerfile" ]; then
+    MANIFEST2="$(find "$WORK" -maxdepth 3 \
+      \( -name package.json -o -name requirements.txt -o -name pyproject.toml \
+         -o -name go.mod -o -name pom.xml -o -name Dockerfile \) \
+      -not -path '*/node_modules/*' -print -quit 2>/dev/null)"
+    if [ -n "$MANIFEST2" ]; then PROJECT_ROOT="$(dirname "$MANIFEST2")"; echo "$PROJECT_ROOT" > /out/project_root; fi
+  fi
+else
+  echo "skipped" > /out/reinforce_exit
+fi
+
 # --- 2. Detect stack ------------------------------------------------------
 emit detect
 STACK="unknown"
@@ -94,26 +122,134 @@ elif [ -e "$PROJECT_ROOT/pom.xml" ] || [ -e "$PROJECT_ROOT/build.gradle" ]; then
 fi
 echo "$STACK" > /out/stack
 
-# --- 3. Light, fail-soft syntax check (NO dependency install) -------------
-emit validate
-( cd "$PROJECT_ROOT"
-  case "$STACK" in
-    node)
-      # node --check each plain JS/MJS file (TS needs a compiler+deps; skip).
-      find . -path ./node_modules -prune -o \( -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \) -print \
-        | while read -r f; do node --check "$f" || echo "syntax: $f"; done
-      ;;
-    python)
-      find . -name '*.py' -not -path '*/.venv/*' -print \
-        | while read -r f; do python -m py_compile "$f" 2>&1 || echo "syntax: $f"; done
-      ;;
-    go)
-      command -v gofmt >/dev/null 2>&1 && gofmt -l . 2>&1 || true
-      ;;
-    *) echo "stack=$STACK: skipped syntax check" ;;
-  esac
-) > /out/validate.log 2>&1
-echo "$?" > /out/validate_exit
+# --- 3. Real native build + test + package-verify + AI self-heal ladder ----
+# The be-agent image carries full toolchains (JDK+Maven / Go / Python / Node) but
+# has NO docker.sock — so "verify it can be packaged" here means a REAL native
+# build: deps resolve + compile + tests pass + a packageable artifact. The actual
+# docker image packaging happens at DEPLOY time on the platform (which holds the
+# socket). Mirrors frontend_project_service's self-healing ladder, for polyglot
+# backends. Logs go to /out/*.log (NEVER -q/quiet: the full log is the only clue
+# the AI repair has).
+cd "$PROJECT_ROOT"
+
+# scaffold-check: prefer the project's OWN unified entrypoint (Makefile targets /
+# ci.sh) so generation, deploy-time repair and external CI all run the SAME
+# commands — judgement never drifts. Else fall back to stack-native commands.
+SCAFFOLD="none"
+if [ -f Makefile ] && grep -qE '^(build|test)[[:space:]]*:' Makefile 2>/dev/null; then SCAFFOLD="make"
+elif [ -f ci.sh ]; then SCAFFOLD="ci"; fi
+echo "$SCAFFOLD" > /out/scaffold
+
+# Each TEST_CMD records a DETERMINISTIC tests-ran marker (/out/tests_ran_marker:
+# 1 = a real test command was attempted, 0 = an explicit skip). NOT inferred from
+# log text — the log's first line echoes the command string, so any substring
+# heuristic would self-pollute (e.g. the word "skipping" in the skip branch).
+case "$STACK" in
+  node)
+    NI='npm ci || npm install --no-audit --no-fund'
+    NC='if [ -f tsconfig.json ]; then npx --no-install tsc --noEmit; else npm run build --if-present; fi'
+    NT='if grep -q "no test specified" package.json 2>/dev/null; then echo 0 > /out/tests_ran_marker; echo "default npm test placeholder; not run"; exit 0; else echo 1 > /out/tests_ran_marker; npm test --if-present; fi'
+    ;;
+  python)
+    NI='python3 -m venv .venv && . .venv/bin/activate && { if [ -f requirements.txt ]; then pip install -r requirements.txt; elif [ -f pyproject.toml ]; then pip install -e .; else echo "no python deps file"; fi; }'
+    NC='. .venv/bin/activate 2>/dev/null; python -m compileall -x "(\.venv|node_modules)" .'
+    NT='. .venv/bin/activate 2>/dev/null; if python -c "import pytest" 2>/dev/null; then echo 1 > /out/tests_ran_marker; pytest; rc=$?; [ "$rc" = "5" ] && rc=0; exit $rc; else echo 0 > /out/tests_ran_marker; echo "no pytest; not run"; exit 0; fi'
+    ;;
+  go)
+    NI='go mod download'
+    NC='go build ./...'
+    NT='echo 1 > /out/tests_ran_marker; go test ./...'
+    ;;
+  java)
+    NI='mvn -B -e -DskipTests dependency:resolve'
+    NC='mvn -B -e -DskipTests compile'
+    NT='echo 1 > /out/tests_ran_marker; mvn -B -e test'
+    ;;
+  *)
+    NI='echo "stack unknown: no install"'; NC='echo "stack unknown: no compile"'
+    NT='echo 0 > /out/tests_ran_marker; echo "stack unknown: no tests"'
+    ;;
+esac
+
+mk() { [ "$SCAFFOLD" = "make" ] && grep -qE "^$1[[:space:]]*:" Makefile 2>/dev/null; }
+INSTALL_CMD="$NI"; COMPILE_CMD="$NC"; TEST_CMD="$NT"; PACKAGE_CMD='true'
+if mk install; then INSTALL_CMD='make install'; fi
+if mk build;   then COMPILE_CMD='make build'; fi
+if mk test;    then TEST_CMD='echo 1 > /out/tests_ran_marker; make test'; fi
+if mk package; then PACKAGE_CMD='make package'; fi
+if [ "$SCAFFOLD" = "ci" ]; then
+  INSTALL_CMD='echo "install covered by ci.sh"'; COMPILE_CMD='bash ci.sh'
+  TEST_CMD='echo 1 > /out/tests_ran_marker; echo "tests covered by ci.sh"'
+fi
+
+run_phase() {  # run_phase <timeout-seconds> <logfile> <command-string>; returns the cmd exit
+  local secs="$1" logf="$2" cmd="$3"
+  case "$secs" in (''|*[!0-9]*) secs=0 ;; esac
+  printf '$ %s\n' "$cmd" > "$logf"
+  if [ "$secs" -eq 0 ]; then bash -c "$cmd" >> "$logf" 2>&1
+  else timeout "$secs" bash -c "$cmd" >> "$logf" 2>&1; fi
+  return $?
+}
+
+INSTALL_T="${BE_AGENT_INSTALL_TIMEOUT:-480}"
+COMPILE_T="${BE_AGENT_BUILD_TIMEOUT_GEN:-480}"
+TEST_T="${BE_AGENT_TEST_TIMEOUT:-300}"
+PKG_T="${BE_AGENT_PACKAGE_TIMEOUT:-180}"
+GEN_REPAIRS="${BE_AGENT_GEN_REPAIRS:-1}"
+case "$GEN_REPAIRS" in (''|*[!0-9]*) GEN_REPAIRS=1 ;; esac
+
+BUILD_STATE=""; attempt=0
+while : ; do
+  emit install;        run_phase "$INSTALL_T" /out/install.log "$INSTALL_CMD"; install_exit=$?
+  emit compile;        run_phase "$COMPILE_T" /out/compile.log "$COMPILE_CMD"; compile_exit=$?
+  emit test;           run_phase "$TEST_T"    /out/test.log    "$TEST_CMD";    test_exit=$?
+  emit package-verify; run_phase "$PKG_T"     /out/package.log "$PACKAGE_CMD"; :
+  echo "$install_exit" > /out/install_exit
+  echo "$compile_exit" > /out/compile_exit
+  echo "$test_exit"    > /out/test_exit
+  if [ "$install_exit" -eq 0 ] && [ "$compile_exit" -eq 0 ] && [ "$test_exit" -eq 0 ]; then
+    if [ "$attempt" -eq 0 ]; then BUILD_STATE="green"; else BUILD_STATE="green-repaired"; fi
+    break
+  fi
+  if [ "$attempt" -ge "$GEN_REPAIRS" ]; then
+    if   [ "$install_exit" -ne 0 ]; then BUILD_STATE="install-failed"
+    elif [ "$compile_exit" -ne 0 ]; then BUILD_STATE="compile-failed"
+    else BUILD_STATE="test-failed"; fi
+    break
+  fi
+  attempt=$((attempt + 1))
+  # AI self-heal round: feed the repair prompt + the tails of the failed logs
+  # over stdin (E2BIG-safe; never written into PROJECT_ROOT or it'd be tarred out).
+  emit ai-repair
+  { cat /out/repair_prompt.txt
+    printf '\n\n# 本机原生构建/测试报错(节选 — 据此修复,目标:make build && make test 全绿)\n'
+    printf '\n## install.log\n'; tail -c 2500 /out/install.log 2>/dev/null
+    printf '\n## compile.log\n'; tail -c 3000 /out/compile.log 2>/dev/null
+    printf '\n## test.log\n';    tail -c 3000 /out/test.log 2>/dev/null
+  } > /out/repair_full_prompt.txt
+  run_capped "${BE_AGENT_REPAIR_TIMEOUT:-900}" claude -p $CLAUDE_FLAGS < /out/repair_full_prompt.txt
+  echo "$?" >> /out/claude_repair_exit
+done
+# Unknown stack = nothing was actually built/tested (install/compile/test were
+# no-op echoes that exit 0). Don't let that masquerade as a verified-green build;
+# mark it degraded so the workflow flags it instead of reporting "验证通过".
+if [ "$STACK" = "unknown" ]; then
+  case "$BUILD_STATE" in green|green-repaired) BUILD_STATE="stack-unknown" ;; esac
+fi
+echo "$BUILD_STATE" > /out/build_state
+echo "$attempt" > /out/repaired_rounds
+# /out/degraded: empty when green/green-repaired, else the failed/unverified stage.
+case "$BUILD_STATE" in green|green-repaired) : > /out/degraded ;; *) printf '%s' "$BUILD_STATE" > /out/degraded ;; esac
+
+# Dockerfile static lint (advisory only; the synth step below still guarantees a
+# Dockerfile exists). Surfaces obvious deploy-time build hazards at gen time.
+DF_WARN=""
+if [ -f Dockerfile ]; then
+  grep -q "EXPOSE 8080" Dockerfile 2>/dev/null || DF_WARN="${DF_WARN}no-EXPOSE-8080; "
+  grep -qiE "^[[:space:]]*(CMD|ENTRYPOINT)" Dockerfile 2>/dev/null || DF_WARN="${DF_WARN}no-CMD/ENTRYPOINT; "
+  if grep -qE "([[:space:]](-q|--quiet)([[:space:]]|\$))|>[[:space:]]*/dev/null" Dockerfile 2>/dev/null; then DF_WARN="${DF_WARN}build-log-suppressed; "; fi
+fi
+printf '%s' "$DF_WARN" > /out/dockerfile_warn
 
 # --- 4. Guarantee a Dockerfile (synthesize if the agent forgot) -----------
 emit dockerfile
@@ -202,13 +338,48 @@ class BackendProjectService:
     def __init__(self):
         self.image = os.getenv("BE_AGENT_IMAGE", os.getenv("FE_AGENT_IMAGE", "fe-agent:latest"))
         self.docker = os.getenv("DOCKER_BIN", "docker")
-        self.gen_timeout = int(os.getenv("BE_AGENT_TIMEOUT", "900"))
-        self.total_timeout = int(os.getenv("BE_AGENT_TOTAL_TIMEOUT", "2400"))
+        # Generate phase now writes MORE files (project + Makefile + tests +
+        # ARCHITECTURE.md + README + .github CI), so the write budget is wider.
+        self.gen_timeout = int(os.getenv("BE_AGENT_TIMEOUT", "1200"))
+        # Per-phase budgets for the generation-time REAL build ladder (install ->
+        # compile -> test -> package-verify), all guarded by in-container timeouts.
+        self.install_timeout = int(os.getenv("BE_AGENT_INSTALL_TIMEOUT", "480"))
+        self.build_timeout_gen = int(os.getenv("BE_AGENT_BUILD_TIMEOUT_GEN", "480"))
+        self.test_timeout = int(os.getenv("BE_AGENT_TEST_TIMEOUT", "300"))
+        self.package_timeout = int(os.getenv("BE_AGENT_PACKAGE_TIMEOUT", "180"))
+        # Generation-time AI self-heal rounds after a red native build/test. Kept
+        # to 1 by default: one round covers most serial compile errors, and deploy
+        # has a SECOND ladder (APP_BUILD_REPAIRS) as backstop. Ops can raise it.
+        self.gen_repairs = int(os.getenv("BE_AGENT_GEN_REPAIRS", "1"))
+        # Host-side backstop on the WHOLE generate run. Must comfortably exceed the
+        # SUM of every in-container phase cap (gen + install+compile+test+package +
+        # N*(repair+install+compile+test+package)); else the host kills the
+        # container mid-build, the tar never runs, files come back empty and the
+        # run is wrongly refunded. With REPAIRS=1 the worst case is ~5.7k s, so the
+        # default is generous; compose sets it to 0 (wait forever — per-phase caps
+        # are the real guard) to fully remove the false-kill window, mirroring fe.
+        # The BMAD reinforce pass (below) adds a second full generation, so the
+        # bare-metal worst case grows to ~7.2k s (REPAIRS=1 + REINFORCE=1); hence
+        # the generous default (compose still sets 0 = run to completion).
+        self.total_timeout = int(os.getenv("BE_AGENT_TOTAL_TIMEOUT", "9000"))
+        # BMAD second pass (functional completeness): after the first generation,
+        # before the native build ladder, a second claude pass turns every FR/NFR/M
+        # functional anchor into a real end-to-end implementation (no stubs). On by
+        # default; ops disable with BE_AGENT_REINFORCE=0. Its budget reuses the gen
+        # budget unless BE_AGENT_REINFORCE_TIMEOUT is set. NOTE: resolve "0 = reuse
+        # gen" HERE (not in the container) — the value is always passed via -e, so a
+        # literal 0 in the container would defeat the shell ${VAR:-fallback} and run
+        # the reinforce pass UNCAPPED on bare-metal (where gen is finite). With this,
+        # the passed value is the real effective cap: gen_timeout on bare-metal, or 0
+        # (run to completion) under compose where gen_timeout is itself 0.
+        self.reinforce_enabled = os.getenv("BE_AGENT_REINFORCE", "1")  # passed verbatim to the container
+        self.reinforce_timeout = int(os.getenv("BE_AGENT_REINFORCE_TIMEOUT", "0")) or self.gen_timeout
         # Deploy-time build self-healing: each AI repair round runs on the staged
         # source after a failed ``docker build`` / container start. The be-agent
         # image now carries real build toolchains (JDK+Maven / Go / Python / Node)
         # so the round COMPILES its edits in-container before handing back; that
-        # download+build is slower than a blind edit, hence the wider default.
+        # download+build is slower than a blind edit, hence the wider default. The
+        # generation-time ladder reuses this same per-round budget.
         self.repair_timeout = int(os.getenv("BE_AGENT_REPAIR_TIMEOUT", "900"))
 
     # --- prompt assembly -----------------------------------------------------
@@ -304,8 +475,9 @@ class BackendProjectService:
             return self._empty("ANTHROPIC_API_KEY not configured")
 
         _cap = 16_000
-        prompt = self._fill(
-            self._load_prompt("backend_project_prompt.txt"),
+        # Shared anchor injection for BOTH the first-gen prompt and the reinforce
+        # prompt (same FR/NFR/M anchors), so the two passes can't drift on inputs.
+        fill_vals = dict(
             CONTEXT_LEDGER=context_ledger or "",
             REQUIREMENT=(requirement or "")[:4_000],
             REQUIREMENTS_DOC=(requirements_doc or "")[:_cap],
@@ -314,10 +486,30 @@ class BackendProjectService:
             CONTRACT=contract_block or "",
             MIDDLEWARE=middleware_block or "",
         )
+        prompt = self._fill(self._load_prompt("backend_project_prompt.txt"), **fill_vals)
 
         workdir = Path(tempfile.mkdtemp(prefix="be-agent-"))
         os.chmod(workdir, 0o777)
         (workdir / "prompt.txt").write_text(prompt, encoding="utf-8")
+        # The generation-time self-heal rung reuses the deploy repair prompt; the
+        # container appends the live native build/test logs before re-invoking
+        # claude. Written to /out (NOT into the project) so it is never tarred out.
+        try:
+            (workdir / "repair_prompt.txt").write_text(
+                self._load_prompt("backend_project_repair_prompt.txt"), encoding="utf-8"
+            )
+        except Exception:  # noqa: BLE001 — repair rung degrades to no-op if absent
+            (workdir / "repair_prompt.txt").write_text("", encoding="utf-8")
+        # BMAD reinforce prompt (second pass). Fail-soft: an empty file makes the
+        # container skip the reinforce pass (`[ -s ]` is false), degrading to a
+        # single generation — so a missing template never sinks the run.
+        try:
+            (workdir / "reinforce_prompt.txt").write_text(
+                self._fill(self._load_prompt("backend_project_reinforce_prompt.txt"), **fill_vals),
+                encoding="utf-8",
+            )
+        except Exception:  # noqa: BLE001 — reinforce rung degrades to skip if absent
+            (workdir / "reinforce_prompt.txt").write_text("", encoding="utf-8")
         api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
 
         cmd = [
@@ -325,6 +517,14 @@ class BackendProjectService:
             "-e", "ANTHROPIC_API_KEY",
             "-e", "OPENAI_API_KEY",
             "-e", f"BE_AGENT_TIMEOUT={self.gen_timeout}",
+            "-e", f"BE_AGENT_INSTALL_TIMEOUT={self.install_timeout}",
+            "-e", f"BE_AGENT_BUILD_TIMEOUT_GEN={self.build_timeout_gen}",
+            "-e", f"BE_AGENT_TEST_TIMEOUT={self.test_timeout}",
+            "-e", f"BE_AGENT_PACKAGE_TIMEOUT={self.package_timeout}",
+            "-e", f"BE_AGENT_GEN_REPAIRS={self.gen_repairs}",
+            "-e", f"BE_AGENT_REPAIR_TIMEOUT={self.repair_timeout}",
+            "-e", f"BE_AGENT_REINFORCE={self.reinforce_enabled}",
+            "-e", f"BE_AGENT_REINFORCE_TIMEOUT={self.reinforce_timeout}",
             "-v", f"{workdir}:/out", self.image, "bash", "-c", _CONTAINER_SCRIPT,
         ]
         env = dict(os.environ, ANTHROPIC_API_KEY=api_key or "")
@@ -372,27 +572,60 @@ class BackendProjectService:
         claude_exit = self._read_exit_code(workdir / "claude_exit")
         stack = self._read_text(workdir / "stack").strip() or "unknown"
         dockerfile_origin = self._read_text(workdir / "dockerfile_synth").strip() or "unknown"
-        validate_log = self._read_text(workdir / "validate.log")
+        # Generation-time build ladder outcome: build_state is one of green /
+        # green-repaired / install-failed / compile-failed / test-failed /
+        # stack-unknown (manifest undetected → nothing built); degraded is that
+        # state (empty when green). build_logs carries the per-phase tails for
+        # diagnostics, and feeds the failure message + the publish meta.
+        build_state = self._read_text(workdir / "build_state").strip() or "unknown"
+        repaired_rounds = self._read_exit_code(workdir / "repaired_rounds") or 0
+        degraded_reason = self._read_text(workdir / "degraded").strip() or None
+        scaffold = self._read_text(workdir / "scaffold").strip() or "none"
+        dockerfile_warn = self._read_text(workdir / "dockerfile_warn").strip()
+        build_logs = {
+            name: self._clip(text, 1500)
+            for name in ("install", "compile", "test", "package")
+            if (text := self._read_text(workdir / f"{name}.log")).strip()
+        }
+        # Whether a real test command was attempted (vs. an explicit skip): read the
+        # DETERMINISTIC marker the test phase writes (1/0), NOT a log substring —
+        # the log echoes the command string, which would self-pollute any heuristic.
+        tests_ran = self._read_text(workdir / "tests_ran_marker").strip() == "1"
+        # BMAD reinforce pass outcome: "skipped" (disabled/no template), "0" (ran
+        # clean), or a non-zero claude exit. Diagnostic only.
+        reinforce_state = self._read_text(workdir / "reinforce_exit").strip() or None
+        # Back-compat alias: callers that read the old ``validate_log`` key still
+        # get a useful combined build-log tail.
+        validate_log = "\n".join(f"[{k}]\n{v}" for k, v in build_logs.items())[:4000]
         files = self._collect(workdir / "project")
 
         summary, usage, cost, is_error = "", {}, 0.0, True
         if result_events:
+            # Take the LAST result so the summary reflects the post-reinforce state
+            # (first-gen + reinforce both stream a terminal result); cost/usage are
+            # summed across every pass, so they already include the reinforce pass.
             summary = next(
-                (r.get("result") for r in result_events if isinstance(r.get("result"), str)), ""
+                (r.get("result") for r in reversed(result_events) if isinstance(r.get("result"), str)), ""
             )
             cost = sum(float(r.get("total_cost_usd") or 0.0) for r in result_events)
             usage = self._merge_usage(result_events)
             is_error = bool(result_events[-1].get("is_error"))
 
         has_dockerfile = any(Path(k).name == "Dockerfile" for k in files)
+        # success stays "agent produced source + a Dockerfile" (so a buildable-but-
+        # not-yet-green project is still publishable + deployable, where a SECOND
+        # ladder + the contract gate apply). A red native build after the self-heal
+        # rounds is surfaced as ``degraded`` instead of a hard failure (see the
+        # workflow's failure policy).
         success = (docker_exit == 0) and bool(files) and has_dockerfile
+        degraded = success and build_state not in ("green", "green-repaired")
         dockerfile_source = files.get("Dockerfile")
         return {
             "success": success,
             "error": None if success else self._format_failure(
                 docker_exit=docker_exit, claude_exit=claude_exit, is_error=is_error,
                 files=files, has_dockerfile=has_dockerfile, summary=summary,
-                stderr=stderr, non_json_stdout=non_json_stdout, validate_log=validate_log,
+                stderr=stderr, non_json_stdout=non_json_stdout, build_logs=build_logs,
             ),
             "files": files,
             "stack": stack,
@@ -401,7 +634,16 @@ class BackendProjectService:
                 dockerfile_source.decode("utf-8", "replace")
                 if isinstance(dockerfile_source, (bytes, bytearray)) else dockerfile_source
             ),
-            "validate_log": validate_log[:4000],
+            "validate_log": validate_log,
+            "build_state": build_state,  # green | green-repaired | *-failed | unknown
+            "degraded": degraded,
+            "degraded_reason": degraded_reason if degraded else None,
+            "build_repaired_rounds": repaired_rounds,
+            "build_logs": build_logs,
+            "tests_ran": tests_ran,
+            "scaffold": scaffold,  # make | ci | none
+            "dockerfile_warn": dockerfile_warn or None,
+            "reinforce_state": reinforce_state,  # 'skipped' | '0' | non-zero exit
             "summary": summary,
             "usage": usage,
             "cost_usd": cost,
@@ -526,6 +768,9 @@ class BackendProjectService:
         return {
             "success": False, "error": error, "files": {}, "stack": "unknown",
             "dockerfile_origin": None, "dockerfile_source": None, "validate_log": "",
+            "build_state": "unknown", "degraded": False, "degraded_reason": None,
+            "build_repaired_rounds": 0, "build_logs": {}, "tests_ran": False,
+            "scaffold": "none", "dockerfile_warn": None, "reinforce_state": None,
             "summary": "", "usage": {}, "cost_usd": 0.0, "workdir": None,
         }
 
@@ -563,7 +808,7 @@ class BackendProjectService:
 
     def _format_failure(
         self, *, docker_exit, claude_exit, is_error, files, has_dockerfile,
-        summary, stderr, non_json_stdout, validate_log,
+        summary, stderr, non_json_stdout, build_logs,
     ) -> str:
         reasons: list[str] = []
         if docker_exit not in (0, None):
@@ -583,8 +828,9 @@ class BackendProjectService:
             details.append(f"stderr: {self._clip(stderr)}")
         if non_json_stdout:
             details.append(f"stdout: {self._clip(chr(10).join(non_json_stdout))}")
-        if validate_log:
-            details.append(f"validate: {self._clip(validate_log)}")
+        for name, log in (build_logs or {}).items():
+            if log:
+                details.append(f"{name}: {self._clip(log)}")
         headline = "; ".join(reasons) or "agent did not produce a backend project"
         return " | ".join([headline, *details])
 

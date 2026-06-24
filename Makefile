@@ -14,7 +14,12 @@ help: ## List available targets
 	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 # ---- Docker (single-machine deploy) -----------------------------------------
-.PHONY: build fe-agent up down restart deploy rebuild logs ps config destroy
+.PHONY: build fe-agent up down restart deploy redeploy rebuild logs ps config destroy
+.PHONY: drain undrain drain-status
+
+# Base url + header for the deploy-control endpoints (override per environment).
+CONTROL_URL ?= http://localhost:5001
+DEPLOY_HDR   = -H "X-Deploy-Token: $${DEPLOY_CONTROL_TOKEN}"
 
 build: ## Build all images incl. the fe-agent sandbox (--profile setup)
 	$(COMPOSE) --profile setup build
@@ -33,10 +38,22 @@ restart: ## Restart all services
 
 deploy: build up ## First-time / full deploy: build everything then start
 
+redeploy: ## Graceful backend redeploy: drain -> rebuild -> recreate -> wait ready
+	COMPOSE="$(COMPOSE)" DEPLOY_BASE_URL="$(CONTROL_URL)" scripts/deploy-backend.sh
+
 rebuild: ## Recreate from scratch: down, rebuild images, up
 	$(COMPOSE) down
 	$(COMPOSE) --profile setup build
 	$(COMPOSE) up -d
+
+drain: ## Stop the live backend accepting new runs (needs DEPLOY_CONTROL_TOKEN)
+	@curl -fsS -X POST $(DEPLOY_HDR) $(CONTROL_URL)/api/admin/lifecycle/drain && echo
+
+undrain: ## Let the live backend accept new runs again
+	@curl -fsS -X POST $(DEPLOY_HDR) $(CONTROL_URL)/api/admin/lifecycle/undrain && echo
+
+drain-status: ## Show the live backend's drain state
+	@curl -fsS $(DEPLOY_HDR) $(CONTROL_URL)/api/admin/lifecycle/status && echo
 
 logs: ## Tail logs from all services (scope with: make logs S=backend)
 	$(COMPOSE) logs -f --tail=200 $(S)

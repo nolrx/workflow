@@ -286,6 +286,30 @@ def _split_sql(sql: str) -> list[str]:
     return out
 
 
+def reset_namespace(database_url: Optional[str]) -> tuple[bool, str]:
+    """Reset a provisioned per-project database back to an EMPTY schema.
+
+    Deploy-time recovery: when the pre-applied ``init.sql`` fallback creates a
+    schema that conflicts with a *self-migrating* backend's own create-table-on-
+    boot (mismatched id types / missing columns → the backend crashes during
+    startup and never binds its port), drop everything and let the backend build
+    its own schema on the next start. Targets the project's OWN database
+    (``app_<pid>``), never the platform db. Sqlite-local / no-db: no-op.
+    """
+    if not database_url or database_url.startswith("sqlite"):
+        return True, "no reset (sqlite-local or none)"
+    try:
+        engine = create_engine(database_url, isolation_level="AUTOCOMMIT")
+        with engine.connect() as conn:
+            conn.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
+            conn.execute(text("CREATE SCHEMA public"))
+        engine.dispose()
+        return True, "database reset to empty schema"
+    except Exception as error:  # noqa: BLE001 — surfaced to the deploy run
+        logger.error("namespace reset failed: %s", error, exc_info=True)
+        return False, f"reset failed: {error}"
+
+
 def teardown_namespace(db_name: Optional[str]) -> bool:
     """Drop a provisioned per-project database (atomic-deploy rollback)."""
     if not db_name:

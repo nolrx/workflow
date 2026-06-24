@@ -62,15 +62,15 @@
 ## 服务层
 
 - `services/code/fullstack/contract_service.py` —— 合成共享契约(一次 text-model 调用),乐观锁写 `CodeProjectLedger`;`ensure_contract(project_id)` 幂等。
-- `services/code/backend_project_service.py` —— 镜像 `frontend_project_service`:DooD 容器跑 Claude Code+Codex 写 polyglot 后端工程(含 Dockerfile/健康检查/读 env),生成期自检构建梯子(语法/契约校验,**不实跑**),二进制安全收集。`repair_build()` 是**部署期自愈**:`docker build` 失败后把完整日志喂回 be-agent,claude 在容器内用**真实工具链实编译**(见下)迭代到 green。镜像 `be-agent:latest`(`backend/docker/be-agent/`)。
+- `services/code/backend_project_service.py` —— 镜像 `frontend_project_service`:DooD 容器跑 Claude Code 写 polyglot 后端工程(含 Dockerfile/健康检查/读 env),二进制安全收集。**生成期现在做真实原生构建梯子(`_CONTAINER_SCRIPT` step 3):`scaffold-check`(优先工程自带 `Makefile`/`ci.sh`)→ `install` → `compile` → `test` → `package-verify` + `BE_AGENT_GEN_REPAIRS` 轮 AI 自愈**(用镜像内 mvn/go/pip/npm 真编译——容器**无 docker.sock**,故只做原生构建,真正 `docker build` 留部署期)。**生成期还有一道 BMAD「二次功能补强」pass(`_CONTAINER_SCRIPT` step 1b,在第一次生成之后、构建梯子之前):再跑一次 claude 读 `backend_project_reinforce_prompt.txt`,把每个 FR/NFR/M 功能锚点从「能应答」补成真实端到端实现(业务规则/状态机/服务端权威校验/后台·异步·定时任务/AI 提示词链路真实调用链),消灭 stub/TODO/mock**;开关 `BE_AGENT_REINFORCE`(默认 1)+ `[ -s reinforce_prompt.txt ]` 双闸门,跳过则退回单次生成;补强后用 first-gen 同款 manifest 探测重定位 `PROJECT_ROOT`,随后构建梯子校验补强后的工程;补强 claude 的 result 经同一 stdout 循环并入 cost/usage,`summary` 取**最后一个** result(反映补强后状态)。`build_project()` 返回追加 `build_state`/`degraded`/`degraded_reason`/`build_repaired_rounds`/`build_logs`/`tests_ran`/`scaffold`/`reinforce_state`(`success` 语义不变:有源码+Dockerfile 即可发布;构建用满轮仍红 → `degraded` 而非硬失败)。`repair_build()` 是**部署期第二道自愈**:`docker build` 失败后喂回完整日志,claude 在容器内 `make build && make test` 实编译迭代到 green。镜像 `be-agent:latest`(`backend/docker/be-agent/`,已显式装 `make`+`build-essential`)。
 - `services/code/middleware_service.py` —— 从清单生成 schema SQL / 迁移 / seed;`provision(project_id, manifest)` 在共享 pg/redis 建库/前缀并跑初始化。
-- `services/code/deploy_service.py` —— 原子有序部署 + 回滚;长驻容器生命周期;健康检查;部署登记表读写;反代解析。
+- `services/code/deploy_service.py` —— 原子有序**分阶段 CI** + 回滚:`provision → migrate(显式数据层迁移/init.sql)→ build(=docker build 打镜像 +`APP_BUILD_REPAIRS`轮 AI 自愈)→ start → health(`/health` 硬闸)→ smoke(契约冒烟:抽样幂等无参 GET,仅 5xx 回滚、连接超时容忍)→ register`;长驻容器生命周期;部署登记表读写;反代解析。`_smoke_endpoints`/`_smoke_test` 从共享契约 paths 抽样,契约不可读时退化为只测 `/health`。
 
 ## 工作流(`services/agent/workflows/`)
 
-- `code_backend_project_workflow.py`:`be_planner`(校验 requirements_doc+development_flow,载共享契约) → `be_project_build`(容器生成,事件翻译复用 fe 的 on_event,验收评审) → `be_publish`(源码 zip + meta,`domain_ref_type=code_backend_project_*`)。
+- `code_backend_project_workflow.py`:`be_planner`(校验 requirements_doc+development_flow,载共享契约) → `be_project_build`(容器生成 + 二次补强 + 真实构建梯子;degraded 时发 WARNING、Dockerfile 静态检查提示;验收评审) → `be_publish`(源码 zip + meta,`domain_ref_type=code_backend_project_*`)。验收评审除 `endpoint_coverage`(契约端点)外还核 **`fr_coverage`(功能锚点 FR/NFR/M 是否真有端到端实现,带 `file` 指向)**——critic 把「核心 FR/M 未覆盖」折进 verdict=FAIL;meta 记 `fr_coverage`/`fr_uncovered`/`reinforce_state`。**契约/功能锚点评审 verdict=FAIL → run 置 `PARTIAL`(非 COMPLETED)**,meta 标 `contract_pass=False`;PARTIAL 仍可部署(`deploy_service._BUILT` 含 PARTIAL),但把「联调才爆的契约漂移」在生成期标红、可被可选门 `REQUIRE_CONTRACT_PASS` 拦截。
 - `code_middleware_provisioning` (`code_middleware_workflow.py`):`mw_planner` → `mw_provision`(生成 schema/迁移产物,**不实建库** —— 实建库在部署 run) → `mw_publish`(清单 + SQL artifact,`code_middleware_*`)。
-- `code_fullstack_deploy` (`code_fullstack_deploy_workflow.py`):join 三 run 产物 → 调 deploy_service 原子部署 → 发 deploy meta(`code_deploy_meta`,含 preview_url + api_base)。
+- `code_fullstack_deploy` (`code_fullstack_deploy_workflow.py`):join 三 run 产物 → 调 deploy_service 原子部署 → 发 deploy meta(`code_deploy_meta`,含 preview_url + api_base)。单计费步,内部 **6 phase**(`TOTAL_STEPS=6`,`_PHASE_PROGRESS` provision/migrate/build/start/health/smoke 单调递进;rollback 仍走 recovery 不计进度)。
 
 ## 路由(`backend/routes/code/fullstack_routes.py`,蓝图挂 `/api/code` 或新前缀)
 
@@ -90,16 +90,17 @@
 
 ## 部署基础设施
 
-- `backend/docker/be-agent/Dockerfile` —— node 基础 + claude-code + codex,**并装齐多语言构建工具链:JDK21+Maven / Go / Python3+pip / Node**。生成期只写代码(实跑用工程自带 Dockerfile);但**部署期自愈轮**(`repair_build`)要在容器内 `mvn package`/`go build`/`pip install`/`npm ci` 真实编译验证,故工具链必须常驻,否则只能盲改一次、跨语言编译错误一旦成串就修不动。部署自愈轮数 `APP_BUILD_REPAIRS`(默认 3)、单轮预算 `BE_AGENT_REPAIR_TIMEOUT`(默认 900s)、单次 `docker build` 预算 `APP_BUILD_TIMEOUT`(默认 1200s),均在 compose / `.env.example` 可调。生成的 Dockerfile 由 `backend_project_prompt.txt` 约束为多阶段+官方定版基础镜像、装全依赖、**禁用 `-q`/quiet**(静默会让自愈拿不到编译错误)。
-- `docker-compose.yml` —— 加 `be-agent`(profile setup 构建);backend 加 env `APP_NETWORK`、`APP_BACKEND_PORT`;backend 已有 docker.sock + `.fe-agent-work` 挂载,后端容器构建复用同一 DooD 工作目录(prefix `be-agent-`)。
+- `backend/docker/be-agent/Dockerfile` —— node 基础 + claude-code + codex,**装齐多语言构建工具链:JDK21+Maven / Go / Python3+pip / Node,并显式装 `make`+`build-essential`**(make 是生成/修复梯子优先调用工程 `Makefile` 目标的前提,不能依赖基础镜像隐式自带,否则换基础镜像会静默退化;构建期 smoke 现含 `make --version`)。工具链被**两道梯子**共用:① **生成期**(`_CONTAINER_SCRIPT`)真实 install→compile→test→package-verify;② **部署期自愈**(`repair_build`)`docker build` 失败后实编译迭代。
+- **超时预算**(均 compose / `.env.example` 可调):生成期 `BE_AGENT_TIMEOUT`(写工程,compose=0 跑到完成)、`BE_AGENT_INSTALL_TIMEOUT`(480)、`BE_AGENT_BUILD_TIMEOUT_GEN`(480)、`BE_AGENT_TEST_TIMEOUT`(300)、`BE_AGENT_PACKAGE_TIMEOUT`(180)、`BE_AGENT_GEN_REPAIRS`(生成期自愈轮数,默认 1)、`BE_AGENT_REINFORCE`(二次补强开关,默认 1)、`BE_AGENT_REINFORCE_TIMEOUT`(补强 claude 预算,默认 0=**Python 侧解析为复用 `BE_AGENT_TIMEOUT`**——不能在容器内靠 shell `:-` 兜底,因值总经 `-e` 传入会让裸机补强无 cap)、`BE_AGENT_TOTAL_TIMEOUT`(host 兜底,默认 9000 含补强一次全量,compose=0「等容器自己退出」——**若设有限值必须 > gen+reinforce+(install+compile+test+package)×(1+REPAIRS)+repair×REPAIRS+余量(约 7200s)**,否则 host 中途杀容器 → 空产物 → 误退款);部署期 `APP_BUILD_REPAIRS`(3)/`BE_AGENT_REPAIR_TIMEOUT`(900)/`APP_BUILD_TIMEOUT`(1200)/`APP_HEALTH_TIMEOUT`(90)/`APP_SMOKE_TIMEOUT`(15,单端点)/`APP_SMOKE_MAX_ENDPOINTS`(3)。生成的 Dockerfile 由 `backend_project_prompt.txt` 约束为多阶段+官方定版基础镜像、装全依赖、**禁用 `-q`/quiet**(静默会让自愈拿不到编译错误);生成期 package-verify 还对 Dockerfile 做静态检查(EXPOSE 8080 / CMD / 无 quiet)。
+- `docker-compose.yml` —— 加 `be-agent`(profile setup 构建);backend 加 env `APP_NETWORK`、`APP_BACKEND_PORT`、上述生成梯子/smoke 全套 env;backend 已有 docker.sock + `.fe-agent-work` 挂载,后端容器构建复用同一 DooD 工作目录(prefix `be-agent-`)。
 - `nginx default.conf` —— 加 `location /app/ { proxy_pass backend; }`(SSE/长连接友好)。
 
 ## Prompts(`backend/prompts/code/`,改后须 sync 进 Mongo,见 [[prompt-store-mongo-overrides]])
 
 - `contract_synthesis_prompt.txt`(`.format` 模板,JSON 花括号转义)—— 产 OpenAPI + 中间件清单 JSON。
-- `backend_project_prompt.txt` + `backend_project_repair_prompt.txt` + `backend_project_critic_prompt.txt`(`[[KEY]]` fill 模板,见 [[fill-prompt-token-dedup]] 占位符唯一)。
+- `backend_project_prompt.txt` + **`backend_project_reinforce_prompt.txt`(新,二次补强)** + `backend_project_repair_prompt.txt` + `backend_project_critic_prompt.txt`(`[[KEY]]` fill / plain 模板,见 [[fill-prompt-token-dedup]] 占位符唯一)。生成 prompt 现含 **「ARCHITECTURE DISCIPLINE 架构纪律 7 条」+「FUNCTIONAL ANCHORS 功能锚点完整实现」+「必交付工程脚手架」**:① 把「模块边界 / 逻辑分层 / 字段可扩展 / 通用 vs 业务 / 多租户 1→1000 / 三个月后可定位」6 问落成可检查纪律;② **把后端从「契约中心(逐端点)」改为「功能锚点(FR/NFR/M)驱动的完整功能,契约只是对外接口」**——每个锚点要端到端落地(业务规则/状态机/权威校验/异步与定时任务/AI 链路),禁 stub,`ARCHITECTURE.md` 附「功能锚点→实现文件」映射表。`backend_project_reinforce_prompt.txt` 是 BMAD 五段骨架的二次补强 prompt(对已生成工程逐锚点补真,不改契约、不破坏分层)。validator 给 `backend_project_prompt.txt` 的 must_contain **加 `ARCHITECTURE.md`/`Makefile`/`make test`**、给 reinforce 加 `功能锚点`/`二次功能补强`/`状态机`/`AI/提示词链路`/`TODO` 等语义锚点、给 critic 加 `"fr_coverage"`(均作 CI 硬闸防裁剪/旧 Mongo 覆盖);repair/critic 同步加「真实跑测试、禁删测试蒙混、架构质量评审、fr_coverage 功能锚点核对」维度。`sync_backend_prompts.py` KEYS 含 4 个 key(主/reinforce/repair/critic)。
 - `middleware_prompt.txt`。
-- 过 `scripts/validate_code_prompts.py` + `tests/test_code_prompts.py` CI 守护;`scripts/sync_code_prompts.py` 同步。
+- 过 `scripts/validate_code_prompts.py` + `tests/test_code_prompts.py` CI 守护;后端三件套用 **`scripts/sync_backend_prompts.py`**(已含 critic key)同步进 Mongo(改 `.txt` 不自动生效,见 [[prompt-store-mongo-overrides]])。
 
 ## 实施清单(顺序) — 已完成 ✅
 

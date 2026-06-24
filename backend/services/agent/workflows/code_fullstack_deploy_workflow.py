@@ -31,8 +31,10 @@ from backend.services.code import deploy_service
 
 logger = logging.getLogger(__name__)
 
-TOTAL_STEPS = 4  # provision, build, start, done — driven by deploy phases
-_PHASE_PROGRESS = {"provision": 1, "build": 2, "start": 3, "health": 3, "done": 4}
+TOTAL_STEPS = 6  # provision, migrate, build, start, health, smoke — driven by deploy phases
+_PHASE_PROGRESS = {
+    "provision": 1, "migrate": 2, "build": 3, "start": 4, "health": 5, "smoke": 6, "done": 6,
+}
 
 
 def run_code_fullstack_deploy_workflow(ctx, recorder) -> dict:

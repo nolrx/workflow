@@ -25,6 +25,14 @@
 # REAL (mvn / go build / pip / npm) and iterates until green before the host
 # re-runs `docker build`. Polyglot-by-design: no language requires manual fixing.
 #
+# The GENERATION step now uses the same toolchains: after claude writes the
+# project, the container runs a REAL native build ladder (install -> compile ->
+# test -> package-verify, with bounded AI self-heal) so "can it be packaged" is
+# verified at generation, not deferred to deploy. There is still NO docker.sock
+# here — the actual image packaging (docker build) only happens at deploy time on
+# the platform; generation proves native buildability + tests only. `make` is
+# installed explicitly because the ladders prefer the generated Makefile targets.
+#
 # No app code or secrets are baked in; ANTHROPIC_API_KEY / OPENAI_API_KEY are
 # injected at run time via `-e`. CLIs: claude (@anthropic-ai/claude-code) is the
 # primary engine; codex (@openai/codex) is available for parity with fe-agent.
@@ -35,7 +43,8 @@ FROM node:22
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-        python3 python3-pip python3-venv git ca-certificates curl gnupg; \
+        python3 python3-pip python3-venv git ca-certificates curl gnupg \
+        make build-essential; \
     install -m 0755 -d /etc/apt/keyrings; \
     curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public \
         | gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg; \
@@ -68,12 +77,16 @@ RUN set -eux; \
 ENV PATH="/usr/local/go/bin:${PATH}"
 
 # Pre-bake both agent CLIs so each run starts fast (no per-run global install).
+# The smoke also asserts `make` (the generation/repair build ladders prefer the
+# generated project's Makefile targets — make MUST be explicit, not relied on as
+# an implicit base-image package, or a future base bump silently breaks it).
 RUN npm install -g @anthropic-ai/claude-code @openai/codex \
     && claude --version \
     && codex --version \
     && mvn -version \
     && go version \
-    && java -version
+    && java -version \
+    && make --version
 
 # Default to the non-root user; the workflow also passes --user node explicitly.
 # A writable HOME is required for Claude's ~/.claude, Codex's ~/.codex, Maven's

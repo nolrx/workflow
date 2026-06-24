@@ -44,6 +44,13 @@ BUILD_TIMEOUT = int(os.getenv("APP_BUILD_TIMEOUT", "900"))
 HEALTH_TIMEOUT = int(os.getenv("APP_HEALTH_TIMEOUT", "90"))
 HEALTH_PATH = os.getenv("APP_HEALTH_PATH", "/health")
 CONTAINER_MEM = os.getenv("APP_CONTAINER_MEM", "512m")
+# Smoke stage: after /health passes, hit a few idempotent no-param GET endpoints
+# sampled from the shared contract to confirm the routes actually resolve (not a
+# 5xx / crash). PER-ENDPOINT timeout (not a total window split N ways) so a cold
+# first hit isn't starved; a connection timeout is recorded but does NOT roll back
+# a /health-green deploy — only a definitive 5xx does.
+SMOKE_TIMEOUT = int(os.getenv("APP_SMOKE_TIMEOUT", "15"))  # per-endpoint, seconds
+SMOKE_MAX_ENDPOINTS = int(os.getenv("APP_SMOKE_MAX_ENDPOINTS", "3"))
 
 _BACKEND_WORKFLOW = "code_backend_project_generation"
 _MIDDLEWARE_WORKFLOW = "code_middleware_provisioning"
@@ -235,13 +242,27 @@ def deploy(
         phase("provision", f"中间件就绪:{prov.engine_kind}" + (f" / {prov.db_name}" if prov.db_name else ""),
               {"middleware": prov.to_dict()})
 
-        # Apply the generated init.sql (fallback for non-self-migrating backends).
+        # --- 2. Migrate the data layer (distinct, observable CI stage) --------
+        # The generated backend self-migrates on boot where possible; this applies
+        # the generated init.sql as a fallback for non-self-migrating backends.
+        # Best-effort (never sinks a deploy on its own — per-statement errors are
+        # tolerated; the backend may also create tables on boot).
+        if cancelled():
+            return _abort(dep, rollback, "已取消")
+        phase("migrate", "执行数据层迁移(优先后端自迁移;应用生成的 init.sql 兜底)")
         init_sql = _load_init_sql(middleware_run)
-        if init_sql.strip() and prov.database_url:
+        init_applied = bool(
+            init_sql.strip()
+            and prov.database_url
+            and not prov.database_url.startswith("sqlite")
+        )
+        if init_applied:
             ok, log = middleware_service.apply_init_sql(prov.database_url, init_sql)
-            phase("provision", f"初始化数据层:{log}", {"applied": ok})
+            phase("migrate", f"数据层就绪:{log}", {"applied": ok})
+        else:
+            phase("migrate", "无 init.sql 兜底;依赖后端启动时自建表/自迁移", {"applied": True})
 
-        # --- 2. Build the backend image (its own Dockerfile) -----------------
+        # --- 3. Build (=package) the backend image (its own Dockerfile) ------
         if cancelled():
             return _abort(dep, rollback, "已取消")
         dep.status = DeploymentStatus.BUILDING
@@ -294,7 +315,7 @@ def deploy(
         rollback.append(lambda: _docker(["image", "rm", "-f", image_tag], 60))
         phase("build", "后端镜像构建成功", {"image": image_tag})
 
-        # --- 3. Run the long-lived container ---------------------------------
+        # --- 4. Run the long-lived container ---------------------------------
         if cancelled():
             return _abort(dep, rollback, "已取消")
         dep.status = DeploymentStatus.STARTING
@@ -323,9 +344,38 @@ def deploy(
         dep.internal_port = BACKEND_PORT
         db.session.commit()
 
-        # --- 4. Health check -------------------------------------------------
+        # --- 5. Health check -------------------------------------------------
         phase("health", f"健康检查 GET {HEALTH_PATH}(最长 {HEALTH_TIMEOUT}s)")
         healthy, detail = _wait_healthy(container, BACKEND_PORT, HEALTH_TIMEOUT, cancelled)
+
+        # init.sql-as-fallback recovery: the migrate phase pre-applies the
+        # middleware-generated init.sql, but a SELF-migrating backend builds its
+        # own schema on boot (create_all / AutoMigrate / etc.). When the two
+        # schemas drift (e.g. init.sql uses SERIAL ids / omits created_at while the
+        # ORM expects uuid + timestamps), create_all skips the already-existing
+        # tables and the backend then crashes querying columns that don't exist —
+        # never binding its port. Give it a clean shot: reset the db to empty and
+        # let the backend self-migrate. Only meaningful when init.sql was applied
+        # (otherwise the first attempt already ran against an empty db).
+        if not healthy and init_applied and not cancelled():
+            phase("health",
+                  f"健康检查未通过({detail});疑似预置 init.sql 与后端自迁移冲突,"
+                  "重置为空库后让后端自建表重试")
+            _docker(["stop", container], 60)
+            ok_reset, reset_log = middleware_service.reset_namespace(prov.database_url)
+            phase("health", f"已重置中间件命名空间为空库:{reset_log}", {"reset": ok_reset})
+            started = _docker(["start", container], 120)
+            if started.returncode == 0:
+                healthy, detail = _wait_healthy(container, BACKEND_PORT, HEALTH_TIMEOUT, cancelled)
+                if healthy:
+                    dep.set_detail({**dep.get_detail(),
+                                    "init_sql_skipped": True,
+                                    "recovery": "reset-empty-db; backend self-migrated"})
+                    db.session.commit()
+                    phase("health", "重置空库后健康检查通过:后端自迁移建表成功(已跳过冲突的 init.sql)")
+            else:
+                phase("health", f"重置后容器重启失败:{(started.stderr or started.stdout)[-300:]}")
+
         if not healthy:
             logs = _docker(["logs", "--tail", "60", container], 30)
             dep.set_detail({**dep.get_detail(), "health": detail, "container_logs": (logs.stdout or logs.stderr or "")[-2000:]})
@@ -333,7 +383,31 @@ def deploy(
             return _fail(dep, rollback, f"后端健康检查未通过:{detail}", narrate=phase)
         dep.health = "healthy"
 
-        # --- 5. Register (the proxy resolves here) ---------------------------
+        # --- 6. Smoke test (contract liveness) -------------------------------
+        # /health proved the process is up; now hit a few idempotent no-param GET
+        # endpoints from the shared contract to catch obvious route/contract drift
+        # before exposing the app. Only a 5xx rolls back (a slow cold first hit /
+        # connection timeout is recorded but tolerated — /health already passed).
+        if cancelled():
+            return _abort(dep, rollback, "已取消")
+        phase("smoke", "契约冒烟:抽样调用幂等 GET 端点确认路由可达")
+        smoke_ok, smoke_detail = _smoke_test(container, BACKEND_PORT, project.id, cancelled)
+        dep.set_detail({**dep.get_detail(), "smoke": smoke_detail})
+        db.session.commit()
+        if not smoke_ok:
+            logs = _docker(["logs", "--tail", "60", container], 30)
+            dep.set_detail({**dep.get_detail(), "container_logs": (logs.stdout or logs.stderr or "")[-2000:]})
+            db.session.commit()
+            return _fail(dep, rollback, f"契约冒烟未通过(抽样端点返回 5xx):{smoke_detail}", narrate=phase)
+        phase("smoke", "契约冒烟通过(抽样端点路由可达)", {"smoke": smoke_detail})
+
+        # A cancel landing mid-smoke leaves _smoke_test returning ok=True (it just
+        # breaks the loop), so re-check here before committing the deploy as RUNNING
+        # — otherwise a late cancel would be swallowed and the app registered anyway.
+        if cancelled():
+            return _abort(dep, rollback, "已取消")
+
+        # --- 7. Register (the proxy resolves here) ---------------------------
         dep.status = DeploymentStatus.RUNNING
         dep.deploy_run_id = None  # set by the workflow caller if applicable
         dep.deployed_at = datetime.utcnow()
@@ -378,13 +452,29 @@ def _wait_healthy(container: str, port: int, timeout: int, cancelled) -> tuple[b
     url = f"http://{container}:{port}{HEALTH_PATH}"
     deadline = time.monotonic() + timeout
     last = "no response"
+    base_restarts: Optional[int] = None
     while time.monotonic() < deadline:
         if cancelled():
             return False, "已取消"
-        # Bail early if the container already exited.
-        ins = _docker(["inspect", "-f", "{{.State.Running}}", container], 15)
-        if ins.returncode == 0 and ins.stdout.strip() == "false":
+        # Liveness + restart count in one inspect. A boot-crash under `--restart
+        # unless-stopped` keeps the container "running" between relaunches, so the
+        # plain State.Running==false check rarely fires and the crash masquerades as
+        # a generic connection timeout. Catch the restart climb and name it.
+        ins = _docker(["inspect", "-f", "{{.State.Running}} {{.RestartCount}}", container], 15)
+        running, restarts = "true", 0
+        if ins.returncode == 0:
+            parts = ins.stdout.strip().split()
+            running = parts[0] if parts else "true"
+            try:
+                restarts = int(parts[1]) if len(parts) > 1 else 0
+            except ValueError:
+                restarts = 0
+        if running == "false":
             return False, "容器已退出(启动即崩溃)"
+        if base_restarts is None:
+            base_restarts = restarts
+        elif restarts - base_restarts >= 2:
+            return False, f"容器反复重启(启动即崩溃,RestartCount={restarts})"
         try:
             resp = requests.get(url, timeout=5)
             if resp.status_code < 500:
@@ -394,6 +484,67 @@ def _wait_healthy(container: str, port: int, timeout: int, cancelled) -> tuple[b
             last = type(error).__name__
         time.sleep(3)
     return False, f"超时未就绪({last})"
+
+
+def _smoke_endpoints(project_id: str) -> list[str]:
+    """Sample idempotent, no-path-param GET paths from the shared contract.
+
+    Returns ``[HEALTH_PATH, ...]`` with up to ``SMOKE_MAX_ENDPOINTS`` contract GET
+    endpoints (those without a ``{param}`` segment). When the contract has no
+    structured OpenAPI paths (deterministic fallback), only ``HEALTH_PATH`` is
+    returned, so smoke degrades to a liveness re-check and never over-asserts.
+    """
+    from backend.services.code.fullstack import contract_service
+
+    paths = [HEALTH_PATH]
+    try:
+        row = contract_service.get_ledger(project_id)
+        contract = row.get_api_contract() if row else {}
+        openapi = (contract or {}).get("openapi") or {}
+        spec_paths = openapi.get("paths") if isinstance(openapi, dict) else None
+        if isinstance(spec_paths, dict):
+            for path, ops in spec_paths.items():
+                if not isinstance(path, str) or "{" in path:  # skip path-param endpoints
+                    continue
+                if not isinstance(ops, dict) or "get" not in {str(k).lower() for k in ops}:
+                    continue
+                if path in paths:
+                    continue
+                paths.append(path)
+                if len(paths) >= SMOKE_MAX_ENDPOINTS + 1:  # +1 for HEALTH_PATH
+                    break
+    except Exception:  # noqa: BLE001 — contract unreadable → smoke only /health
+        logger.warning("smoke: could not read contract for %s", project_id, exc_info=True)
+    return paths
+
+
+def _smoke_test(container: str, port: int, project_id: str, cancelled) -> tuple[bool, list]:
+    """Hit the sampled GET endpoints to confirm routes resolve (status < 500).
+
+    Returns ``(ok, results)``. ``ok`` is False ONLY when an endpoint returns a
+    definitive 5xx (route exists but the handler crashes / contract drift). A
+    connection error / timeout is recorded as 'inconclusive' and does NOT fail the
+    deploy — /health already proved liveness and a cold first hit on a DB-backed
+    list endpoint can be slow; failing on that would roll back a healthy deploy.
+    """
+    import requests
+
+    results: list[dict] = []
+    ok = True
+    for path in _smoke_endpoints(project_id):
+        if cancelled():
+            break
+        url = f"http://{container}:{port}{path}"
+        try:
+            resp = requests.get(url, timeout=SMOKE_TIMEOUT)
+            passed = resp.status_code < 500
+            results.append({"endpoint": f"GET {path}", "status": resp.status_code,
+                            "result": "ok" if passed else "5xx"})
+            if not passed:
+                ok = False
+        except Exception as error:  # noqa: BLE001 — inconclusive, not a 5xx
+            results.append({"endpoint": f"GET {path}", "result": f"inconclusive ({type(error).__name__})"})
+    return ok, results
 
 
 def _fail(

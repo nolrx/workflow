@@ -258,12 +258,33 @@ def _seed_shared_ledger(project: CodeProject) -> dict:
     return ledger.to_dict()
 
 
+# The single schema source-of-truth. Injected verbatim into BOTH the backend
+# (ORM) and middleware (init.sql) build prompts via render_contract_for_prompt,
+# so the two generators — which run independently but whose outputs meet on the
+# SAME database at deploy time — converge on ONE table layout. Drift here is what
+# crashes a self-migrating backend on boot (init.sql creates `roles(id SERIAL)`
+# with no created_at; the ORM expects uuid + timestamps; create_all skips the
+# existing table; the first query hits a missing column → startup dies → health
+# check fails → rollback). Pinning id strategy + timestamps + verbatim names
+# removes the drift at the source.
+_SCHEMA_CONVENTION = """## 数据库 Schema 一致性公约(后端 ORM 与中间件 init.sql 必须共同遵守 — 数据层唯一真相源)
+后端工程的 ORM 模型与中间件的 init.sql **会在部署时作用于同一个数据库**:init.sql 先建表,后端启动再自迁移(create_all / AutoMigrate / Hibernate ddl 等)。两者一旦对**同名表**的结构有分歧,后端会因列缺失/类型不符在启动时崩溃 → 健康检查失败 → 整次部署回滚。因此双方对每张表必须产出**完全一致**的结构,严格遵守:
+- **主键统一用字符串/UUID**:SQL 用 `VARCHAR(36)`(或 `TEXT`)主键 + 应用层生成 uuid;ORM 用字符串类型 id。**禁止** `SERIAL`/`BIGSERIAL`/`AUTO_INCREMENT`/自增整数主键。
+- **外键类型与被引用主键一致**(同为字符串/UUID),不得一边整数一边 uuid。
+- **每张表都带时间戳**:`created_at`、`updated_at`,类型 `TIMESTAMPTZ NOT NULL DEFAULT now()`(ORM 侧对应 created_at/updated_at 字段,所有表一致)。
+- **表名/列名/类型逐字一致**:以本契约数据模型(`components.schemas`)与「数据设计」为准,两侧不得各自改名(如 url ↔ source_url)、改类型(如 VARCHAR ↔ Integer)或增减列。
+- init.sql 用 `CREATE TABLE IF NOT EXISTS`、种子数据用 `ON CONFLICT DO NOTHING`,以容忍「后端已自建表」并保持幂等。
+- 契约未明确某字段类型时,按本公约取默认(字符串主键 + 上述时间戳);双方一致即可。"""
+
+
 def render_contract_for_prompt(contract: dict, *, max_chars: int = 9000) -> str:
     """Render a compact contract block injected into the BE / FE build prompts.
 
     Both services must implement / consume the SAME endpoints, so this is the
     authoritative API surface. Prefers the structured OpenAPI paths; falls back
-    to the api_summary markdown.
+    to the api_summary markdown. Always appends the binding schema convention
+    (``_SCHEMA_CONVENTION``) AFTER the cap so the BE/MW generators can't drift on
+    id type / timestamps / column names — it is never truncated away.
     """
     if not contract:
         return ""
@@ -294,8 +315,10 @@ def render_contract_for_prompt(contract: dict, *, max_chars: int = 9000) -> str:
         summary = contract.get("api_summary") or ""
         if summary:
             lines.append(summary)
-    block = "\n".join(lines)
-    return block[:max_chars]
+    block = "\n".join(lines)[:max_chars]
+    # Append the schema convention AFTER the cap so it is guaranteed present in
+    # full (a large OpenAPI blob must never crowd the source-of-truth rules out).
+    return f"{block}\n\n{_SCHEMA_CONVENTION}"
 
 
 def get_ledger(project_id: str) -> Optional[CodeProjectLedger]:

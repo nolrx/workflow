@@ -41,8 +41,14 @@ _MAX_DOC_CHARS = 1800
 _MAX_DIGEST_CHARS = 12_000
 
 _BE_PHASE_LABELS = {
+    "reinforce": "二次功能补强:把 FR/NFR/M 锚点做成端到端可用",
     "detect": "识别后端技术栈",
-    "validate": "语法静态自检(不安装依赖)",
+    "validate": "语法静态自检(不安装依赖)",  # retained for replaying older runs
+    "install": "安装依赖(真实构建)",
+    "compile": "编译 / 类型检查",
+    "test": "运行单元 / 契约测试",
+    "package-verify": "验证可打包(原生制品 + Dockerfile 静态检查)",
+    "ai-repair": "AI 定向修复构建 / 测试报错",
     "dockerfile": "校验 / 补齐 Dockerfile",
 }
 
@@ -130,6 +136,13 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
     ledger = ContextLedger.empty()
     contract: dict = {}
     manifest: dict = {}
+    # Set when the acceptance review judges the backend does NOT honor the shared
+    # contract OR leaves a core functional anchor (FR/M) unimplemented (verdict=FAIL):
+    # the run then completes as PARTIAL (still publishable + deployable, but flagged)
+    # so a "only blows up at integration" contract/feature gap is caught here instead
+    # of at deploy/runtime.
+    contract_failed = False
+    fr_coverage_summary: list = []  # per-anchor coverage from the review, for the meta
 
     def progress(current_step: str) -> None:
         run = db.session.get(AgentRun, ctx.run_id)
@@ -256,6 +269,36 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
                           message="Agent 未自带 Dockerfile，已按检测到的技术栈合成一个（可能需在部署阶段微调）。",
                           payload={"stack": stack})
 
+        # Generation-time native build verdict: green / green-repaired publish
+        # cleanly; a still-red build after the self-heal round(s) is published as
+        # ``degraded`` (NOT a hard failure) — the source is still valuable and the
+        # deploy run has a SECOND docker-build + AI-repair ladder as backstop.
+        build_state = result.get("build_state") or "unknown"
+        if result.get("degraded"):
+            recorder.emit(
+                AgentEventType.WARNING, level=AgentEventLevel.WARNING, step_id=step.id,
+                message=(f"本机原生构建未完全通过（{result.get('degraded_reason') or build_state}，"
+                         f"已自愈 {result.get('build_repaired_rounds') or 0} 轮）；源码已生成,"
+                         "将在部署阶段再次 docker build + AI 修复。"),
+                payload={"build_state": build_state,
+                         "degraded_reason": result.get("degraded_reason"),
+                         "repaired_rounds": result.get("build_repaired_rounds"),
+                         "build_logs": result.get("build_logs"),
+                         "tests_ran": result.get("tests_ran")},
+            )
+        else:
+            recorder.emit(
+                AgentEventType.PROGRESS, step_id=step.id,
+                message=(f"本机原生构建验证通过（{build_state}）"
+                         + ("，测试已运行" if result.get("tests_ran") else "")),
+                payload={"build_state": build_state, "tests_ran": result.get("tests_ran"),
+                         "scaffold": result.get("scaffold")},
+            )
+        if result.get("dockerfile_warn"):
+            recorder.emit(AgentEventType.WARNING, level=AgentEventLevel.WARNING, step_id=step.id,
+                          message=f"Dockerfile 静态检查提示：{result.get('dockerfile_warn')}",
+                          payload={"dockerfile_warn": result.get("dockerfile_warn")})
+
         # --- Acceptance review vs the shared contract (advisory, charged) ----
         if src_files and gate_available() and charge(
             user_id=ctx.user_id, amount=pricing.CODE_CONTEXT_VERIFY,
@@ -268,17 +311,28 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
             )
             if review:
                 verdict = str(review.get("verdict") or "").upper()
-                missing = [
+                missing_ep = [
                     c.get("endpoint") or c.get("id") for c in (review.get("endpoint_coverage") or [])
                     if isinstance(c, dict) and not c.get("covered")
                 ]
+                # Functional-anchor (FR/NFR/M) coverage — the "implement the whole
+                # feature, not just the route" gate. The critic already folds
+                # "core FR/M uncovered" into verdict=FAIL, so PARTIAL stays a single
+                # source of truth (verdict); missing_fr is for narration + meta.
+                fr_coverage_summary = (review.get("fr_coverage") or [])[:50]
+                missing_fr = [
+                    c.get("id") for c in fr_coverage_summary
+                    if isinstance(c, dict) and not c.get("covered")
+                ]
+                missing_all = [m for m in (*missing_ep, *missing_fr) if m]
                 concern = verdict in ("CONCERNS", "FAIL")
+                contract_failed = verdict == "FAIL"
                 recorder.emit(
                     AgentEventType.WARNING if concern else AgentEventType.PROGRESS,
                     level=AgentEventLevel.WARNING if concern else AgentEventLevel.INFO,
                     step_id=step.id,
-                    message=f"契约符合性评审：{verdict or '—'}" + (f"；未覆盖 {', '.join(filter(None, missing))}" if missing else "；端点覆盖完整"),
-                    payload={"verdict": verdict, "missing": missing,
+                    message=f"契约 / 功能锚点符合性评审：{verdict or '—'}" + (f"；未覆盖 {', '.join(missing_all)}" if missing_all else "；端点与功能锚点覆盖完整"),
+                    payload={"verdict": verdict, "missing_endpoints": missing_ep, "missing_fr": missing_fr,
                              "issues": (review.get("issues") or [])[:20], "summary": review.get("summary")},
                 )
                 step.add_artifact(
@@ -326,18 +380,43 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
                 "summary": result.get("summary"),
                 "delivery": "multi-file-backend-project",
                 "deployable": True,
+                # Generation-time CI signals (visible to the deploy run + the UI).
+                "build_state": result.get("build_state"),
+                "degraded": bool(result.get("degraded")),
+                "degraded_reason": result.get("degraded_reason"),
+                "build_repaired_rounds": result.get("build_repaired_rounds") or 0,
+                "tests_ran": bool(result.get("tests_ran")),
+                "scaffold": result.get("scaffold"),
+                "contract_pass": not contract_failed,
+                # Functional-anchor coverage + BMAD reinforce-pass diagnostics.
+                "fr_coverage": fr_coverage_summary,
+                "fr_uncovered": [
+                    c.get("id") for c in fr_coverage_summary
+                    if isinstance(c, dict) and not c.get("covered")
+                ],
+                "reinforce_state": result.get("reinforce_state"),
             },
             filename="backend_project_meta.json",
             domain_ref_type="code_backend_project_meta", domain_ref_id=project_id,
         )
         step.set_context(snapshot={"injected_text": "", "ledger": ledger.to_dict()})
         step.set_output(
-            output_summary="后端工程已发布：可在部署阶段构建运行,或下载源码 zip。",
+            output_summary=(
+                "后端工程已发布：可在部署阶段构建运行,或下载源码 zip。"
+                + ("（契约符合性评审为 FAIL，已标记 PARTIAL）" if contract_failed else "")
+            ),
             reasoning_summary="把后端源码打包为 zip artifact;部署阶段读取它 docker build 工程自带 Dockerfile 并接入共享网络。",
-            self_check=f"源码 {len(files)} 文件;栈={result.get('stack')}",
+            self_check=(
+                f"源码 {len(files)} 文件;栈={result.get('stack')};"
+                f"构建={result.get('build_state')};契约={'FAIL' if contract_failed else 'ok'}"
+            ),
             next_action="待三端就绪后触发原子部署。",
         )
     completed += 1
     progress("done")
 
-    return {"status": AgentRunStatus.COMPLETED, "resource_id": project_id}
+    # PARTIAL (not COMPLETED) when the backend failed the contract review: the run
+    # is still publishable + deployable (deploy's _BUILT set accepts PARTIAL), but
+    # the drift is flagged for the operator / an optional REQUIRE_CONTRACT_PASS gate.
+    status = AgentRunStatus.PARTIAL if contract_failed else AgentRunStatus.COMPLETED
+    return {"status": status, "resource_id": project_id}

@@ -6,14 +6,41 @@ MongoDB (see ``backend/services/prompts``); these endpoints list, read, edit and
 reset them. When MongoDB is unreachable, reads fall back to bundled defaults
 (read-only) and writes return 503.
 """
+import hmac
+import os
+from functools import wraps
+
 from flask import Blueprint, request
 
+from backend.services import lifecycle
 from backend.services.mongo import is_available as mongo_available
 from backend.services.prompts import MongoUnavailableError, prompt_store
 from backend.utils.auth import admin_required, current_user
 from backend.utils.response import error_response, success_response
 
 admin_bp = Blueprint("admin", __name__)
+
+
+def _deploy_token_required(fn):
+    """Guard ops/lifecycle endpoints with a shared deploy token (not a user JWT).
+
+    The deploy script — not an interactive admin — drives drain/undrain, so these
+    endpoints authenticate with the ``DEPLOY_CONTROL_TOKEN`` env value sent in the
+    ``X-Deploy-Token`` header (constant-time compared). When the token is unset the
+    endpoints are disabled (403), so they stay inert unless ops explicitly enables them.
+    """
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        expected = os.getenv("DEPLOY_CONTROL_TOKEN") or ""
+        if not expected:
+            return error_response("FORBIDDEN", "运维控制未启用（未配置 DEPLOY_CONTROL_TOKEN）", 403)
+        provided = request.headers.get("X-Deploy-Token", "")
+        if not (provided and hmac.compare_digest(provided, expected)):
+            return error_response("FORBIDDEN", "无效的部署控制令牌", 403)
+        return fn(*args, **kwargs)
+
+    return wrapper
 
 
 class _SafeDict(dict):
@@ -92,3 +119,32 @@ def reset_prompt(key: str):
     except MongoUnavailableError as error:
         return error_response("SERVICE_UNAVAILABLE", str(error), 503)
     return success_response({"prompt": doc}, message="提示词已恢复默认")
+
+
+# --- Lifecycle / graceful-drain (deploy-script driven) -----------------------
+# These let the deploy script flip the live instance into DRAIN before it swaps
+# the container, so no new background work is accepted during the shutdown window
+# (in-flight runs resume on the new process). Token-guarded, not user-JWT, so an
+# ops script can call them without minting an admin login. See
+# backend/services/lifecycle.py and scripts/deploy-backend.sh.
+@admin_bp.route("/lifecycle/drain", methods=["POST"])
+@_deploy_token_required
+def lifecycle_drain():
+    """Stop accepting new runs on this instance (idempotent)."""
+    lifecycle.begin_drain()
+    return success_response({"draining": True}, "已进入排空模式：不再接受新任务")
+
+
+@admin_bp.route("/lifecycle/undrain", methods=["POST"])
+@_deploy_token_required
+def lifecycle_undrain():
+    """Resume accepting new runs (idempotent; e.g. a cancelled deploy)."""
+    lifecycle.end_drain()
+    return success_response({"draining": False}, "已退出排空模式")
+
+
+@admin_bp.route("/lifecycle/status", methods=["GET"])
+@_deploy_token_required
+def lifecycle_status():
+    """Report this instance's drain state."""
+    return success_response({"draining": lifecycle.is_draining()})

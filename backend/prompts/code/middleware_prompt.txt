@@ -35,12 +35,13 @@
   "entities": [
     { "name": "User", "table": "users", "fields": ["id", "email", "created_at"], "note": "覆盖契约 User 模型" }
   ],
-  "init_sql": "CREATE TABLE IF NOT EXISTS users (\n  id UUID PRIMARY KEY,\n  email TEXT NOT NULL UNIQUE,\n  created_at TIMESTAMPTZ NOT NULL DEFAULT now()\n);\n",
+  "init_sql": "CREATE TABLE IF NOT EXISTS users (\n  id VARCHAR(36) PRIMARY KEY,\n  email TEXT NOT NULL UNIQUE,\n  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()\n);\n",
   "seed_sql": "可选:插入少量合理的示例数据(用 ON CONFLICT DO NOTHING 避免重复);不需要则留空字符串",
   "notes": "对取舍/约束的一句话说明"
 }
 
 硬性约束:
+- **严格遵守上方注入的「数据库 Schema 一致性公约」**:init.sql 与后端 ORM 部署时作用于同一个库,结构必须逐字一致——主键统一用 `VARCHAR(36)`/`TEXT`(禁止 SERIAL/BIGSERIAL/自增整数主键),外键类型与之一致,每张表都带 `created_at`/`updated_at`(`TIMESTAMPTZ NOT NULL DEFAULT now()`),表名/列名/类型以契约数据模型为准不得各自改名改型。否则后端启动自迁移会与预置表冲突、健康检查失败、整次部署回滚。
 - `init_sql` 用标准、Postgres 兼容 SQL;表用 `CREATE TABLE IF NOT EXISTS`;字段类型、主键、外键、索引、非空/唯一约束齐备。
 - `entities` 与 `init_sql` 自洽;每个实体都能回溯到「数据设计」或契约数据模型。
 - 不需要种子数据时 `seed_sql` 填空字符串 `""`。

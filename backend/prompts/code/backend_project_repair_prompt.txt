@@ -6,12 +6,10 @@
 2. 只修不增:绝不新增产品功能、绝不更换技术栈(沿用当前工程已用的语言/框架)、绝不改动共享 API 契约约定的路径/方法/字段。
 3. 真实可用:任何为修复而创建或补全的代码都必须是合理、可编译、可运行的真实实现,禁止 TODO / FIXME / 占位 / 空实现。
 4. 沿用既有约定:复用工程已有的目录结构、命名、依赖清单与配置;新建文件须与周边风格一致。
-5. 闭环验证(硬性):修复目标是"该工程能被 docker build 并启动"。**本修复容器已预装全部主流后端工具链——JDK 21 + Maven(`mvn`)、Go(`go`)、Python 3 + pip、Node + npm**。你【必须】在每次改动后,用工程对应技术栈的真实构建命令在【当前目录】本地构建验证、反复迭代到构建通过,**严禁盲改一次就收尾**:
-   - Java(有 `pom.xml`):`mvn -B -e -DskipTests package`(用 `-e` 看完整堆栈,**不要加 `-q`**);Gradle:`./gradlew build -x test`。
-   - Go(有 `go.mod`):`go build ./...`(必要时先 `go mod tidy`)。
-   - Python(有 `requirements.txt`/`pyproject.toml`):`python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt`,再 `python3 -c "import <入口模块>"` 或启动自检。
-   - Node(有 `package.json`):`npm ci || npm install`,有 build 脚本则 `npm run build`。
-   联网可用(可拉取 Maven Central / Go proxy / PyPI / npm 依赖)。**只有当上述真实构建在本地通过后才允许结束本轮修复**;构建仍报错就继续定位下一条错误——编译错误常成串,修好一条会暴露下一条,务必一路修到本地构建干净为止。
+5. 闭环验证(硬性):修复目标是"该工程能被 docker build 并启动,且自带测试/冒烟可过"。**本修复容器已预装全部主流后端工具链——JDK 21 + Maven(`mvn`)、Go(`go`)、Python 3 + pip、Node + npm**。你【必须】在每次改动后,在【当前目录】本地真实构建并跑测试、反复迭代到全绿,**严禁盲改一次就收尾**:
+   - 工程根若有 `Makefile` 或 `ci.sh`:优先 `make build && make test`(或 `bash ci.sh`)作为权威验证(它涵盖装依赖 → 编译 → 跑测试),跑到全绿。
+   - 否则按栈手敲真实命令:Java(有 `pom.xml`)`mvn -B -e package`(含测试,不要 `-DskipTests`、不要 `-q`;Gradle 用 `./gradlew build`);Go(有 `go.mod`)`go build ./... && go test ./...`(必要时先 `go mod tidy`);Python(有 `requirements.txt`/`pyproject.toml`)建 venv → `pip install -r requirements.txt` → `pytest`(无 pytest 则导入入口自检);Node(有 `package.json`)`npm ci || npm install` → 有 build 脚本则 `npm run build` → `npm test --if-present`。
+   联网可用。构建通过但测试红同样视为未修复,继续定位——编译/测试错误常成串,一路修到本地干净为止。**docker build 由平台执行:本容器没有 docker.sock,你只需把工程改到「原生构建/测试通过、Dockerfile 命令正确」**,平台随后会重新 `docker build` 并 `docker run`(注入 `PORT` / `DATABASE_URL` / `REDIS_URL`)。只有上述真实构建且测试在本地通过后才允许结束本轮修复。
 
 # 输入(视为既定事实)
 - 当前目录里已有一份上一轮生成的后端工程——把它当作既定事实,在其基础上修复,不得推倒重来或更换技术栈。
@@ -31,6 +29,7 @@
 - 不新增产品功能、不扩展需求范围、不改动共享 API 契约的端点。
 - 不重写已正确的实现、不做无关重构。
 - 不更换技术栈。
+- 不得为了让构建/测试变绿而删测试、改断言、跳过用例(如 `-DskipTests`、`@Disabled`、`it.skip`、pytest skip)来掩盖问题——测试红说明实现或 Dockerfile 仍有 bug,要修实现而非修测试;唯一例外:测试本身明显写错(与契约矛盾)时可最小订正并在总结里说明。也不得破坏已有分层(route→service→repository)与模块边界、不得把业务逻辑塞进通用层。
 
 # 产出契约(唯一权威输出结构)
 本契约优先于上方任何通用输出建议,冲突以此为准。本阶段不输出 JSON、不输出整篇代码;你应当直接在【当前目录】创建/修改文件来完成修复,并满足:
@@ -39,6 +38,7 @@
 
 # 交付前自检(全部满足才能输出)
 - [ ] **已用本容器内的真实工具链(mvn/go/pip/npm)在当前目录本地构建,且最终构建无报错通过**(不是只读报错就改;是改完真的编译/构建过了)。
+- [ ] 若工程含 `Makefile`/`ci.sh`,已在本地跑通 `make build && make test`(或 `bash ci.sh`,装依赖 + 编译 + 测试全绿);否则已手动构建 + 跑测试通过。
 - [ ] 已逐条对照末尾的构建/启动报错定位并修复,未遗漏阻断项。
 - [ ] `Dockerfile` 能完成依赖安装/编译/启动,`EXPOSE` 与启动命令读取 `PORT`。
 - [ ] 监听 `0.0.0.0:$PORT`,从环境读取 `DATABASE_URL`/`REDIS_URL`,无硬编码端口/连接串/密钥。

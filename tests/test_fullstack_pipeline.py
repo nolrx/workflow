@@ -140,6 +140,46 @@ def test_render_contract_falls_back_to_summary():
     assert "GET /x" in block
 
 
+def test_render_contract_injects_schema_convention():
+    """The binding schema convention reaches BOTH the BE (ORM) and MW (init.sql)
+    prompts via this single function — so the two generators can't drift on id
+    type / timestamps / column names (the deploy-crash root cause)."""
+    from backend.services.code.fullstack import contract_service
+
+    contract = {"openapi": {"paths": {"/health": {"get": {"summary": "ok"}}}}}
+    for max_chars in (9000, 6000):  # backend default + middleware call site
+        block = contract_service.render_contract_for_prompt(contract, max_chars=max_chars)
+        assert "数据库 Schema 一致性公约" in block
+        assert "SERIAL" in block and "VARCHAR(36)" in block  # forbids serial, pins string PK
+        assert "created_at" in block and "updated_at" in block
+
+
+def test_render_contract_convention_survives_cap():
+    """A large OpenAPI blob must never crowd the source-of-truth rules out:
+    the convention is appended AFTER the max_chars cap, so it is always present."""
+    from backend.services.code.fullstack import contract_service
+
+    big = {"openapi": {"paths": {f"/p{i}": {"get": {"summary": "x" * 50}} for i in range(80)}}}
+    block = contract_service.render_contract_for_prompt(big, max_chars=2000)
+    assert "数据库 Schema 一致性公约" in block
+    assert len(block) > 2000  # convention lives beyond the contract-body cap
+
+
+def test_render_contract_empty_stays_empty():
+    from backend.services.code.fullstack import contract_service
+
+    assert contract_service.render_contract_for_prompt({}) == ""
+
+
+def test_reset_namespace_noops_for_sqlite_and_none():
+    from backend.services.code import middleware_service
+
+    ok, log = middleware_service.reset_namespace("sqlite:////app/data/app.db")
+    assert ok and "no reset" in log
+    ok2, _ = middleware_service.reset_namespace(None)
+    assert ok2
+
+
 def test_ensure_contract_persists_ready_ledger(app):
     from backend.models.code.fullstack import ContractStatus
     from backend.services.code.fullstack import contract_service
@@ -331,3 +371,95 @@ def test_deploy_fail_without_provisioned_resources_is_plain_failed(app):
     assert result["status"] == DeploymentStatus.FAILED
     assert dep.status == DeploymentStatus.FAILED
     assert phases == []  # no rollback narration when there is nothing to roll back
+
+
+# --- deploy CI: smoke stage + phase progression ------------------------------
+class _FakeLedger:
+    def __init__(self, contract):
+        self._contract = contract
+
+    def get_api_contract(self):
+        return self._contract
+
+
+def test_smoke_endpoints_samples_idempotent_no_param_gets(monkeypatch):
+    """Smoke samples /health + idempotent no-path-param contract GETs, skipping
+    path-param and non-GET endpoints, capped at SMOKE_MAX_ENDPOINTS (+/health)."""
+    from backend.services.code import deploy_service
+
+    contract = {"openapi": {"paths": {
+        "/tasks": {"get": {}, "post": {}},      # GET sampled
+        "/users": {"get": {}},                  # GET sampled
+        "/orders/{id}": {"get": {}},            # skipped: path param
+        "/reports": {"post": {}},               # skipped: no GET
+        "/projects": {"get": {}},               # GET sampled
+        "/audit": {"get": {}},                  # would exceed the cap
+    }}}
+    monkeypatch.setattr(
+        "backend.services.code.fullstack.contract_service.get_ledger",
+        lambda pid: _FakeLedger(contract),
+    )
+    monkeypatch.setattr(deploy_service, "SMOKE_MAX_ENDPOINTS", 3)
+    paths = deploy_service._smoke_endpoints("p1")
+    assert paths[0] == deploy_service.HEALTH_PATH       # /health always first
+    assert "/orders/{id}" not in paths                  # path-param skipped
+    assert "/reports" not in paths                      # POST-only skipped
+    assert len(paths) == 4                              # /health + 3 sampled (capped)
+    assert {"/tasks", "/users", "/projects"} <= set(paths)
+
+
+def test_smoke_endpoints_degrades_to_health_only_without_structured_paths(monkeypatch):
+    """No structured OpenAPI paths (deterministic fallback contract) → smoke only
+    re-checks /health and never over-asserts."""
+    from backend.services.code import deploy_service
+
+    monkeypatch.setattr(
+        "backend.services.code.fullstack.contract_service.get_ledger",
+        lambda pid: _FakeLedger({"openapi": {}, "api_summary": "GET /x"}),
+    )
+    assert deploy_service._smoke_endpoints("p1") == [deploy_service.HEALTH_PATH]
+
+
+def test_smoke_test_5xx_fails_but_conn_error_is_inconclusive(monkeypatch):
+    """Only a definitive 5xx fails the smoke; a connection error / timeout is
+    recorded as inconclusive and does NOT fail (a /health-green deploy stands)."""
+    import requests
+
+    from backend.services.code import deploy_service
+
+    monkeypatch.setattr(deploy_service, "_smoke_endpoints", lambda pid: ["/health", "/a", "/b"])
+
+    class _Resp:
+        def __init__(self, code):
+            self.status_code = code
+
+    # /health 200 ok, /a connection error (inconclusive), /b 401 (route exists → ok)
+    def fake_get(url, timeout=None):
+        if url.endswith("/a"):
+            raise requests.exceptions.ConnectionError("refused")
+        return _Resp(200 if url.endswith("/health") else 401)
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    ok, results = deploy_service._smoke_test("c", 8080, "p1", lambda: False)
+    assert ok is True  # 401 tolerated, conn error inconclusive (not a 5xx)
+    assert any(r.get("result", "").startswith("inconclusive") for r in results)
+
+    # Now a 5xx on one endpoint → smoke fails (deploy rolls back).
+    def fake_get_5xx(url, timeout=None):
+        return _Resp(200 if url.endswith("/health") else 502)
+
+    monkeypatch.setattr(requests, "get", fake_get_5xx)
+    ok2, results2 = deploy_service._smoke_test("c", 8080, "p1", lambda: False)
+    assert ok2 is False
+    assert any(r.get("result") == "5xx" for r in results2)
+
+
+def test_deploy_phase_progress_is_monotonic_six_steps():
+    """The deploy workflow's phase→progress map advances monotonically across the
+    6 CI stages (health and smoke occupy DISTINCT slots — no stuck progress bar)."""
+    from backend.services.agent.workflows import code_fullstack_deploy_workflow as wf
+
+    assert wf.TOTAL_STEPS == 6
+    pp = wf._PHASE_PROGRESS
+    assert pp["provision"] < pp["migrate"] < pp["build"] < pp["start"] < pp["health"] < pp["smoke"]
+    assert pp["smoke"] == wf.TOTAL_STEPS == pp["done"]

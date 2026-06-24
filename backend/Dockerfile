@@ -43,16 +43,8 @@ EXPOSE 5001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5001/health', timeout=3).read()" || exit 1
 
-# Production server. A SINGLE worker with multiple threads is intentional:
-# the Agent Swarm runtime, SSE event bus and recorder are process-level
-# singletons, so cross-request SSE replay only works inside one process.
-# gthread keeps long-lived SSE streams alive without blocking other requests.
-CMD ["gunicorn", "backend.app:create_app()", \
-     "--bind", "0.0.0.0:5001", \
-     "--workers", "1", \
-     "--threads", "8", \
-     "--worker-class", "gthread", \
-     "--timeout", "600", \
-     "--graceful-timeout", "30", \
-     "--access-logfile", "-", \
-     "--error-logfile", "-"]
+# Production server. Server settings (single gthread worker, timeouts) and the
+# graceful drain-on-SIGTERM hook live in backend/gunicorn.conf.py — a single
+# worker is intentional (the Agent Swarm runtime / SSE bus / recorder are
+# process-level singletons, so cross-request SSE replay only works in one process).
+CMD ["gunicorn", "backend.app:create_app()", "-c", "backend/gunicorn.conf.py"]

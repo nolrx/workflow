@@ -93,6 +93,7 @@
 - `middleware.env` 至少包含 `PORT` 与 `DATABASE_URL`;用到缓存时才包含 `REDIS_URL`。
 - `cache` / `queue` 不需要时填 `null`,不要为凑数而堆叠中间件。
 - `tech_stack.language` / `framework` 必须沿用开发流程「技术假设」,不得另选。
+- **数据模型一致性公约(供下游后端 ORM 与中间件 init.sql 共同遵守)**:`components.schemas` 里每个实体的 `id` 用字符串(`type: string`,不要用整数/自增),并都含 `created_at` / `updated_at`(`type: string, format: date-time`);字段命名稳定唯一。下游会据此分别生成 ORM 与 init.sql 并作用于同一个库,务必保证可对齐(主键字符串、统一时间戳、表/列名一致)。
 
 # 交付前自检(全部满足才能输出)
 

@@ -43,7 +43,13 @@
     "title": "App Style",
     "generate": "Generate style doc",
     "placeholder": "Select styles to generate a tailored style document.",
-    "documentTitle": "Style Document"
+    "documentTitle": "Style Document",
+    "selectStyles": "Select styles",
+    "selectedCount": "{{count}} style(s) selected",
+    "searchPlaceholder": "Search style names or descriptions…",
+    "emptySearch": "No matching styles found",
+    "modalTitle": "Choose UI styles",
+    "modalDescription": "Pick one or more UI styles and confirm to apply them to the project."
   },
   "styleSelect": {
     "title": "Choose UI style(s) (multi-select, at least one), then generate the style document.",

@@ -43,7 +43,13 @@
     "title": "应用风格",
     "generate": "生成风格文档",
     "placeholder": "选择风格后生成专属风格文档。",
-    "documentTitle": "风格文档"
+    "documentTitle": "风格文档",
+    "selectStyles": "选择风格",
+    "selectedCount": "已选择 {{count}} 项风格",
+    "searchPlaceholder": "搜索风格名称或描述…",
+    "emptySearch": "没有找到匹配的风格",
+    "modalTitle": "选择 UI 风格",
+    "modalDescription": "选择一种或多种 UI 风格，确认后将应用到当前项目。"
   },
   "styleSelect": {
     "title": "请选择 UI 风格（可多选，至少一个），确认后生成风格文档",

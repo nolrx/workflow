@@ -389,6 +389,67 @@ button:not(:disabled),
   cursor: pointer;
 }
 
+/* Smooth dialog overlay + content animations.
+   Only opacity and scale are animated so the existing centering transform
+   (left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2) stays intact. */
+.animated-dialog-overlay[data-state="open"] {
+  animation: dialog-overlay-in 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animated-dialog-overlay[data-state="closed"] {
+  animation: dialog-overlay-out 0.2s cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+.animated-dialog-content[data-state="open"] {
+  animation: dialog-content-in 0.32s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+
+.animated-dialog-content[data-state="closed"] {
+  animation: dialog-content-out 0.2s cubic-bezier(0.4, 0, 1, 1) forwards;
+  will-change: transform, opacity;
+}
+
+@keyframes dialog-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes dialog-overlay-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes dialog-content-in {
+  from {
+    opacity: 0;
+    transform: scale3d(0.96, 0.96, 1);
+  }
+  to {
+    opacity: 1;
+    transform: scale3d(1, 1, 1);
+  }
+}
+
+@keyframes dialog-content-out {
+  from {
+    opacity: 1;
+    transform: scale3d(1, 1, 1);
+  }
+  to {
+    opacity: 0;
+    transform: scale3d(0.98, 0.98, 1);
+  }
+}
+
 /* Respect users who opt out of motion (WCAG 2.3.3 / prefers-reduced-motion).
    Neutralizes spinners, the streaming caret, pulse and thinking animations. */
 @media (prefers-reduced-motion: reduce) {

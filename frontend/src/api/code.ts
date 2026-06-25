@@ -95,6 +95,9 @@ export interface CodeProject {
   visibility: string
   created_at: string
   updated_at: string
+  /** Present in list responses; indicates an active deployment blocks deletion. */
+  is_deployed?: boolean
+  deployment_status?: string | null
 }
 
 export type StageVersionSource =
@@ -205,6 +208,10 @@ export const codeApi = {
       data
     )
     return response.data.project
+  },
+  deleteProject: async (projectId: string) => {
+    const response = await api.delete<Envelope<null>>(`/code/projects/${projectId}`)
+    return response.data
   },
   generateFlow: async (projectId: string) => {
     const response = await api.post<Envelope<{ project: CodeProject }>>(

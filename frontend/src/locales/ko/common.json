@@ -17,12 +17,16 @@
       "ppt": "PPT",
       "redbook": "RedBook"
     },
-    "newSession": "새 세션",
-    "currentSession": "현재 세션",
-    "recentSessions": "최근",
+    "newSession": "새 프로젝트",
+    "currentSession": "현재 프로젝트",
+    "recentSessions": "프로젝트",
     "viewAll": "전체 보기",
-    "noSessions": "세션 없음",
-    "untitled": "제목 없음"
+    "noSessions": "프로젝트 없음",
+    "untitled": "제목 없음",
+    "deleteSession": "프로젝트 삭제",
+    "cannotDeleteDeployed": "배포되어 삭제할 수 없습니다",
+    "deleteConfirmTitle": "프로젝트 삭제 확인",
+    "deleteConfirmDescription": "프로젝트 \"{{title}}\"을(를) 삭제하시겠습니까? 되돌릴 수 없습니다."
   },
   "brand": {
     "name": "AI",

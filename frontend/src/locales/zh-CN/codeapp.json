@@ -11,7 +11,7 @@
   "iframeTitle": "生成的应用预览",
   "openInBrowser": "在浏览器中预览",
   "readyTitle": "前端工程已生成",
-  "readyHint": "已部署到该会话的预览地址，点击在新标签页中以原生浏览器效果打开运行。",
+  "readyHint": "已部署到该项目的预览地址，点击在新标签页中以原生浏览器效果打开运行。",
   "loadingHistory": "加载已生成的项目…",
   "version": {
     "label": "选择版本",

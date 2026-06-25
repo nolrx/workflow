@@ -17,12 +17,16 @@
       "ppt": "PPT",
       "redbook": "RedBook"
     },
-    "newSession": "New session",
-    "currentSession": "Current session",
-    "recentSessions": "Recent",
+    "newSession": "New project",
+    "currentSession": "Current project",
+    "recentSessions": "Projects",
     "viewAll": "View all",
-    "noSessions": "No sessions yet",
-    "untitled": "Untitled"
+    "noSessions": "No projects yet",
+    "untitled": "Untitled",
+    "deleteSession": "Delete project",
+    "cannotDeleteDeployed": "Deployed, cannot delete",
+    "deleteConfirmTitle": "Confirm delete project",
+    "deleteConfirmDescription": "Are you sure you want to delete project \"{{title}}\"? This action cannot be undone."
   },
   "brand": {
     "name": "AI",

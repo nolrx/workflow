@@ -8,11 +8,14 @@ from backend.extensions import db
 from backend.models.agent.run import AgentRun
 from backend.models.code import (
     CodeCanvas,
+    CodeDeployment,
     CodeDocument,
     CodeProject,
+    CodeProjectLedger,
     CodeProjectStatus,
     CodeStage,
     CodeStageVersionSource,
+    DeploymentStatus,
 )
 from backend.services import pricing
 from backend.services.agent.context_ledger import ContextLedger
@@ -119,9 +122,19 @@ def list_projects():
     offset = int(request.args.get("offset", 0))
     query = CodeProject.query.filter_by(user_id=user_id).order_by(CodeProject.updated_at.desc())
     projects = query.limit(limit).offset(offset).all()
+    project_ids = [project.id for project in projects]
+    deployments = (
+        CodeDeployment.query.filter(CodeDeployment.project_id.in_(project_ids)).all()
+        if project_ids
+        else []
+    )
+    deployment_status_map = {deployment.project_id: deployment.status for deployment in deployments}
     return success_response(
         {
-            "projects": [project.to_list_dict() for project in projects],
+            "projects": [
+                project.to_list_dict(deployment_status=deployment_status_map.get(project.id))
+                for project in projects
+            ],
             "has_more": query.count() > offset + len(projects),
             "limit": limit,
             "offset": offset,
@@ -164,6 +177,51 @@ def get_project(project_id: str):
     if not project:
         return error_response("NOT_FOUND", "项目不存在", 404)
     return success_response({"project": project.to_dict()})
+
+
+@code_project_bp.route("/projects/<project_id>", methods=["DELETE"])
+@jwt_required()
+def delete_project(project_id: str):
+    """Delete a code project and its associated runs/records.
+
+    Refuses deletion when the project has an active deployment or a running
+    agent run, to avoid orphaning live containers or in-flight work.
+    """
+    project = _get_owned_project(project_id)
+    if not project:
+        return error_response("NOT_FOUND", "项目不存在", 404)
+
+    deployment = CodeDeployment.query.filter_by(project_id=project_id).first()
+    if deployment and deployment.status in DeploymentStatus.ACTIVE:
+        return error_response(
+            "DEPLOYMENT_ACTIVE", "该项目已部署，请先停止部署后再删除", 409
+        )
+
+    active_run = AgentRun.query.filter(
+        AgentRun.resource_type == "code_project",
+        AgentRun.resource_id == project_id,
+        AgentRun.status.in_(["running", "queued"]),
+    ).first()
+    if active_run:
+        return error_response(
+            "RUN_ACTIVE", "会话正在运行中，请等待结束或取消后再删除", 409
+        )
+
+    # Load and delete related runs individually so SQLAlchemy cascades
+    # (steps/events/artifacts) are honored. Bulk .delete() bypasses ORM-level
+    # cascade and fails on foreign-key constraints.
+    ledger = CodeProjectLedger.query.filter_by(project_id=project_id).first()
+    if ledger:
+        db.session.delete(ledger)
+    if deployment:
+        db.session.delete(deployment)
+    for run in AgentRun.query.filter_by(
+        resource_type="code_project", resource_id=project_id
+    ).all():
+        db.session.delete(run)
+    db.session.delete(project)
+    db.session.commit()
+    return success_response(None, "项目已删除")
 
 
 @code_project_bp.route("/projects/<project_id>", methods=["PATCH"])

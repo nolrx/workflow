@@ -125,12 +125,17 @@ class CodeProject(db.Model):
             data["documents"] = [document.to_dict() for document in self.documents.all()]
         return data
 
-    def to_list_dict(self) -> dict:
+    def to_list_dict(self, deployment_status: str | None = None) -> dict:
         """Convert the project to a compact list dictionary."""
+        from backend.models.code.fullstack import DeploymentStatus
+
+        is_deployed = deployment_status in DeploymentStatus.ACTIVE
         return {
             "id": self.id,
             "title": self.title,
             "status": self.status,
+            "is_deployed": is_deployed,
+            "deployment_status": deployment_status,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
         }

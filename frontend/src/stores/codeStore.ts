@@ -57,6 +57,7 @@ interface CodeState {
   fetchProjects: (limit?: number, offset?: number) => Promise<void>
   setCurrentProject: (project: CodeProject | null) => void
   updateProject: (data: Partial<CodeProject>) => Promise<void>
+  deleteProject: (projectId: string) => Promise<boolean>
   updateProjectDraft: (data: Partial<CodeProject>) => void
   generateFlow: () => Promise<void>
   splitDocuments: () => Promise<void>
@@ -184,6 +185,25 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
         isLoading: false,
         activeAction: null,
       })
+    }
+  },
+
+  deleteProject: async (projectId) => {
+    set({ isLoading: true, error: null })
+    try {
+      await codeApi.deleteProject(projectId)
+      set((state) => ({
+        project: state.project?.id === projectId ? null : state.project,
+        projects: state.projects.filter((p) => p.id !== projectId),
+        isLoading: false,
+      }))
+      return true
+    } catch (error) {
+      set({
+        error: getErrorMessage(error, t("errors:code.deleteProjectFailed")),
+        isLoading: false,
+      })
+      return false
     }
   },
 

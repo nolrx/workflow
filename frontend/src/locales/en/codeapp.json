@@ -11,7 +11,7 @@
   "iframeTitle": "Generated app preview",
   "openInBrowser": "Open preview",
   "readyTitle": "Frontend project is ready",
-  "readyHint": "It's deployed to this session's preview URL — open it in a new tab to run it with a native, full-page browser experience.",
+  "readyHint": "It's deployed to this project's preview URL — open it in a new tab to run it with a native, full-page browser experience.",
   "loadingHistory": "Loading the generated project…",
   "version": {
     "label": "Select version",

@@ -35,6 +35,7 @@
     "fetchStylesFailed": "스타일 목록을 가져오는 데 실패했습니다",
     "createProjectFailed": "소프트웨어 프로젝트 생성에 실패했습니다",
     "saveProjectFailed": "프로젝트 저장에 실패했습니다",
+    "deleteProjectFailed": "프로젝트 삭제에 실패했습니다",
     "generateFlowFailed": "개발 흐름 생성에 실패했습니다",
     "splitDocumentsFailed": "개발 문서 분리에 실패했습니다",
     "saveDocumentFailed": "문서 저장에 실패했습니다",

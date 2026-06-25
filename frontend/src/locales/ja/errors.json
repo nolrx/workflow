@@ -35,6 +35,7 @@
     "fetchStylesFailed": "スタイル一覧の取得に失敗しました",
     "createProjectFailed": "ソフトウェアプロジェクトの作成に失敗しました",
     "saveProjectFailed": "プロジェクトの保存に失敗しました",
+    "deleteProjectFailed": "プロジェクトの削除に失敗しました",
     "generateFlowFailed": "開発フローの生成に失敗しました",
     "splitDocumentsFailed": "開発文書の分割に失敗しました",
     "saveDocumentFailed": "文書の保存に失敗しました",

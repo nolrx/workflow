@@ -17,12 +17,16 @@
       "ppt": "PPT",
       "redbook": "小红书"
     },
-    "newSession": "新建会话",
-    "currentSession": "当前会话",
-    "recentSessions": "历史会话",
+    "newSession": "新建项目",
+    "currentSession": "当前项目",
+    "recentSessions": "历史项目",
     "viewAll": "查看全部",
-    "noSessions": "暂无会话",
-    "untitled": "未命名"
+    "noSessions": "暂无项目",
+    "untitled": "未命名",
+    "deleteSession": "删除项目",
+    "cannotDeleteDeployed": "已部署，无法删除",
+    "deleteConfirmTitle": "确认删除项目",
+    "deleteConfirmDescription": "确定要删除项目「{{title}}」吗？删除后将无法恢复。"
   },
   "brand": {
     "name": "AI",

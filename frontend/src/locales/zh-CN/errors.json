@@ -40,6 +40,7 @@
     "fetchStylesFailed": "获取风格列表失败",
     "createProjectFailed": "创建软件项目失败",
     "saveProjectFailed": "保存项目失败",
+    "deleteProjectFailed": "删除项目失败",
     "generateFlowFailed": "生成开发流程失败",
     "splitDocumentsFailed": "切分开发文档失败",
     "saveDocumentFailed": "保存文档失败",

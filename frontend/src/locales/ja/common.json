@@ -17,11 +17,16 @@
       "ppt": "PPT",
       "redbook": "RedBook"
     },
-    "newSession": "新規セッション",
-    "recentSessions": "履歴",
+    "newSession": "新規プロジェクト",
+    "currentSession": "現在のプロジェクト",
+    "recentSessions": "プロジェクト",
     "viewAll": "すべて表示",
-    "noSessions": "セッションがありません",
-    "untitled": "無題"
+    "noSessions": "プロジェクトがありません",
+    "untitled": "無題",
+    "deleteSession": "プロジェクトを削除",
+    "cannotDeleteDeployed": "デプロイ済みのため削除できません",
+    "deleteConfirmTitle": "プロジェクト削除の確認",
+    "deleteConfirmDescription": "プロジェクト「{{title}}」を削除しますか？この操作は元に戻せません。"
   },
   "brand": {
     "name": "AI",

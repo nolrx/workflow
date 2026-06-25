@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Link, useLocation, useNavigate } from "react-router-dom"
 import { useTranslation } from "react-i18next"
+import { toast } from "sonner"
 import {
   Plus,
   Settings,
@@ -13,6 +14,8 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import { DeleteSessionDialog } from "@/components/code/DeleteSessionDialog"
+import { SessionContextMenu } from "@/components/code/SessionContextMenu"
 import { useAgentStore } from "@/stores/agentStore"
 import { useCodeStore } from "@/stores/codeStore"
 import { useCreditStore } from "@/stores/creditStore"
@@ -28,6 +31,7 @@ interface SessionItem {
   id: string
   label: string
   href: string
+  isDeployed: boolean
 }
 
 interface SidebarContentProps {
@@ -42,10 +46,23 @@ export function SidebarContent({ onNavigate }: SidebarContentProps) {
   const navigate = useNavigate()
   const { t } = useTranslation()
 
+  const [contextMenu, setContextMenu] = useState<{
+    open: boolean
+    x: number
+    y: number
+    session: SessionItem | null
+  }>({ open: false, x: 0, y: 0, session: null })
+  const [deleteDialog, setDeleteDialog] = useState<{
+    open: boolean
+    session: SessionItem | null
+  }>({ open: false, session: null })
+  const [isDeleting, setIsDeleting] = useState(false)
+
   // Code-domain sessions (the "creation" entities double as sessions).
   const codeProjects = useCodeStore((s) => s.projects)
   const currentProject = useCodeStore((s) => s.project)
   const fetchCodeProjects = useCodeStore((s) => s.fetchProjects)
+  const deleteCodeProject = useCodeStore((s) => s.deleteProject)
   const hasMoreProjects = useCodeStore((s) => s.hasMoreProjects)
   const isLoadingProjects = useCodeStore((s) => s.isLoadingProjects)
 
@@ -94,6 +111,7 @@ export function SidebarContent({ onNavigate }: SidebarContentProps) {
     id: p.id,
     label: p.title || p.requirement_input?.slice(0, 40) || untitled,
     href: `/code/${p.id}`,
+    isDeployed: !!p.is_deployed,
   }))
 
   const handleNewSession = () => {
@@ -166,6 +184,15 @@ export function SidebarContent({ onNavigate }: SidebarContentProps) {
                   to={session.href}
                   title={session.label}
                   onClick={onNavigate}
+                  onContextMenu={(event) => {
+                    event.preventDefault()
+                    setContextMenu({
+                      open: true,
+                      x: event.clientX,
+                      y: event.clientY,
+                      session,
+                    })
+                  }}
                   className={cn(
                     "block truncate border-l-2 px-3 py-2 text-sm transition-colors",
                     isActive
@@ -263,6 +290,46 @@ export function SidebarContent({ onNavigate }: SidebarContentProps) {
           </div>
         ) : null}
       </div>
+
+      <SessionContextMenu
+        open={contextMenu.open}
+        x={contextMenu.x}
+        y={contextMenu.y}
+        isDeployed={contextMenu.session?.isDeployed ?? false}
+        onClose={() => setContextMenu((prev) => ({ ...prev, open: false }))}
+        onDelete={() => {
+          const session = contextMenu.session
+          if (!session || session.isDeployed) return
+          setDeleteDialog({ open: true, session })
+          setContextMenu((prev) => ({ ...prev, open: false }))
+        }}
+      />
+      <DeleteSessionDialog
+        open={deleteDialog.open}
+        onOpenChange={(open) =>
+          setDeleteDialog({ open, session: open ? deleteDialog.session : null })
+        }
+        title={deleteDialog.session?.label ?? ""}
+        isDeployed={deleteDialog.session?.isDeployed ?? false}
+        isDeleting={isDeleting}
+        onConfirm={async () => {
+          const session = deleteDialog.session
+          if (!session) return
+          setIsDeleting(true)
+          const ok = await deleteCodeProject(session.id)
+          setIsDeleting(false)
+          setDeleteDialog({ open: false, session: null })
+          if (ok) {
+            toast.success(t("toast.deleted"))
+            if (currentProject?.id === session.id) {
+              useAgentStore.getState().reset()
+              navigate("/code")
+            }
+          } else {
+            toast.error(useCodeStore.getState().error || t("toast.error"))
+          }
+        }}
+      />
     </>
   )
 }

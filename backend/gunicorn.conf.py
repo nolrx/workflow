@@ -23,6 +23,11 @@ timeout = 600
 graceful_timeout = 30
 accesslog = "-"
 errorlog = "-"
+# Docker Desktop on Windows can leave gunicorn's default worker heartbeat tmp
+# file on a host-shared filesystem and raise FileNotFoundError during notify().
+# /dev/shm is an in-container tmpfs, which avoids the issue and is safe on
+# Linux hosts as well.
+worker_tmp_dir = "/dev/shm"
 
 
 def post_worker_init(worker):

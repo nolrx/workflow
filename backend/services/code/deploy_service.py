@@ -5,10 +5,14 @@ Brings a generated app up behind a reverse proxy in dependency order, with
 rollback on any failure (so a half-deployed app never lingers):
 
     provision middleware namespace  (CREATE DATABASE app_<pid> + redis prefix)
-      → apply generated init.sql      (best-effort fallback for non-self-migrating backends)
+      → migrate: EMPTY db — the backend ORM self-migrates on boot (single schema
+                          source-of-truth; init.sql is NOT pre-applied, only used
+                          as a recovery fallback if the backend can't self-migrate)
       → docker build the generated backend image (its OWN Dockerfile)
       → docker run a long-lived container on the shared app network
       → health-check  GET http://app-<pid>:<port>/health
+      → schema reconcile (align the live db to the contract db_schema: ADD missing
+                          columns + WIDEN narrow string cols to TEXT; add/widen-only)
       → contract smoke   (sampled GETs must not 5xx)
       → integration test (pull FE call-code + contract → AI plan → EXECUTE against
                           the live container; deterministic, tiered hard gate)
@@ -527,24 +531,33 @@ def deploy(
               {"middleware": prov.to_dict()})
 
         # --- 2. Migrate the data layer (distinct, observable CI stage) --------
-        # The generated backend self-migrates on boot where possible; this applies
-        # the generated init.sql as a fallback for non-self-migrating backends.
-        # Best-effort (never sinks a deploy on its own — per-statement errors are
-        # tolerated; the backend may also create tables on boot).
+        # SINGLE schema source-of-truth = the backend ORM's self-migration on an
+        # EMPTY db. We deliberately do NOT pre-apply init.sql by default: pre-applying
+        # it raced the ORM and固化d field-level drift (init.sql creates a table with a
+        # narrow VARCHAR / missing column → the ORM's create_all sees the table exists,
+        # skips it, never widens/adds → 22001 on long writes, 500 on the missing
+        # column). init.sql is kept as a RECOVERY fallback applied ONLY if the backend
+        # can't build its own schema on an empty db (the non-self-migrating case),
+        # below in the health stage. Set APP_PREAPPLY_INIT_SQL=1 to force the old
+        # pre-apply behavior. Best-effort throughout (never sinks a deploy on its own).
         if cancelled():
             return _abort(dep, rollback, "已取消")
-        phase("migrate", "执行数据层迁移(优先后端自迁移;应用生成的 init.sql 兜底)")
+        phase("migrate", "数据层:由后端在空库上自迁移建表(单一 schema 真源;不预置 init.sql,杜绝双源漂移)")
         init_sql = _load_init_sql(middleware_run)
-        init_applied = bool(
+        has_init_fallback = bool(
             init_sql.strip()
             and prov.database_url
             and not prov.database_url.startswith("sqlite")
         )
-        if init_applied:
+        init_applied = False
+        if os.getenv("APP_PREAPPLY_INIT_SQL") in ("1", "true", "True") and has_init_fallback:
             ok, log = middleware_service.apply_init_sql(prov.database_url, init_sql)
-            phase("migrate", f"数据层就绪:{log}", {"applied": ok})
+            init_applied = ok
+            phase("migrate", f"(显式开启 init.sql 预应用)数据层就绪:{log}", {"applied": ok})
         else:
-            phase("migrate", "无 init.sql 兜底;依赖后端启动时自建表/自迁移", {"applied": True})
+            phase("migrate", "已跳过 init.sql 预应用;空库交由后端自建表/自迁移"
+                  + ("(必要时部署期会用 init.sql 兜底)" if has_init_fallback else ""),
+                  {"applied": False})
 
         # --- 3. Build (=package) the backend image (its own Dockerfile) ------
         if cancelled():
@@ -616,38 +629,37 @@ def deploy(
         phase("health", f"健康检查 GET {HEALTH_PATH}(最长 {HEALTH_TIMEOUT}s)")
         healthy, detail = _wait_healthy(container, BACKEND_PORT, HEALTH_TIMEOUT, cancelled)
 
-        # init.sql-as-fallback recovery: the migrate phase pre-applies the
-        # middleware-generated init.sql, but a SELF-migrating backend builds its
-        # own schema on boot (create_all / AutoMigrate / etc.). When the two
-        # schemas drift (e.g. init.sql uses SERIAL ids / omits created_at while the
-        # ORM expects uuid + timestamps), create_all skips the already-existing
-        # tables and the backend then crashes querying columns that don't exist —
-        # never binding its port. Give it a clean shot: reset the db to empty and
-        # let the backend self-migrate. Only meaningful when init.sql was applied
-        # (otherwise the first attempt already ran against an empty db).
-        if not healthy and init_applied and not cancelled():
+        # init.sql-as-RECOVERY (empty-first): the backend started against an EMPTY db
+        # and is expected to self-migrate (create_all / AutoMigrate / etc.). If it
+        # failed to bind its port, the likely cause is a NON-self-migrating backend
+        # that needs the generated init.sql to build its tables. Give it one clean
+        # shot: reset to an empty schema (drop any partial tables the failed boot
+        # left), apply the init.sql fallback, and restart. Only meaningful when an
+        # init.sql fallback exists and wasn't already pre-applied.
+        if not healthy and has_init_fallback and not init_applied and not cancelled():
             phase("health",
-                  f"健康检查未通过({detail});疑似预置 init.sql 与后端自迁移冲突,"
-                  "重置为空库后让后端自建表重试")
+                  f"健康检查未通过({detail});后端可能不具备空库自迁移能力,"
+                  "重置空库并应用 init.sql 兜底建表后重试")
             _docker(["stop", container], 60)
             ok_reset, reset_log = middleware_service.reset_namespace(prov.database_url)
-            phase("health", f"已重置中间件命名空间为空库:{reset_log}", {"reset": ok_reset})
+            ok_apply, apply_log = middleware_service.apply_init_sql(prov.database_url, init_sql)
+            phase("health", f"已重置并应用 init.sql 兜底:{reset_log};{apply_log}",
+                  {"reset": ok_reset, "applied": ok_apply})
             started = _docker(["start", container], 120)
             if started.returncode == 0:
                 healthy, detail = _wait_healthy(container, BACKEND_PORT, HEALTH_TIMEOUT, cancelled)
                 if healthy:
-                    # The recovery WIPED init.sql's tables (DB is now empty; the
-                    # backend self-migrated). Reflect that locally so the downstream
-                    # comprehensive-repair brief tells Codex the data layer is empty /
-                    # init.sql is NOT in effect — not the stale "已应用" from line ~357.
-                    init_applied = False
+                    # The fallback init.sql built the schema (the backend is
+                    # non-self-migrating). Reflect that so the downstream
+                    # comprehensive-repair brief tells Codex init.sql IS in effect.
+                    init_applied = True
                     dep.set_detail({**dep.get_detail(),
-                                    "init_sql_skipped": True,
-                                    "recovery": "reset-empty-db; backend self-migrated"})
+                                    "init_sql_fallback": True,
+                                    "recovery": "empty-first; init.sql applied as fallback"})
                     db.session.commit()
-                    phase("health", "重置空库后健康检查通过:后端自迁移建表成功(已跳过冲突的 init.sql)")
+                    phase("health", "应用 init.sql 兜底后健康检查通过(后端非自迁移,已用兜底 DDL 建表)")
             else:
-                phase("health", f"重置后容器重启失败:{(started.stderr or started.stdout)[-300:]}")
+                phase("health", f"兜底后容器重启失败:{(started.stderr or started.stdout)[-300:]}")
 
         if not healthy:
             logs = _docker(["logs", "--tail", "60", container], 30)
@@ -655,6 +667,47 @@ def deploy(
             db.session.commit()
             return _fail(dep, rollback, f"后端健康检查未通过:{detail}", narrate=phase)
         dep.health = "healthy"
+
+        # --- 5b. Schema reconcile against the authoritative contract db_schema ---
+        # The ORM is the sole schema author now (init.sql isn't pre-applied), but the
+        # ORM's column WIDTHS are still LLM-chosen — a narrow VARCHAR(n) on a business
+        # string column 22001s on the first long write ("字段内容过长"), and a contract
+        # column the ORM forgot 500s on read ("架构缺字段"). Align the LIVE db to the
+        # contract's machine-readable db_schema: ADD missing columns + WIDEN too-narrow
+        # string columns to TEXT. Reads information_schema (language-agnostic ground
+        # truth, not source). Postgres-only; add/widen-only (never narrows or drops);
+        # best-effort — a reconcile error never sinks a /health-green deploy.
+        if not cancelled():
+            try:
+                from backend.services.code.fullstack import contract_service
+
+                ledger_row = contract_service.get_ledger(project.id)
+                db_schema = (
+                    (ledger_row.get_api_contract() or {}).get("db_schema") if ledger_row else None
+                ) or {}
+                if db_schema.get("tables"):
+                    phase("reconcile",
+                          "按契约 db_schema 校准实库:补缺列 + 加宽过窄字符串列(消除「字段过长 / 缺字段」)")
+                    ok_rec, rec_log = middleware_service.reconcile_schema(prov.database_url, db_schema)
+                    dep.set_detail({**dep.get_detail(), "schema_reconcile": rec_log})
+                    db.session.commit()
+                    phase("reconcile", f"schema 校准完成:{rec_log}", {"ok": ok_rec, "applied": ok_rec})
+                else:
+                    # No db_schema in the contract → reconcile can't run. Distinguish
+                    # this (an OLD contract synthesized before db_schema existed, OR
+                    # contract_synthesis_prompt not yet synced to Mongo) from "the
+                    # project genuinely has no tables", so ops doesn't read the silent
+                    # skip as success.
+                    phase("reconcile",
+                          "跳过 schema 校准:契约无 db_schema(老契约,或 contract_synthesis_prompt 尚未 sync Mongo)。"
+                          "如需字段长度/缺列的部署期确定性校准,请确认该 prompt 已同步并重新合成契约后重部署。")
+            except Exception:  # noqa: BLE001 — reconcile must NEVER sink a green deploy
+                try:
+                    db.session.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                logger.warning("schema reconcile failed (non-blocking)", exc_info=True)
+                phase("reconcile", "schema 校准步骤自身异常,已跳过(不阻断部署;health 已通过)")
 
         # --- 6. Smoke test (contract liveness — non-blocking signal) ---------
         # /health proved the process is up; now hit a few idempotent no-param GET

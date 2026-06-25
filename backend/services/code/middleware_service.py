@@ -241,7 +241,9 @@ def apply_init_sql(database_url: str, init_sql: str) -> tuple[bool, str]:
         return True, "no init.sql applied (empty or sqlite-local)"
     applied, errors = 0, []
     try:
-        engine = create_engine(database_url, isolation_level="AUTOCOMMIT")
+        engine = create_engine(
+            database_url, isolation_level="AUTOCOMMIT", connect_args=_PG_DDL_CONNECT_ARGS
+        )
         with engine.connect() as conn:
             for stmt in _split_sql(sql):
                 try:
@@ -299,7 +301,9 @@ def reset_namespace(database_url: Optional[str]) -> tuple[bool, str]:
     if not database_url or database_url.startswith("sqlite"):
         return True, "no reset (sqlite-local or none)"
     try:
-        engine = create_engine(database_url, isolation_level="AUTOCOMMIT")
+        engine = create_engine(
+            database_url, isolation_level="AUTOCOMMIT", connect_args=_PG_DDL_CONNECT_ARGS
+        )
         with engine.connect() as conn:
             conn.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
             conn.execute(text("CREATE SCHEMA public"))
@@ -308,6 +312,198 @@ def reset_namespace(database_url: Optional[str]) -> tuple[bool, str]:
     except Exception as error:  # noqa: BLE001 — surfaced to the deploy run
         logger.error("namespace reset failed: %s", error, exc_info=True)
         return False, f"reset failed: {error}"
+
+
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+# Explicit type ALLOW-LIST for the ADD COLUMN path. ctype comes from an LLM, so a
+# permissive "DDL-fragment" regex (letters/digits/()/,/space) would let a type
+# string smuggle a constraint clause into ADD COLUMN — `TEXT REFERENCES secret(id)`,
+# `TEXT DEFAULT now()`, `TEXT CHECK(...)`, `TEXT GENERATED ...`, `serial`, `TEXT
+# COLLATE ...` all pass a fragment regex and emit non-intended DDL. This matches
+# ONLY a bare column type (optionally with a size/precision), so anything carrying
+# DEFAULT/CHECK/REFERENCES/GENERATED/COLLATE/NOT NULL/`;` is rejected → that column
+# is skipped (the only default is the white-listed _SAFE_DEFAULTS, set separately).
+_ALLOWED_TYPE_RE = re.compile(
+    r"(?i)\A(?:"
+    r"text|citext|uuid|boolean|bool|smallint|integer|int|bigint|serial|bigserial|"
+    r"real|double\s+precision|"
+    r"numeric(?:\s*\(\s*\d+\s*(?:,\s*\d+\s*)?\))?|"
+    r"decimal(?:\s*\(\s*\d+\s*(?:,\s*\d+\s*)?\))?|"
+    r"varchar(?:\s*\(\s*\d+\s*\))?|character\s+varying(?:\s*\(\s*\d+\s*\))?|"
+    r"char(?:\s*\(\s*\d+\s*\))?|"
+    r"timestamptz|timestamp(?:\s+with\s+time\s+zone)?|date|time|"
+    r"jsonb|json|bytea"
+    r")\Z"
+)
+_SAFE_DEFAULTS = {"now()", "current_timestamp", "false", "true", "0"}
+_MAX_RECONCILE_STMTS = int(os.getenv("APP_SCHEMA_RECONCILE_MAX", "500"))
+_MAX_RECONCILE_TABLES = int(os.getenv("APP_SCHEMA_RECONCILE_TABLES", "200"))
+# Bound DDL on the project DB so a lock we can't acquire fails FAST instead of
+# hanging the deploy worker forever: ALTER COLUMN TYPE / DROP SCHEMA need ACCESS
+# EXCLUSIVE, and an idle-in-transaction holder would otherwise block indefinitely
+# (the blocking conn.execute can't poll cooperative cancellation). A timeout is
+# raised as OperationalError and absorbed by the existing per-statement/connect
+# try/except → never sinks a /health-green deploy. Postgres-only (these engines
+# are only ever built for non-sqlite project URLs).
+_PG_DDL_CONNECT_ARGS = {"options": "-c lock_timeout=15s -c statement_timeout=60s"}
+
+
+def _widen_target(live_dtype: str, live_len: Optional[int], ctype: str) -> Optional[str]:
+    """The WIDEN target SQL type for an EXISTING column, or ``None`` for no-op.
+
+    WIDEN-ONLY and minimal: only ever touches a BOUNDED ``character varying``
+    column (``live_len is not None``) that is strictly narrower than the contract
+    target. An already-unbounded varchar, a ``text`` column, or any non-text column
+    is left untouched — this never narrows, never retypes across families, and
+    never rewrites a column that is already wide enough.
+    """
+    if live_dtype != "character varying" or live_len is None:
+        return None
+    kind, n = _contract_text_target(ctype)
+    if kind == "text":
+        return "TEXT"  # bounded varchar → unbounded text (kills 22001)
+    if kind == "varchar" and n and live_len < n:
+        return f"VARCHAR({n})"  # widen to the larger bound only
+    return None
+
+
+def _contract_text_target(type_str: str) -> tuple[Optional[str], Optional[int]]:
+    """Classify a contract column SQL type for the WIDEN decision.
+
+    Returns ``("text", None)`` for an unbounded text target, ``("varchar", n)``
+    for a bounded varchar, or ``(None, None)`` for a non-textual type (no widen).
+    """
+    t = (type_str or "").strip().upper()
+    m = re.match(r"(?:VARCHAR|CHARACTER VARYING)\s*\(\s*(\d+)\s*\)\Z", t)
+    if m:
+        return ("varchar", int(m.group(1)))
+    if t in ("TEXT", "CITEXT", "VARCHAR", "CHARACTER VARYING"):
+        return ("text", None)
+    return (None, None)
+
+
+def reconcile_schema(database_url: Optional[str], db_schema: dict) -> tuple[bool, str]:
+    """Align the LIVE per-project DB to the contract's authoritative ``db_schema``.
+
+    The backend ORM is the sole schema author (deploy no longer pre-applies
+    init.sql), but the ORM's column WIDTHS are still LLM-chosen — a narrow
+    ``VARCHAR(n)`` on a business string column 22001s on the first long write, and
+    a contract column the ORM forgot 500s on read. Deterministically, by reading
+    ``information_schema`` (language-agnostic ground truth), this:
+
+      * **ADDs** any contract column missing from an existing table (nullable, so
+        it is safe on a populated table; a ``now()``-style default is honored), and
+      * **WIDENs** a too-narrow textual column to the contract type (``TEXT`` /
+        a larger ``VARCHAR(n)``).
+
+    ADD/WIDEN only — it NEVER narrows, drops, or retypes across families, and only
+    touches tables the backend already created. Postgres-only (sqlite enforces no
+    varchar length and has limited ALTER); sqlite/none → no-op. Best-effort:
+    per-statement errors are tolerated and surfaced in the log, so it can never
+    sink a ``/health``-green deploy.
+    """
+    if not database_url or database_url.startswith("sqlite"):
+        return True, "no reconcile (sqlite-local or none)"
+    tables = (db_schema or {}).get("tables") if isinstance(db_schema, dict) else None
+    if not isinstance(tables, list) or not tables:
+        return True, "no reconcile (empty db_schema)"
+
+    added, widened, skipped, errors = 0, 0, 0, []
+    stmts = 0
+    try:
+        engine = create_engine(
+            database_url, isolation_level="AUTOCOMMIT", connect_args=_PG_DDL_CONNECT_ARGS
+        )
+        with engine.connect() as conn:
+            live_tables = {
+                r[0]
+                for r in conn.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"
+                    )
+                )
+            }
+            for tbl in tables[:_MAX_RECONCILE_TABLES]:
+                if stmts >= _MAX_RECONCILE_STMTS:
+                    break
+                if not isinstance(tbl, dict):
+                    continue
+                tname = str(tbl.get("name") or "")
+                if not _IDENT_RE.match(tname):
+                    skipped += 1
+                    continue
+                if tname not in live_tables:
+                    # The backend owns table creation; a missing whole table is a
+                    # generation gap, not ours to CREATE (that would re-introduce
+                    # the dual-source drift this reconcile exists to prevent).
+                    skipped += 1
+                    continue
+                live_cols = {
+                    r[0]: (r[1], r[2])  # name -> (data_type, character_maximum_length)
+                    for r in conn.execute(
+                        text(
+                            "SELECT column_name, data_type, character_maximum_length "
+                            "FROM information_schema.columns "
+                            "WHERE table_schema = 'public' AND table_name = :t"
+                        ),
+                        {"t": tname},
+                    )
+                }
+                for col in (tbl.get("columns") or []):
+                    if stmts >= _MAX_RECONCILE_STMTS:
+                        break
+                    if not isinstance(col, dict):
+                        continue
+                    cname = str(col.get("name") or "")
+                    ctype = str(col.get("type") or "").strip()
+                    # Identifier + EXPLICIT type allow-list (reject any DDL fragment
+                    # carrying DEFAULT/CHECK/REFERENCES/GENERATED/COLLATE/NOT NULL).
+                    if not _IDENT_RE.match(cname) or not _ALLOWED_TYPE_RE.match(ctype):
+                        skipped += 1
+                        continue
+                    if cname not in live_cols:
+                        # ADD missing column — nullable (safe on a populated table).
+                        # Add WITHOUT a default first (catalog-only, no table rewrite),
+                        # then SET DEFAULT separately for a recognized literal default
+                        # (a volatile DEFAULT now() inline would rewrite the whole table
+                        # under ACCESS EXCLUSIVE).
+                        default = str(col.get("default") or "").strip().lower()
+                        try:
+                            conn.execute(
+                                text(f'ALTER TABLE "{tname}" ADD COLUMN IF NOT EXISTS "{cname}" {ctype}')
+                            )
+                            added += 1
+                            stmts += 1
+                            if default in _SAFE_DEFAULTS and stmts < _MAX_RECONCILE_STMTS:
+                                conn.execute(
+                                    text(f'ALTER TABLE "{tname}" ALTER COLUMN "{cname}" SET DEFAULT {default}')
+                                )
+                                stmts += 1
+                        except Exception as se:  # noqa: BLE001 — tolerate per-statement
+                            errors.append(f"add {tname}.{cname}: {str(se)[:120]}")
+                            stmts += 1
+                        continue
+                    # Column exists → WIDEN it only if it is a too-narrow bounded
+                    # varchar (decision is in the pure, unit-tested _widen_target).
+                    live_dtype, live_len = live_cols[cname]
+                    target = _widen_target(live_dtype, live_len, ctype)
+                    if target:
+                        try:
+                            conn.execute(
+                                text(f'ALTER TABLE "{tname}" ALTER COLUMN "{cname}" TYPE {target}')
+                            )
+                            widened += 1
+                        except Exception as se:  # noqa: BLE001 — tolerate per-statement
+                            errors.append(f"widen {tname}.{cname}: {str(se)[:120]}")
+                        stmts += 1
+        engine.dispose()
+    except Exception as error:  # noqa: BLE001 — connect failure surfaced, never raised
+        return False, f"connect failed: {error}"
+    log = f"added {added} column(s), widened {widened}, skipped {skipped}"
+    if errors:
+        log += f"; {len(errors)} error(s): {errors[:3]}"
+    return True, log
 
 
 def teardown_namespace(db_name: Optional[str]) -> bool:

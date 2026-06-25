@@ -82,6 +82,15 @@ function getErrorMessage(error: unknown, fallback: string) {
   )
 }
 
+// Monotonically bumped every time the "current project" target changes — a new
+// session, a session switch, or a stage-version restore. An async project fetch
+// captures this before its await and drops its write-back if the target has since
+// moved on. Without it a slow getProject for a session the user already left would
+// clobber the fresh state: e.g. it would repopulate a just-cleared "new session",
+// which then silently routes the next generation into the OLD project instead of
+// creating a new one. Mirrors agentStore's activeRunId guard.
+let projectLoadSeq = 0
+
 export const useCodeStore = create<CodeState>()((set, get) => ({
   project: null,
   projects: [],
@@ -104,9 +113,13 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
   },
 
   createProject: async (requirement) => {
+    const seq = (projectLoadSeq += 1)
     set({ isLoading: true, activeAction: "create", error: null })
     try {
       const project = await codeApi.createProject(requirement)
+      // Superseded by a newer target (new session / switch) while in flight — drop
+      // the write-back so we don't resurrect an abandoned project as the current one.
+      if (seq !== projectLoadSeq) return
       set((state) => ({
         project,
         selectedStyleIds: project.selected_style_ids,
@@ -117,6 +130,7 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
           : [project, ...state.projects],
       }))
     } catch (error) {
+      if (seq !== projectLoadSeq) return
       set({
         error: getErrorMessage(error, t("errors:code.createProjectFailed")),
         isLoading: false,
@@ -126,9 +140,14 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
   },
 
   loadProject: async (projectId) => {
+    const seq = (projectLoadSeq += 1)
     set({ isLoading: true, error: null })
     try {
       const project = await codeApi.getProject(projectId)
+      // Superseded by a newer target (new session / switch) while in flight — drop
+      // the write-back. Otherwise a slow fetch for the session the user just left
+      // overwrites the fresh state and the next run edits the wrong project.
+      if (seq !== projectLoadSeq) return
       set((state) => ({
         project,
         selectedStyleIds: project.selected_style_ids,
@@ -138,6 +157,7 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
           : [project, ...state.projects],
       }))
     } catch (error) {
+      if (seq !== projectLoadSeq) return
       set({
         error: getErrorMessage(error, t("errors:code.createProjectFailed")),
         isLoading: false,
@@ -165,8 +185,20 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
     }
   },
 
-  setCurrentProject: (project) =>
-    set({ project, selectedStyleIds: project?.selected_style_ids ?? [] }),
+  // Switch (or clear, for a new session) the current project. Bumps the load
+  // sequence so any project fetch still in flight drops its result instead of
+  // clobbering this, and clears the transient loading/error gate so the target
+  // session starts clean.
+  setCurrentProject: (project) => {
+    projectLoadSeq += 1
+    set({
+      project,
+      selectedStyleIds: project?.selected_style_ids ?? [],
+      isLoading: false,
+      activeAction: null,
+      error: null,
+    })
+  },
 
   updateProject: async (data) => {
     const project = get().project

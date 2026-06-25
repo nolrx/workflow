@@ -192,6 +192,8 @@ def _fallback_contract(project: CodeProject) -> dict:
         },
         # No model → can't infer realtime needs; default to no WebSocket channel.
         "realtime": {"enabled": False, "transport": "websocket", "auth": "query_token", "channels": []},
+        # No model → no machine-readable schema; the deploy reconcile no-ops on empty.
+        "db_schema": {"tables": []},
         "_degraded": True,
     }
 
@@ -241,6 +243,10 @@ def synthesize_contract(project: CodeProject) -> dict:
     parsed.setdefault(
         "realtime", {"enabled": False, "transport": "websocket", "auth": "query_token", "channels": []}
     )
+    # Machine-readable authoritative DB schema (tables → columns → SQL type). The
+    # deploy-time reconcile reads this to ADD missing columns / WIDEN narrow string
+    # columns on the live DB; an absent/empty db_schema simply means "no reconcile".
+    parsed.setdefault("db_schema", {"tables": []})
     return parsed
 
 
@@ -270,19 +276,28 @@ def _seed_shared_ledger(project: CodeProject) -> dict:
 # crashes a self-migrating backend on boot (init.sql creates `roles(id SERIAL)`
 # with no created_at; the ORM expects uuid + timestamps; create_all skips the
 # existing table; the first query hits a missing column → startup dies → health
-# check fails → rollback). Pinning id strategy + timestamps + verbatim names
-# removes the drift at the source.
+# check fails → rollback). Pinning id strategy + timestamps + verbatim names +
+# the TEXT default for non-PK string columns removes the drift at the source.
+#
+# Authority order (deploy time): the backend ORM's self-migration is the SINGLE
+# schema author — deploy no longer pre-applies init.sql by default (that raced the
+# ORM and固化d narrow/缺列 drift). init.sql is only a RECOVERY fallback applied if
+# the backend can't build its own schema on an empty DB. They still must stay
+# column-for-column consistent, since in the fallback case both touch one DB.
 _SCHEMA_CONVENTION = """## 数据库 Schema 一致性公约(后端 ORM 与中间件 init.sql 必须共同遵守 — 数据层唯一真相源)
-后端工程的 ORM 模型与中间件的 init.sql **会在部署时作用于同一个数据库**:init.sql 先建表,后端启动再自迁移(create_all / AutoMigrate / Hibernate ddl 等)。两者一旦对**同名表**的结构有分歧,后端会因列缺失/类型不符在启动时崩溃 → 健康检查失败 → 整次部署回滚。因此双方对每张表必须产出**完全一致**的结构,严格遵守:
+部署时**后端 ORM 的启动自迁移(create_all / AutoMigrate / Hibernate ddl 等)是建表的唯一权威**;中间件 init.sql 仅作「后端无法在空库自迁移」时的部署期兜底(默认不预先应用)。但二者一旦都作用于同一个库,结构必须**逐表逐列完全一致**,否则后端会因列缺失/类型不符在启动或运行时崩溃 → 健康检查失败 / 接口 500 → 整次部署回滚或功能不可用。严格遵守:
 - **主键统一用字符串/UUID**:SQL 用 `VARCHAR(36)`(或 `TEXT`)主键 + 应用层生成 uuid;ORM 用字符串类型 id。**禁止** `SERIAL`/`BIGSERIAL`/`AUTO_INCREMENT`/自增整数主键。
 - **外键类型与被引用主键一致**(同为字符串/UUID),不得一边整数一边 uuid。
 - **每张表都带时间戳**:`created_at`、`updated_at`,类型 `TIMESTAMPTZ NOT NULL DEFAULT now()`(ORM 侧对应 created_at/updated_at 字段,所有表一致)。
-- **表名/列名/类型逐字一致**:以本契约数据模型(`components.schemas`)与「数据设计」为准,两侧不得各自改名(如 url ↔ source_url)、改类型(如 VARCHAR ↔ Integer)或增减列。
+- **非主键字符串列一律用 `TEXT`(无长度上限)**:`title`/`name`/`url`/`description`/`content`/`备注`/正文/JSON 串等一切业务文本列,**禁止**下发偏小的 `VARCHAR(n)`(如 `VARCHAR(20/50/255)`)——运行期一旦写入超过该长度的值,Postgres 会抛 `22001 value too long` 让接口 500、功能不可用(这是「字段内容过长」类故障的根因)。ORM 侧对应用 `Text`/`String`(不带长度)/`@Column(columnDefinition="TEXT")` 等无界文本类型。**仅当**某列确有明确固定上限的短编码/状态枚举(如国家码、订单号前缀)且你确知上限时,才可用 `VARCHAR(n)` 且 `n` 取足够大(≥255)、两侧同长度。
+- **表名/列名/类型逐字一致、不得缺列**:以本契约的 `db_schema` 与 `components.schemas` 数据模型为准,两侧不得各自改名(如 url ↔ source_url)、改类型(如 VARCHAR ↔ Integer)或增减列;契约 `db_schema`/数据模型里出现的**每一个字段都必须在对应表里建出对应列**(漏列会导致部署后查询报「字段不存在」、功能不可用)。
 - init.sql 用 `CREATE TABLE IF NOT EXISTS`、种子数据用 `ON CONFLICT DO NOTHING`,以容忍「后端已自建表」并保持幂等。
-- 契约未明确某字段类型时,按本公约取默认(字符串主键 + 上述时间戳);双方一致即可。"""
+- 契约 `db_schema` 未明确某字段类型时,按本公约取默认(字符串主键 + 非主键字符串列 `TEXT` + 上述时间戳);双方一致即可。"""
 
 
-def render_contract_for_prompt(contract: dict, *, max_chars: int = 9000) -> str:
+def render_contract_for_prompt(
+    contract: dict, *, max_chars: int = 9000, include_db_schema: bool = True
+) -> str:
     """Render a compact contract block injected into the BE / FE build prompts.
 
     Both services must implement / consume the SAME endpoints, so this is the
@@ -290,6 +305,11 @@ def render_contract_for_prompt(contract: dict, *, max_chars: int = 9000) -> str:
     to the api_summary markdown. Always appends the binding schema convention
     (``_SCHEMA_CONVENTION``) AFTER the cap so the BE/MW generators can't drift on
     id type / timestamps / column names — it is never truncated away.
+
+    ``include_db_schema`` renders the authoritative table/column layout (consumed
+    by the BE ORM + MW init.sql + the deploy reconcile). The FRONTEND build doesn't
+    touch the DB, so it passes ``False`` — otherwise the db_schema block is dead
+    weight that crowds the FE's real concern (the API surface) out of the cap.
     """
     if not contract:
         return ""
@@ -318,6 +338,48 @@ def render_contract_for_prompt(contract: dict, *, max_chars: int = 9000) -> str:
             lines.append("#### realtime(JSON,权威):" + json.dumps(realtime, ensure_ascii=False))
         except (TypeError, ValueError):
             pass
+    # Authoritative DB schema (machine-readable): the table/column layout BOTH the
+    # backend ORM and the middleware init.sql must reproduce column-for-column. Placed
+    # HIGH (before the potentially-large OpenAPI blob) so neither this render's cap nor
+    # a downstream re-cap truncates it — it is the source of truth for the deploy-time
+    # schema reconcile. Non-PK string columns are TEXT here (no narrow VARCHAR).
+    db_schema = contract.get("db_schema") or {}
+    tables = db_schema.get("tables") if isinstance(db_schema, dict) else None
+    if include_db_schema and isinstance(tables, list) and tables:
+        lines.append(
+            "### 数据库 Schema(权威 — 后端 ORM 与 init.sql 必须逐表逐列一致;"
+            "非主键字符串列一律 TEXT,禁用偏小 VARCHAR;部署期会据此校准实库)"
+        )
+        for tbl in tables[:40]:
+            if not isinstance(tbl, dict):
+                continue
+            col_strs: list[str] = []
+            for col in (tbl.get("columns") or [])[:60]:
+                if not isinstance(col, dict):
+                    continue
+                seg = f"{col.get('name', '')} {col.get('type', '')}".strip()
+                flags = []
+                if col.get("pk"):
+                    flags.append("PK")
+                if col.get("unique"):
+                    flags.append("UNIQUE")
+                if col.get("nullable") is False:
+                    flags.append("NOT NULL")
+                if flags:
+                    seg += " " + " ".join(flags)
+                col_strs.append(seg)
+            lines.append(f"- 表 {tbl.get('name', '')}:" + "; ".join(col_strs))
+        try:
+            # Compact JSON dump too (bounded so it can't crowd the endpoint list /
+            # OpenAPI blob out of the cap); the human-readable lines above are the
+            # primary signal and are already compact.
+            lines.append(
+                "#### db_schema(JSON,权威 — 表/列/类型以此为准):"
+                + json.dumps(db_schema, ensure_ascii=False)[:2000]
+            )
+        except (TypeError, ValueError):
+            pass
+
     openapi = contract.get("openapi") or {}
     paths = openapi.get("paths") if isinstance(openapi, dict) else None
     if isinstance(paths, dict) and paths:
@@ -388,6 +450,9 @@ def ensure_contract(
                 # prompts read this from the contract, so it must be persisted.
                 "realtime": contract.get("realtime")
                 or {"enabled": False, "transport": "websocket", "auth": "query_token", "channels": []},
+                # Authoritative DB schema — the deploy-time schema reconcile reads this
+                # to align the live DB (ADD missing columns / WIDEN narrow string cols).
+                "db_schema": contract.get("db_schema") or {"tables": []},
             }
         )
         row.set_middleware_manifest(contract.get("middleware") or {})

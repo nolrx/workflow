@@ -155,6 +155,21 @@
     "channels": [
       { "path": "/<ws路径,根相对,如 /signal>", "summary": "<通道用途>", "direction": "duplex | server_push", "message_schema": { "type": "string", "data": "object|null", "ts": "string(date-time)" }, "events": ["<server→client 事件名>", "<client→server 事件名>"] }
     ]
+  },
+  "db_schema": {
+    "tables": [
+      {
+        "name": "users",
+        "entity": "User",
+        "columns": [
+          { "name": "id", "type": "VARCHAR(36)", "pk": true, "nullable": false },
+          { "name": "email", "type": "TEXT", "nullable": false, "unique": true },
+          { "name": "display_name", "type": "TEXT", "nullable": true },
+          { "name": "created_at", "type": "TIMESTAMPTZ", "nullable": false, "default": "now()" },
+          { "name": "updated_at", "type": "TIMESTAMPTZ", "nullable": false, "default": "now()" }
+        ]
+      }
+    ]
   }
 }
 
@@ -168,6 +183,7 @@
 - **`realtime` 默认关闭**:无实时语义时固定 `{ "enabled": false, "transport": "websocket", "auth": "query_token", "channels": [] }`(`channels` 为空);仅当需求含实时 / 推送 / 聊天 / 协同 / 通知等语义时置 `enabled: true` 并派生真实通道。`channels[].path` 为**根相对的 WebSocket 路径**(无 `/api` 前缀,按业务命名,如 `/signal`、`/ws/chat`,与 HTTP 端点同一根命名空间),`auth` 固定 `query_token`(WS 经 `/app/<项目>/api/<path>` + `Upgrade` 头连接,用 `?token=<JWT>` 携带与登录同一个 token),消息 `message_schema` 用统一帧 `{ type, data, ts }`。WS 通道**不写进 `openapi.paths`**(OpenAPI 3.0 不描述 WS),只在 `realtime` 段声明。
 - `tech_stack.language` / `framework` 必须沿用开发流程「技术假设」,不得另选。
 - **数据模型一致性公约(供下游后端 ORM 与中间件 init.sql 共同遵守)**:`components.schemas` 里每个实体的 `id` 用字符串(`type: string`,不要用整数/自增),并都含 `created_at` / `updated_at`(`type: string, format: date-time`);字段命名稳定唯一。下游会据此分别生成 ORM 与 init.sql 并作用于同一个库,务必保证可对齐(主键字符串、统一时间戳、表/列名一致)。
+- **`db_schema` 机器可读权威 schema(硬性 — 数据层唯一真值源,部署期据此校准实库)**:必须为 `components.schemas` 里**每个会持久化的实体**在 `db_schema.tables` 产出一张表,逐列列出**该实体的所有字段**(`name` + SQL `type` + `pk`/`nullable`/`unique`),后端 ORM 与中间件 init.sql 都据此生成、逐列一致。硬规则:① **主键 `VARCHAR(36)`**、`created_at`/`updated_at` 用 `TIMESTAMPTZ DEFAULT now()`、外键类型与被引主键一致;② **非主键字符串列一律 `TEXT`(无长度上限)**——`title`/`name`/`url`/`description`/`content`/正文/JSON 串等业务文本列**禁止**下发偏小的 `VARCHAR(n)`(如 `VARCHAR(20/50/255)`),否则运行期超长写入会触发 `22001 value too long` 导致接口 500、功能不可用;仅确有固定上限的短编码/枚举才用足够大的 `VARCHAR(n)`(≥255);③ **不得缺列**——`components.schemas` 里出现的每个字段都要在对应表里建出对应列,漏列会导致部署后查询「字段不存在」、功能不可用;④ 表/列名与数据模型逐字一致,不得各自改名改型。
 
 # 交付前自检(全部满足才能输出)
 
@@ -179,3 +195,4 @@
 - [ ] **接口规范统一**:所有端点成功响应包在统一信封 `{success,data,message}`、失败用 `ApiError`,无裸顶层数组;列表用 `{items,total,page,page_size}` 分页;`components.schemas` 含 `ApiError`;字段遵守 id 字符串 / 时间 ISO-8601 / snake_case key;每个端点完整声明请求与各状态码响应。
 - [ ] 涉及登录/账号时:已含 `POST /auth/login` 与 `GET /auth/me`,登录响应 `data` 含固定 `token` 字段(`data.token`),`securitySchemes.bearerAuth` 已声明,受保护端点均挂 `security: bearerAuth` 且声明 `401`(`ApiError`,token 走 `Authorization: Bearer`)。
 - [ ] `realtime` 段存在:无实时语义时 `enabled:false`、`channels:[]`;有实时语义时 `enabled:true` 且每个通道 `path` 为根相对 WebSocket 路径(无 `/api` 前缀)、`auth` 为 `query_token`(WS 用 `?token=<JWT>` 鉴权)、`message_schema` 为统一帧 `{type,data,ts}`;WS 通道未混入 `openapi.paths`。
+- [ ] `db_schema.tables` 已为**每个会持久化的实体**产出一张表,且**逐列覆盖该实体所有字段**(无缺列);主键 `VARCHAR(36)`、时间戳 `TIMESTAMPTZ`、**非主键字符串列一律 `TEXT`(无偏小 VARCHAR)**、外键类型与被引主键一致、表/列名与 `components.schemas` 逐字一致。

@@ -42,7 +42,8 @@
 }
 
 硬性约束:
-- **严格遵守上方注入的「数据库 Schema 一致性公约」**:init.sql 与后端 ORM 部署时作用于同一个库,结构必须逐字一致——主键统一用 `VARCHAR(36)`/`TEXT`(禁止 SERIAL/BIGSERIAL/自增整数主键),外键类型与之一致,每张表都带 `created_at`/`updated_at`(`TIMESTAMPTZ NOT NULL DEFAULT now()`),表名/列名/类型以契约数据模型为准不得各自改名改型。否则后端启动自迁移会与预置表冲突、健康检查失败、整次部署回滚。
+- **严格遵守上方注入的「数据库 Schema 一致性公约」与契约 `db_schema`**:init.sql 与后端 ORM 部署时作用于同一个库,结构必须逐表逐列一致——以契约 `db_schema`(权威表/列/类型)为准建表;主键统一用 `VARCHAR(36)`/`TEXT`(禁止 SERIAL/BIGSERIAL/自增整数主键),外键类型与之一致,每张表都带 `created_at`/`updated_at`(`TIMESTAMPTZ NOT NULL DEFAULT now()`),表名/列名/类型不得各自改名改型,且**契约 `db_schema`/数据模型里每个字段都要建出对应列、不得缺列**。否则后端运行时会因缺列/类型不符报错、功能不可用。
+- **非主键字符串列一律用 `TEXT`(无长度上限)**:`title`/`name`/`url`/`description`/`content`/正文/JSON 串等业务文本列**禁止**用偏小的 `VARCHAR(n)`(如 `VARCHAR(20/50/255)`)——运行期超长写入会触发 `22001 value too long` 导致接口 500、功能不可用;仅确有固定上限的短编码/枚举才用足够大的 `VARCHAR(n)`(≥255)。
 - `init_sql` 用标准、Postgres 兼容 SQL;表用 `CREATE TABLE IF NOT EXISTS`;字段类型、主键、外键、索引、非空/唯一约束齐备。
 - `entities` 与 `init_sql` 自洽;每个实体都能回溯到「数据设计」或契约数据模型。
 - `seed_sql` 只放与鉴权无关的参考/字典类数据,**不得创建登录/鉴权账号**(首屏可见的 demo 账号与其归属业务数据,由后端启动时幂等 self-seed 负责);不需要时填空字符串 `""`。

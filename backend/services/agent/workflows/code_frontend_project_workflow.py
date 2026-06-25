@@ -309,7 +309,7 @@ def run_code_frontend_project_workflow(ctx, recorder) -> dict:
         contract_block = ""
         if _ledger_row and _ledger_row.contract_status == "ready":
             contract_block = contract_service.render_contract_for_prompt(
-                _ledger_row.get_api_contract()
+                _ledger_row.get_api_contract(), include_db_schema=False
             )
             recorder.emit(
                 AgentEventType.PROGRESS, step_id=step.id,

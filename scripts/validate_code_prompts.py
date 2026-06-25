@@ -160,6 +160,12 @@ MANIFEST: dict[str, dict] = {
             # query auth) are pinned here so a future trim can't drop the WebSocket
             # channel description (front/back would then have no agreed protocol).
             "realtime", "query_token", "WebSocket",
+            # DB-schema single-source-of-truth: the machine-readable `db_schema` block
+            # + the "non-PK string columns are TEXT (no narrow VARCHAR → 22001)" rule
+            # are pinned here so a trim can't regress to length-less {type:string}
+            # OpenAPI fields (the cause of "字段内容过长"/"架构缺字段" the deploy reconcile
+            # then has to fix at runtime).
+            '"db_schema"', "TEXT", "VARCHAR", "22001",
         ],
     },
     "backend_project_prompt.txt": {
@@ -195,6 +201,11 @@ MANIFEST: dict[str, dict] = {
             # (channel on the same /api base + PORT, ?token= query auth) so a trim
             # can't drop it and leave a contract's realtime channels unimplemented.
             "realtime", "WebSocket",
+            # Data layer: the backend ORM is now the SOLE schema author (init.sql
+            # isn't pre-applied). Guard the non-PK-string-column→TEXT rule + the
+            # contract db_schema as the authority so a trim can't regress to narrow
+            # VARCHAR columns (22001 "字段内容过长") or to a missing-column ORM.
+            "db_schema", "TEXT", "22001",
         ],
     },
     "backend_project_reinforce_prompt.txt": {
@@ -276,6 +287,10 @@ MANIFEST: dict[str, dict] = {
             # the loginnable demo account + first-screen data is the backend's
             # boot-time self-seed job (avoids the hash-mismatch double-write trap).
             "首屏", "自播种",
+            # Schema consistency: init.sql (fallback) must follow the contract
+            # db_schema and the non-PK-string→TEXT rule, so on the fallback path it
+            # stays column-for-column consistent with the ORM (no narrow VARCHAR).
+            "db_schema", "TEXT", "22001",
         ],
     },
 }
@@ -385,6 +400,16 @@ _WS_PROMPTS = [
     "backend_project_reinforce_prompt.txt",
 ]
 
+# Prompts that author the DB schema (contract emits db_schema; backend ORM + the
+# middleware init.sql build it). All must pin the field-length invariant — non-PK
+# string columns are unbounded TEXT, never a narrow VARCHAR — so a single-file edit
+# can't reintroduce a VARCHAR(50) that 22001s ("字段内容过长") on the first long write.
+_SCHEMA_LEN_PROMPTS = [
+    "contract_synthesis_prompt.txt",
+    "backend_project_prompt.txt",
+    "middleware_prompt.txt",
+]
+
 
 def cross_prompt_checks(texts: dict[str, str]) -> list[str]:
     """Assert cross-file semantic invariants. ``texts`` maps filename -> content.
@@ -418,6 +443,15 @@ def cross_prompt_checks(texts: dict[str, str]) -> list[str]:
     for name in _WS_PROMPTS:
         if "?token=" not in texts.get(name, ""):
             errs.append(f"{name}: realtime prompt must pin WebSocket auth at the `?token=` query param (not found)")
+
+    # 5) Field-length invariant is uniform across the schema-authoring prompts:
+    #    non-PK string columns are TEXT (no narrow VARCHAR), guarded by the 22001
+    #    failure-mode anchor. A single-file trim can't drop it on one side only.
+    for name in _SCHEMA_LEN_PROMPTS:
+        text = texts.get(name, "")
+        if "TEXT" not in text or "22001" not in text:
+            errs.append(f"{name}: schema prompt must pin the non-PK-string→TEXT rule "
+                        f"(TEXT + the 22001 over-length failure-mode anchor not both found)")
 
     return errs
 

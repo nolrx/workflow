@@ -19,6 +19,7 @@ entry, mirroring the existing static preview.
 """
 
 import logging
+import re
 import threading
 
 import requests
@@ -349,6 +350,55 @@ def get_contract(project_id: str):
     if not ledger:
         return error_response("NOT_FOUND", "尚未合成共享 API 契约", 404)
     return success_response({"contract": ledger.to_dict()})
+
+
+# --- WebSocket auth subrequest (for the nginx ws proxy) ----------------------
+# Matches the original request line nginx forwards as X-Original-URI, e.g.
+# "/app/<pid>/api/signal?token=...". Only the pid is needed; the rest is opaque
+# (ws shares the /app/<pid>/api/ base with HTTP — routed by the Upgrade header).
+_WS_URI_RE = re.compile(r"^/app/(?P<pid>[^/]+)/api(?:/|\?|$)")
+
+
+@fullstack_bp.route("/app-ws/authz", methods=["GET"])
+def app_ws_authz():
+    """Internal auth subrequest backing the nginx ``/app/<pid>/ws/`` proxy.
+
+    nginx forwards the original request line in ``X-Original-URI`` and the
+    ``fs_app_token`` cookie. We re-run the SAME owner(cookie)/public access check
+    as ``proxy_to_backend`` and, on success, return the live container target in
+    an ``X-App-Upstream`` header (``container:port``) for nginx to ``proxy_pass``
+    to, with ``204``. Any failure returns ``403`` so the ws handshake is cleanly
+    denied (auth_request only forwards 401/403 verbatim).
+
+    The app's own ``?token=`` query is intentionally ignored here: it is the
+    GENERATED app's JWT (signed with the app's key, meaningless to the platform)
+    and the generated backend authenticates the socket with it itself. Platform
+    identity rides the ``fs_app_token`` cookie only — so we must NOT reuse
+    ``_proxy_identity``'s ``args.token or cookie`` short-circuit, which an app
+    token in the query would hijack into never reaching the cookie.
+    """
+    match = _WS_URI_RE.match(request.headers.get("X-Original-URI", ""))
+    if not match:
+        return Response(status=403)
+    project_id = match.group("pid")
+    project = CodeProject.query.filter_by(id=project_id).first()
+    if not project:
+        return Response(status=403)
+
+    identity = preview_identity(request.cookies.get(APP_TOKEN_COOKIE, ""), f"project:{project_id}")
+    is_owner = bool(identity) and identity == project.user_id
+    is_public = project.visibility == "public"
+    if not (is_owner or is_public):
+        return Response(status=403)
+
+    target = deploy_service.resolve_proxy_target(project_id, project.user_id)
+    if not target:
+        return Response(status=403)
+    container, port = target
+
+    resp = Response(status=204)
+    resp.headers["X-App-Upstream"] = f"{container}:{port}"
+    return resp
 
 
 # --- Reverse proxy: served frontend -> live backend container ----------------

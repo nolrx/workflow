@@ -71,6 +71,11 @@
      3. **前端如何验证通过(登录态判据)**:以「本地是否存在有效 token」为登录态——未登录时用路由守卫把受保护页面挡在登录页之外;应用启动时可调 `GET ${base}/auth/me` 校验本地 token 是否仍有效,无效则清除并回登录页。
      4. **401 兜底**:任意请求返回 `401` 时,统一清除本地 `auth_token` 并跳转登录页(token 过期/失效的兜底);并提供登出(清 token 回登录页)。
      5. 登录页可预填 demo 凭据(`demo@example.com` / `Demo1234!`,passwordless 则提示固定开发验证码 `000000`)方便体验。
+   - **实时通道(全栈模式且契约 `realtime.enabled=true` 时必做 — 与契约 `realtime` 逐字一致)**:实现真实的 **WebSocket** 连接,**通道路径 / 鉴权方式必须与契约 `realtime` 逐字一致**;契约 `enabled=false`(或无 `realtime` 段)时**不要引入任何 WS**。
+     1. **ws 基址解析**:按 `window.__WS_BASE__`(部署时由平台注入,**与 HTTP 同一个 api 基址**,如 `/app/<项目>/api`)→ 回退 `window.__API_BASE__` → 默认 `'/api'`。再解析成绝对 ws URL:相对路径用 `window.location` 补全 host,并按页面协议把 `https→wss`、`http→ws`(如 `${location.protocol==='https:'?'wss':'ws'}://${location.host}${wsBase}`)。
+     2. **连接 + 鉴权**:连 `${wsUrl}${契约通道 path,如 /signal}?token=${auth_token}`——浏览器 WebSocket 不能设 `Authorization` 头,故把登录存下的 `auth_token`(即 `data.token`)**作为 `?token=` 查询参数**携带(与契约 `auth: "query_token"` 一致),**不要用 header / cookie 鉴权**。ws 与 HTTP 走同一个 `/api` 基址,平台靠 `Upgrade` 头把它直连到后端,**无需也不要拼 `/ws` 之类的额外前缀**。
+     3. **统一帧**:收发都按统一帧 `{ type, data, ts }`(JSON 文本)解析与构造;按 `type` 分发更新对应 UI 状态。
+     4. **健壮性**:断线指数退避重连(带次数/间隔上限);组件卸载 / 登出 / 收到 `401` 时关闭连接并停止重连;未登录 / 无网络时优雅降级,不要崩。
 
 3. **vite.config.ts 必须设置 `base: './'`(相对路径)**,以便构建产物能在子路径下的 iframe 内预览。
 
@@ -103,6 +108,7 @@
 - [ ] **结构合规**:组件在 `src/components/`、类型在 `src/types.ts`、状态用 hooks、图片在 `src/assets/`。数据持久化按模式:全栈模式经 `window.__API_BASE__` 解析基址、严格按契约调用真实后端(含 loading/error/空态),独立模式用 localStorage 并首次播种示例。
 - [ ] **接口规范一致(全栈模式)**:API 客户端在一处统一拆信封——非 2xx 或 `success===false` 当失败抛出(带 `error`/`message`),成功只取 `resp.data`;分页从 `data.items`/`data.total` 读;未假设裸数组;字段名严格按契约(snake_case/id 字符串/时间 ISO-8601)未臆改。
 - [ ] **登录鉴权一致(全栈且契约含 `/auth/login` 时)**:登录调 `${base}/auth/login`、从 `resp.data.token` 读 token 存到 `auth_token`;每个请求带 `Authorization: Bearer <token>`;有路由守卫按本地 token 验证登录态;任意 `401` 清除 token 并回登录页;字段名/请求头/`/auth/*` 路径与契约逐字一致。
+- [ ] **实时通道一致(全栈且契约 `realtime.enabled=true` 时)**:已用 `window.__WS_BASE__`(= api 基址,回退 `__API_BASE__`)解析 ws 基址并按页面协议选 `ws`/`wss`,连 `${ws基址}${契约通道path}?token=${auth_token}` 鉴权(不发 header/cookie、不拼额外 `/ws` 前缀),按统一帧 `{type,data,ts}` 收发,断线退避重连、卸载/登出时清理;契约 `enabled=false` 时无任何 WebSocket。
 - [ ] **逐 FR 可验证**:每条 FR 都有可操作的界面入口与真实行为,能演示;无死控件、无 `href="#"`、无空事件处理器、无 TODO/FIXME/占位/mock/"coming soon"。
 - [ ] **真实图片硬验收**:确已执行 `gen-assets` 生成 3~6 张 PNG 到 `src/assets/`(已用 `ls src/assets` 核对),并在组件中 import 引用;失败已写明原因且未用 emoji 充当图片。
 - [ ] **视觉保真**:状态/空态/加载态/留白/层级打磨到位,文案/人名/数据真实可信,无 Lorem ipsum 占位;emoji 未被当作图标/插画/Logo/头像/装饰。

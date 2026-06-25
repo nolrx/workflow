@@ -58,13 +58,20 @@ def _running_deployment(project_id: str, user_id: str) -> CodeDeployment | None:
 
 
 def _inject_api_base(html: str, api_base: str) -> str:
-    """Inject ``window.__API_BASE__`` so the static build talks to the live backend.
+    """Inject ``window.__API_BASE__`` / ``window.__WS_BASE__`` so the static build
+    talks to the live backend over both HTTP and WebSocket.
 
     The generated frontend reads ``window.__API_BASE__`` (falling back to
-    ``import.meta.env.VITE_API_BASE_URL`` / ``/api``) as its API root, so no
-    rebuild is needed to wire it to the deployed backend.
+    ``import.meta.env.VITE_API_BASE_URL`` / ``/api``) as its API root and
+    ``window.__WS_BASE__`` as its WebSocket root. WS shares the SAME base as HTTP
+    (``/app/<pid>/api``): nginx routes a request under that base to the container
+    directly when it carries an ``Upgrade:`` header, so the generated frontend just
+    swaps ``http(s)→ws(s)`` on the same URL — no rebuild needed.
     """
-    snippet = f'<script>window.__API_BASE__={api_base!r};</script>'
+    snippet = (
+        f'<script>window.__API_BASE__={api_base!r};'
+        f'window.__WS_BASE__={api_base!r};</script>'
+    )
     lower = html.lower()
     idx = lower.find("</head>")
     if idx != -1:

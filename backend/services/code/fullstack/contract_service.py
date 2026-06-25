@@ -190,6 +190,8 @@ def _fallback_contract(project: CodeProject) -> dict:
             "schema_sql": "",
             "notes": "(确定性回退清单:未配置文本模型,按关键词推断)",
         },
+        # No model → can't infer realtime needs; default to no WebSocket channel.
+        "realtime": {"enabled": False, "transport": "websocket", "auth": "query_token", "channels": []},
         "_degraded": True,
     }
 
@@ -236,6 +238,9 @@ def synthesize_contract(project: CodeProject) -> dict:
     parsed.setdefault("api_summary", "")
     parsed.setdefault("tech_stack", {})
     parsed.setdefault("middleware", {"datastores": [], "cache": None, "env": []})
+    parsed.setdefault(
+        "realtime", {"enabled": False, "transport": "websocket", "auth": "query_token", "channels": []}
+    )
     return parsed
 
 
@@ -292,6 +297,27 @@ def render_contract_for_prompt(contract: dict, *, max_chars: int = 9000) -> str:
     ts = contract.get("tech_stack") or {}
     if ts.get("language") or ts.get("framework"):
         lines.append(f"- 后端技术栈:{ts.get('language', '')} / {ts.get('framework', '')}")
+    # Realtime channels go HIGH in the block (before the potentially-large OpenAPI
+    # paths/blob) so neither this render's cap nor the FE's own re-cap truncates
+    # them away. Only emitted when the contract actually declares WebSocket needs;
+    # a pure request/response app's block stays exactly as before.
+    realtime = contract.get("realtime") or {}
+    if isinstance(realtime, dict) and realtime.get("enabled") and realtime.get("channels"):
+        lines.append(
+            "### 实时通道(WebSocket — 与 HTTP 共用 PORT;握手鉴权走 ?token=<JWT> 查询参数;"
+            "消息统一帧 {type,data,ts})"
+        )
+        for ch in (realtime.get("channels") or [])[:20]:
+            if not isinstance(ch, dict):
+                continue
+            lines.append(
+                f"- WS {ch.get('path', '')} — {ch.get('summary', '')} "
+                f"({ch.get('direction', '')})".rstrip(" ()")
+            )
+        try:
+            lines.append("#### realtime(JSON,权威):" + json.dumps(realtime, ensure_ascii=False))
+        except (TypeError, ValueError):
+            pass
     openapi = contract.get("openapi") or {}
     paths = openapi.get("paths") if isinstance(openapi, dict) else None
     if isinstance(paths, dict) and paths:
@@ -358,6 +384,10 @@ def ensure_contract(
                 "openapi": contract.get("openapi") or {},
                 "api_summary": contract.get("api_summary") or "",
                 "tech_stack": contract.get("tech_stack") or {},
+                # Realtime/WebSocket channels (default disabled) — the FE/BE build
+                # prompts read this from the contract, so it must be persisted.
+                "realtime": contract.get("realtime")
+                or {"enabled": False, "transport": "websocket", "auth": "query_token", "channels": []},
             }
         )
         row.set_middleware_manifest(contract.get("middleware") or {})

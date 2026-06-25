@@ -105,7 +105,11 @@ MANIFEST: dict[str, dict] = {
             "/auth/login", "Authorization: Bearer", "auth_token", "/auth/me",
             # API spec consistency: the client must uniformly unwrap the envelope
             # (take resp.data, treat success===false as error, read data.items).
-            "resp.data", "data.items", "success===false"],
+            "resp.data", "data.items", "success===false",
+            # Realtime client: when the contract declares a ws channel, the build
+            # connects via the injected window.__WS_BASE__ and authenticates with
+            # the same JWT as a ?token= query (browsers can't set a ws auth header).
+            "__WS_BASE__", "WebSocket"],
     },
     "frontend_project_repair_prompt.txt": {
         "mode": "plain",
@@ -151,6 +155,11 @@ MANIFEST: dict[str, dict] = {
             # pinned here so front/back can't drift on response shape (the cause of
             # "前端解析后端响应报错/白屏"). Guard so a trim can't drop the envelope.
             "ApiError", '"success"', '"items"', "VALIDATION_ERROR", "page_size", "snake_case",
+            # Realtime single-source-of-truth: the `realtime` field + the fixed ws
+            # convention (channel on the same /api base, routed by Upgrade; ?token=
+            # query auth) are pinned here so a future trim can't drop the WebSocket
+            # channel description (front/back would then have no agreed protocol).
+            "realtime", "query_token", "WebSocket",
         ],
     },
     "backend_project_prompt.txt": {
@@ -182,6 +191,10 @@ MANIFEST: dict[str, dict] = {
             # API spec consistency: every handler must emit the uniform envelope
             # via shared helpers (success/error) or the frontend parse drifts.
             "success_response", "ApiError", "VALIDATION_ERROR", "snake_case",
+            # Realtime: guard the conditional WebSocket implementation mandate
+            # (channel on the same /api base + PORT, ?token= query auth) so a trim
+            # can't drop it and leave a contract's realtime channels unimplemented.
+            "realtime", "WebSocket",
         ],
     },
     "backend_project_reinforce_prompt.txt": {
@@ -203,6 +216,8 @@ MANIFEST: dict[str, dict] = {
             "/auth/login", "Authorization: Bearer",
             # API spec consistency: reinforce re-checks the uniform envelope.
             "success_response", "ApiError",
+            # Realtime: reinforce re-checks/completes the contract's ws channels.
+            "WebSocket",
         ],
     },
     "backend_project_critic_prompt.txt": {
@@ -223,6 +238,9 @@ MANIFEST: dict[str, dict] = {
             # API spec consistency: acceptance must flag responses that bypass the
             # uniform envelope / drift fields (front/back parse mismatch).
             "ApiError",
+            # Realtime: acceptance must flag a contract ws channel that is missing
+            # or whose handshake auth drifted off the ?token= query param.
+            "WebSocket",
         ],
     },
     "backend_project_repair_prompt.txt": {
@@ -356,6 +374,17 @@ _AUTH_PROMPTS = [
 # PROSCRIPTIVE wording ("不得移出 data 放到响应体顶层") which must NOT match here.
 _FORBIDDEN_TOPLEVEL_TOKEN = ["顶层固定 `token`", "响应体顶层固定 `token`", "置于响应体顶层"]
 
+# Prompts that describe the realtime/WebSocket protocol — all must pin ws auth at
+# the ?token= query param (a browser ws can't send an Authorization header), so a
+# single-file edit can't drift ws auth to a header/cookie on one side only.
+_WS_PROMPTS = [
+    "contract_synthesis_prompt.txt",
+    "backend_project_prompt.txt",
+    "frontend_project_prompt.txt",
+    "backend_project_critic_prompt.txt",
+    "backend_project_reinforce_prompt.txt",
+]
+
 
 def cross_prompt_checks(texts: dict[str, str]) -> list[str]:
     """Assert cross-file semantic invariants. ``texts`` maps filename -> content.
@@ -382,6 +411,13 @@ def cross_prompt_checks(texts: dict[str, str]) -> list[str]:
     for ph in ("[[REQUIREMENTS_DOC]]", "[[DEVELOPMENT_FLOW]]"):
         if ph not in critic:
             errs.append(f"backend_project_critic_prompt.txt: must inject {ph} to verify FR/NFR/M traceability")
+
+    # 4) WebSocket auth carrier is uniformly the ?token= query param (no front/back
+    #    drift). A browser ws can't set an Authorization header, so every prompt
+    #    describing the realtime channel must pin auth at ?token=.
+    for name in _WS_PROMPTS:
+        if "?token=" not in texts.get(name, ""):
+            errs.append(f"{name}: realtime prompt must pin WebSocket auth at the `?token=` query param (not found)")
 
     return errs
 

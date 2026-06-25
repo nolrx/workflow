@@ -61,7 +61,8 @@
       "Bash(curl -s \"https://api.github.com/repos/bmad-code-org/bmad-method/tags?per_page=30\")",
       "Bash(curl -s \"https://api.github.com/repos/bmad-code-org/bmad-method/branches?per_page=50\")",
       "Bash(curl -s \"https://api.github.com/repos/bmad-code-org/bmad-method/git/trees/V4?recursive=1\" -o bmad_v4.json)",
-      "Bash(grep -E \"\\\\\\\\.py$\")"
+      "Bash(grep -E \"\\\\\\\\.py$\")",
+      "Bash(grep -E \"\\\\.txt$\")"
     ]
   }
 }

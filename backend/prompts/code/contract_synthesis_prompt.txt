@@ -20,6 +20,10 @@
    - **passwordless(手机号 / 短信 / 邮箱验证码 / OTP)登录**:固定 `POST /auth/request-code` 取码 + `POST /auth/login` 提交 `{ "phone"/"email": string, "code": string }`,响应同样在信封 `data` 内返回 `{ "token", "user" }`。
    - **token 携带方式固定为 `Authorization: Bearer <token>` 请求头**(不用 cookie / query / 自定义头)。
    - **在 `components.securitySchemes` 里固定声明 `bearerAuth`**(`type: http, scheme: bearer, bearerFormat: JWT`);**每个受保护端点都挂 `security: [{ "bearerAuth": [] }]` 并声明 `401` 响应**;公开端点(`/health`、登录/取码本身)不挂。token 缺失/失效/过期统一 `401`。
+9. **实时通道(WebSocket)按需声明(硬性 — 前后端实时协议的唯一真值源)**:**仅当**需求 / 开发流程描述了**实时 / 推送 / 通知 / 聊天 / 协同 / 在线状态 / 实时看板 / 订阅 / 直播**等需要服务器主动下推或长连接的语义时,才在契约新增 `realtime` 段声明 WebSocket 通道;纯请求-响应应用置 `realtime.enabled=false`、`channels` 为空,**不要凭空引入 WS**。一旦声明,必须遵循下列**固定 WS 协议约定**(后端据此实现、前端据此连接,逐字一致):
+   - **通道挂根路径**(按业务命名,如 `/signal`、`/ws/chat`、`/notifications`;根相对、**无 `/api` 前缀**,与 HTTP 端点同一根命名空间),与 HTTP 服务**共用同一个 `PORT`**(不另开端口)。ws 与 HTTP **走同一个 `/api` 基址**,平台反代把 `/app/<项目>/api/*` 中**带 `Upgrade` 头**的请求直连到后端对应根路径——仅靠 `Upgrade` 头区分,**不需要单独的 ws 路径前缀**。
+   - **鉴权固定走 `?token=<JWT>` 查询参数**(`auth: "query_token"`):浏览器 WebSocket 无法设置 `Authorization` 头,故握手时用查询参数携带与 `POST /auth/login` **同一个 JWT**(即 `data.token`),后端用与 Bearer **相同的密钥/算法**在握手期校验,失败拒绝连接。**不得改用自定义头 / cookie。**
+   - **统一消息信封**:每帧为 JSON 文本 `{ "type": "<事件名>", "data": <负载|null>, "ts": "<UTC ISO-8601>" }`,服务端下推与客户端发送双向一致;字段沿用 snake_case。
 
 # 输入(视为既定事实)
 
@@ -143,6 +147,14 @@
     ],
     "schema_sql": "可选:关键表的 CREATE TABLE DDL(若适合用 SQL 表达)",
     "notes": "中间件取舍的一句话说明"
+  },
+  "realtime": {
+    "enabled": false,
+    "transport": "websocket",
+    "auth": "query_token",
+    "channels": [
+      { "path": "/<ws路径,根相对,如 /signal>", "summary": "<通道用途>", "direction": "duplex | server_push", "message_schema": { "type": "string", "data": "object|null", "ts": "string(date-time)" }, "events": ["<server→client 事件名>", "<client→server 事件名>"] }
+    ]
   }
 }
 
@@ -153,6 +165,7 @@
 - **登录鉴权固定形态(产品涉及登录/账号时必含,前后端登录一致性的唯一真值源)**:`paths` 含 `POST /auth/login`(账号密码体 `{email,password}` 或 passwordless 体 `{phone/email,code}`)与 `GET /auth/me`;登录成功响应信封 `data` 固定为 `{ "token": "<JWT>", "user": {...} }`(**token 字段名固定 `token`、位于 `data.token`,不得改名/塞 cookie**);`components.securitySchemes` 固定声明 `bearerAuth`(`type:http, scheme:bearer, bearerFormat:JWT`);**每个受保护端点都挂 `security: [{ "bearerAuth": [] }]` 且声明 `401`(`ApiError`)**;token 经 `Authorization: Bearer <token>` 头携带。纯公开无账号应用才可整体省略以上鉴权。
 - `middleware.env` 至少包含 `PORT` 与 `DATABASE_URL`;用到缓存时才包含 `REDIS_URL`。
 - `cache` / `queue` 不需要时填 `null`,不要为凑数而堆叠中间件。
+- **`realtime` 默认关闭**:无实时语义时固定 `{ "enabled": false, "transport": "websocket", "auth": "query_token", "channels": [] }`(`channels` 为空);仅当需求含实时 / 推送 / 聊天 / 协同 / 通知等语义时置 `enabled: true` 并派生真实通道。`channels[].path` 为**根相对的 WebSocket 路径**(无 `/api` 前缀,按业务命名,如 `/signal`、`/ws/chat`,与 HTTP 端点同一根命名空间),`auth` 固定 `query_token`(WS 经 `/app/<项目>/api/<path>` + `Upgrade` 头连接,用 `?token=<JWT>` 携带与登录同一个 token),消息 `message_schema` 用统一帧 `{ type, data, ts }`。WS 通道**不写进 `openapi.paths`**(OpenAPI 3.0 不描述 WS),只在 `realtime` 段声明。
 - `tech_stack.language` / `framework` 必须沿用开发流程「技术假设」,不得另选。
 - **数据模型一致性公约(供下游后端 ORM 与中间件 init.sql 共同遵守)**:`components.schemas` 里每个实体的 `id` 用字符串(`type: string`,不要用整数/自增),并都含 `created_at` / `updated_at`(`type: string, format: date-time`);字段命名稳定唯一。下游会据此分别生成 ORM 与 init.sql 并作用于同一个库,务必保证可对齐(主键字符串、统一时间戳、表/列名一致)。
 
@@ -165,3 +178,4 @@
 - [ ] `middleware` 最小充分:`env` 含 PORT/DATABASE_URL,缓存/队列按需(不需要填 null)。
 - [ ] **接口规范统一**:所有端点成功响应包在统一信封 `{success,data,message}`、失败用 `ApiError`,无裸顶层数组;列表用 `{items,total,page,page_size}` 分页;`components.schemas` 含 `ApiError`;字段遵守 id 字符串 / 时间 ISO-8601 / snake_case key;每个端点完整声明请求与各状态码响应。
 - [ ] 涉及登录/账号时:已含 `POST /auth/login` 与 `GET /auth/me`,登录响应 `data` 含固定 `token` 字段(`data.token`),`securitySchemes.bearerAuth` 已声明,受保护端点均挂 `security: bearerAuth` 且声明 `401`(`ApiError`,token 走 `Authorization: Bearer`)。
+- [ ] `realtime` 段存在:无实时语义时 `enabled:false`、`channels:[]`;有实时语义时 `enabled:true` 且每个通道 `path` 为根相对 WebSocket 路径(无 `/api` 前缀)、`auth` 为 `query_token`(WS 用 `?token=<JWT>` 鉴权)、`message_schema` 为统一帧 `{type,data,ts}`;WS 通道未混入 `openapi.paths`。

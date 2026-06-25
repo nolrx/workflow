@@ -23,6 +23,18 @@
     "placeholder": "例如：我想做一个面向独立开发者的 SaaS 财务看板，可以导入 Stripe 和银行流水，自动分析收入、成本、订阅流失和现金流风险。",
     "generate": "生成需求文档"
   },
+  "newProject": {
+    "title": "新建软件项目",
+    "description": "描述你想做的产品，AI 会生成需求文档、开发流程、设计文档、风格预览，并在每一步交你确认。",
+    "titleLabel": "项目名字",
+    "titlePlaceholder": "给项目起个名字（可选，默认从需求生成）",
+    "requirementLabel": "需求描述",
+    "placeholder": "例如：我想做一个面向独立开发者的 SaaS 财务看板，可以导入 Stripe 和银行流水，自动分析收入、成本、订阅流失和现金流风险。",
+    "helper": "Enter / Ctrl+Enter 快速开始",
+    "cancel": "取消",
+    "start": "开始生成",
+    "starting": "正在启动…"
+  },
   "requirements": {
     "title": "用户需求与需求文档",
     "next": "生成开发流程"

@@ -1,7 +1,9 @@
 import { useState, type ReactNode } from "react"
 import { Sidebar, SidebarContent } from "./Sidebar"
 import { Header } from "./Header"
+import { NewProjectDialog } from "@/components/code/NewProjectDialog"
 import { Sheet, SheetContent } from "@/components/ui/sheet"
+import { useCodeStore } from "@/stores/codeStore"
 
 interface AppLayoutProps {
   children: ReactNode
@@ -10,6 +12,8 @@ interface AppLayoutProps {
 
 export function AppLayout({ children, title }: AppLayoutProps) {
   const [mobileOpen, setMobileOpen] = useState(false)
+  const isNewProjectDialogOpen = useCodeStore((state) => state.isNewProjectDialogOpen)
+  const setNewProjectDialogOpen = useCodeStore((state) => state.setNewProjectDialogOpen)
 
   return (
     // Viewport-locked app shell: the global header sits at the top and spans the
@@ -25,6 +29,11 @@ export function AppLayout({ children, title }: AppLayoutProps) {
           {children}
         </main>
       </div>
+
+      <NewProjectDialog
+        open={isNewProjectDialogOpen}
+        onOpenChange={setNewProjectDialogOpen}
+      />
 
       {/* Mobile sidebar drawer */}
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>

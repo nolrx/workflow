@@ -70,6 +70,22 @@ export function CodeStudio() {
     }
   }, [projectId, project?.id, loadProject])
 
+  // Blank-studio auto-switch: when a fresh run creates a project while we are on
+  // /code (no projectId), promote the URL to /code/:projectId so the sidebar
+  // updates and the user gets a shareable project page instead of the generic
+  // studio route. Only auto-switch for in-flight runs so completed/historical
+  // runs opened at /code stay there for review.
+  const autoNavigatedForRunRef = useRef<string | null>(null)
+  useEffect(() => {
+    const rid = agentRun?.resource_id
+    const status = agentRun?.status
+    if (!rid || projectId) return
+    if (autoNavigatedForRunRef.current === rid) return
+    if (status !== "running" && status !== "queued") return
+    autoNavigatedForRunRef.current = rid
+    navigate(`/code/${rid}`)
+  }, [agentRun?.resource_id, agentRun?.status, projectId, navigate])
+
   // ...and replay that session's latest agent run. The whole transcript (and the
   // inline document cards rendered inside it) is event-sourced off the run, so
   // without this a historical session would open to an empty conversation even
@@ -169,15 +185,16 @@ export function CodeStudio() {
     }
   }
 
+  const setNewProjectDialogOpen = useCodeStore((state) => state.setNewProjectDialogOpen)
+
   const handleNewProject = () => {
-    useCodeStore.setState({ project: null, selectedStyleIds: [] })
     boundRunResourceRef.current = null
-    resetAgentRun()
     setRequirementInput("")
     setViewStage("requirements")
     // Drop the :projectId from the URL so the deep-link effect does not reload
     // the previous session and the next run starts a fresh project.
     navigate("/code")
+    setNewProjectDialogOpen(true)
   }
 
   // The preview thumbnails live in a right-hand rail that slides in once images

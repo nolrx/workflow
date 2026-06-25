@@ -51,6 +51,8 @@ interface CodeState {
   isLoading: boolean
   activeAction: CodeAction | null
   error: string | null
+  /** Whether the global "new project" modal is open. */
+  isNewProjectDialogOpen: boolean
   fetchStyles: () => Promise<void>
   createProject: (requirement: string) => Promise<void>
   loadProject: (projectId: string) => Promise<void>
@@ -70,6 +72,7 @@ interface CodeState {
   generatePreviews: () => Promise<boolean>
   confirmPreview: (previewUrl: string) => Promise<void>
   clearError: () => void
+  setNewProjectDialogOpen: (open: boolean) => void
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -89,6 +92,7 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
   isLoading: false,
   activeAction: null,
   error: null,
+  isNewProjectDialogOpen: false,
 
   fetchStyles: async () => {
     try {
@@ -416,4 +420,5 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
+  setNewProjectDialogOpen: (open) => set({ isNewProjectDialogOpen: open }),
 }))

@@ -1,13 +1,14 @@
-import { Link } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 import { FileCode2, ArrowRight } from "lucide-react"
 import { AppLayout } from "@/components/layout/AppLayout"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { useCodeStore } from "@/stores/codeStore"
 
 export function Dashboard() {
   const { t } = useTranslation('dashboard')
   const { t: tc } = useTranslation('common')
+  const setNewProjectDialogOpen = useCodeStore((state) => state.setNewProjectDialogOpen)
 
   return (
     <AppLayout title={tc('nav.dashboard')}>
@@ -38,11 +39,9 @@ export function Dashboard() {
               <p className="mb-4 text-sm text-muted-foreground">
                 {t('cards.code.description')}
               </p>
-              <Button asChild>
-                <Link to="/code">
-                  {t('cards.code.button')}
-                  <ArrowRight className="ml-2 h-4 w-4" />
-                </Link>
+              <Button onClick={() => setNewProjectDialogOpen(true)}>
+                {t('cards.code.button')}
+                <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
             </CardContent>
           </Card>

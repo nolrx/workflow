@@ -23,6 +23,18 @@
     "placeholder": "예: 인디 개발자를 위한 SaaS 재무 대시보드. Stripe와 은행 거래를 가져와 매출, 비용, 이탈, 현금 흐름 위험을 분석합니다.",
     "generate": "요구 문서 생성"
   },
+  "newProject": {
+    "title": "새 소프트웨어 프로젝트",
+    "description": "만들고 싶은 제품을 설명해 주세요. AI가 요구 문서, 개발 흐름, 설계 문서, 스타일 미리보기를 생성하고 각 단계에서 승인을 기다립니다.",
+    "titleLabel": "프로젝트 이름",
+    "titlePlaceholder": "프로젝트 이름을 입력하세요 (미입력 시 요약이 사용됩니다)",
+    "requirementLabel": "요구사항",
+    "placeholder": "예: 인디 개발자를 위한 SaaS 재무 대시보드. Stripe와 은행 거래를 가져와 매출, 비용, 이탈, 현금 흐름 위험을 분석합니다.",
+    "helper": "Enter / Ctrl+Enter로 빠르게 시작",
+    "cancel": "취소",
+    "start": "생성 시작",
+    "starting": "시작 중…"
+  },
   "requirements": {
     "title": "사용자 요구와 요구 문서",
     "next": "개발 흐름 생성"

@@ -456,6 +456,40 @@ button:not(:disabled),
   }
 }
 
+/* Staggered entrance for the "New project" dialog content.
+   Each .dialog-enter child fades and slides up slightly after the container
+   scale-in has settled, giving the modal a layered, fluid feel. */
+.new-project-dialog-content[data-state="open"] .dialog-enter {
+  animation: dialog-enter 0.35s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+.new-project-dialog-content[data-state="open"] .dialog-enter-1 {
+  animation-delay: 0.04s;
+}
+
+.new-project-dialog-content[data-state="open"] .dialog-enter-2 {
+  animation-delay: 0.09s;
+}
+
+.new-project-dialog-content[data-state="open"] .dialog-enter-3 {
+  animation-delay: 0.14s;
+}
+
+.new-project-dialog-content[data-state="open"] .dialog-enter-4 {
+  animation-delay: 0.19s;
+}
+
+@keyframes dialog-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* Respect users who opt out of motion (WCAG 2.3.3 / prefers-reduced-motion).
    Neutralizes spinners, the streaming caret, pulse and thinking animations. */
 @media (prefers-reduced-motion: reduce) {

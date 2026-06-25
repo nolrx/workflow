@@ -23,6 +23,18 @@
     "placeholder": "Example: Build a SaaS finance dashboard for indie founders that imports Stripe and bank data, then analyzes revenue, costs, churn, and cash-flow risk.",
     "generate": "Generate requirements"
   },
+  "newProject": {
+    "title": "New software project",
+    "description": "Describe the product you want to build. AI will generate requirements, dev flow, docs, style previews, and pause for your approval at every step.",
+    "titleLabel": "Project name",
+    "titlePlaceholder": "Name your project (optional, defaults to the requirement summary)",
+    "requirementLabel": "Requirement",
+    "placeholder": "Example: Build a SaaS finance dashboard for indie founders that imports Stripe and bank data, then analyzes revenue, costs, churn, and cash-flow risk.",
+    "helper": "Press Enter / Ctrl+Enter to start quickly",
+    "cancel": "Cancel",
+    "start": "Start generating",
+    "starting": "Starting…"
+  },
   "requirements": {
     "title": "User Requirement and PRD",
     "next": "Generate development flow"

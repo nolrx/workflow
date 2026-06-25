@@ -23,6 +23,18 @@
     "placeholder": "例: 個人開発者向けの SaaS 財務ダッシュボード。Stripe と銀行明細を取り込み、売上、コスト、解約、キャッシュフローリスクを分析する。",
     "generate": "要件文書を生成"
   },
+  "newProject": {
+    "title": "新規ソフトウェアプロジェクト",
+    "description": "作りたいプロダクトを入力してください。AI が要件文書、開発フロー、設計文書、スタイルプレビューを生成し、各ステップで承認を待ちます。",
+    "titleLabel": "プロジェクト名",
+    "titlePlaceholder": "プロジェクト名を入力（未入力時は要件の要約が使用されます）",
+    "requirementLabel": "要件",
+    "placeholder": "例: 個人開発者向けの SaaS 財務ダッシュボード。Stripe と銀行明細を取り込み、売上、コスト、解約、キャッシュフローリスクを分析する。",
+    "helper": "Enter / Ctrl+Enter ですぐに開始",
+    "cancel": "キャンセル",
+    "start": "生成を開始",
+    "starting": "開始中…"
+  },
   "requirements": {
     "title": "ユーザー要件と要件文書",
     "next": "開発フローを生成"

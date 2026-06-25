@@ -114,13 +114,14 @@ export function SidebarContent({ onNavigate }: SidebarContentProps) {
     isDeployed: !!p.is_deployed,
   }))
 
+  const setNewProjectDialogOpen = useCodeStore((state) => state.setNewProjectDialogOpen)
+
   const handleNewSession = () => {
-    // Clear the in-memory project AND tear down any replayed agent run so the
-    // studio opens to a blank conversation (not the previous session's).
-    useCodeStore.getState().setCurrentProject(null)
-    useAgentStore.getState().reset()
-    onNavigate?.()
+    // Move to the blank studio route first so any deep-linked project id is
+    // dropped before the dialog resets the in-memory session.
     navigate("/code")
+    setNewProjectDialogOpen(true)
+    onNavigate?.()
   }
 
   const currentSessionLabel =

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { useParams } from "react-router-dom"
+import { useNavigate, useParams } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 import { Info } from "lucide-react"
 import { toast } from "sonner"
@@ -53,6 +53,7 @@ export function CodeStudio() {
   const [viewStage, setViewStage] = useState<DisplayStage>("requirements")
 
   const { projectId } = useParams<{ projectId?: string }>()
+  const navigate = useNavigate()
   // Which session's agent run is currently bound to the workspace. Keyed by a ref
   // (not a reactive guard on run.resource_id) because openRun briefly nulls the
   // run mid-load, which would otherwise re-fire the replay.
@@ -174,6 +175,9 @@ export function CodeStudio() {
     resetAgentRun()
     setRequirementInput("")
     setViewStage("requirements")
+    // Drop the :projectId from the URL so the deep-link effect does not reload
+    // the previous session and the next run starts a fresh project.
+    navigate("/code")
   }
 
   // The preview thumbnails live in a right-hand rail that slides in once images

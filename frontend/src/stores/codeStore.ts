@@ -102,12 +102,15 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
     set({ isLoading: true, activeAction: "create", error: null })
     try {
       const project = await codeApi.createProject(requirement)
-      set({
+      set((state) => ({
         project,
         selectedStyleIds: project.selected_style_ids,
         isLoading: false,
         activeAction: null,
-      })
+        projects: state.projects.some((p) => p.id === project.id)
+          ? state.projects.map((p) => (p.id === project.id ? project : p))
+          : [project, ...state.projects],
+      }))
     } catch (error) {
       set({
         error: getErrorMessage(error, t("errors:code.createProjectFailed")),
@@ -121,11 +124,14 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
     set({ isLoading: true, error: null })
     try {
       const project = await codeApi.getProject(projectId)
-      set({
+      set((state) => ({
         project,
         selectedStyleIds: project.selected_style_ids,
         isLoading: false,
-      })
+        projects: state.projects.some((p) => p.id === project.id)
+          ? state.projects.map((p) => (p.id === project.id ? project : p))
+          : [project, ...state.projects],
+      }))
     } catch (error) {
       set({
         error: getErrorMessage(error, t("errors:code.createProjectFailed")),
@@ -163,12 +169,15 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
     set({ isLoading: true, activeAction: "saveProject", error: null })
     try {
       const updated = await codeApi.updateProject(project.id, data)
-      set({
+      set((state) => ({
         project: updated,
         selectedStyleIds: updated.selected_style_ids,
         isLoading: false,
         activeAction: null,
-      })
+        projects: state.projects.some((p) => p.id === updated.id)
+          ? state.projects.map((p) => (p.id === updated.id ? updated : p))
+          : [updated, ...state.projects],
+      }))
     } catch (error) {
       set({
         error: getErrorMessage(error, t("errors:code.saveProjectFailed")),

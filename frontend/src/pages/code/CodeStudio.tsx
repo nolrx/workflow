@@ -216,6 +216,7 @@ export function CodeStudio() {
         // dropped instead of repopulating this freshly-cleared session.
         useCodeStore.getState().setCurrentProject(null);
         boundRunResourceRef.current = null;
+        resetAgentRun();
         setRequirementInput("");
         setViewStage("requirements");
         // Drop the :projectId from the URL so the deep-link effect does not reload

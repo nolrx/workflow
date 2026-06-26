@@ -11,6 +11,7 @@ export default defineConfig({
     },
   },
   server: {
+    host: true,
     port: 3000,
     proxy: {
       '/api': {
@@ -20,6 +21,11 @@ export default defineConfig({
       // Session-bound deployed preview of generated frontend projects (served by
       // the backend at the top level, mirroring the nginx /preview proxy in prod).
       '/preview': {
+        target: 'http://localhost:5001',
+        changeOrigin: true,
+      },
+      // Deployed full-stack backend proxy (mirrors nginx /app/<pid>/api proxy).
+      '/app': {
         target: 'http://localhost:5001',
         changeOrigin: true,
       },

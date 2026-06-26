@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
@@ -14,8 +14,16 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { useAgentStore } from "@/stores/agentStore"
 import { useCodeStore } from "@/stores/codeStore"
+import { useTeamStore } from "@/stores/teamStore"
 
 interface NewProjectDialogProps {
   open: boolean
@@ -28,15 +36,31 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
   const navigate = useNavigate()
   const startAgentRun = useAgentStore((state) => state.startRun)
   const fetchProjects = useCodeStore((state) => state.fetchProjects)
+  const teams = useTeamStore((state) => state.teams)
+  const fetchTeams = useTeamStore((state) => state.fetchTeams)
 
   const [title, setTitle] = useState("")
   const [requirement, setRequirement] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
+  // Where THIS session is created — a per-creation choice, NOT the global App Space
+  // browsing scope (`scopeTeamId`). Defaults to 个人/独立 on every open and never
+  // mutates the global scope, so each new session is independent unless the user
+  // explicitly picks a team here. Reusing the sticky global scope made new sessions
+  // silently land in whatever team the user last *browsed*, mixing them in with
+  // existing members' sessions.
+  const [targetTeamId, setTargetTeamId] = useState<string | null>(null)
+
+  // Load teams when the dialog opens so the "create to" scope has options.
+  useEffect(() => {
+    if (open) void fetchTeams()
+  }, [open, fetchTeams])
 
   const resetSession = () => {
     setTitle("")
     setRequirement("")
     setIsSubmitting(false)
+    // Each new session starts independent (个人) — don't inherit the last choice.
+    setTargetTeamId(null)
     useCodeStore.setState({ project: null, selectedStyleIds: [] })
     useAgentStore.getState().reset()
   }
@@ -58,6 +82,7 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
       await startAgentRun({
         domain: "code",
         workflow: "code_full_generation",
+        team_id: targetTeamId,
         config: { requirement: trimmed, title: title.trim() || undefined },
       })
       // Refresh the sidebar list so the new session appears as soon as the
@@ -109,6 +134,37 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
           </DialogHeader>
 
           <div className="dialog-enter dialog-enter-3 space-y-4">
+            {teams.length > 0 && (
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">
+                  {t("newProject.scopeLabel")}
+                </Label>
+                <Select
+                  value={targetTeamId ?? "personal"}
+                  onValueChange={(v) =>
+                    setTargetTeamId(v === "personal" ? null : v)
+                  }
+                  disabled={isSubmitting}
+                >
+                  <SelectTrigger className="rounded-lg border-input/80 bg-muted/30 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="personal">
+                      {t("newProject.scopePersonal")}
+                    </SelectItem>
+                    {teams.map((team) => (
+                      <SelectItem key={team.id} value={team.id}>
+                        {team.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {t("newProject.scopeHelper")}
+                </p>
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="new-project-title" className="text-sm font-medium">
                 {t("newProject.titleLabel")}

@@ -16,6 +16,7 @@ When Mongo is unreachable everything still works read-only off the bundled
 defaults; the admin write paths raise ``MongoUnavailableError`` so the API can
 report a clear 503 instead of silently dropping an edit.
 """
+import hashlib
 import logging
 import threading
 import time
@@ -29,7 +30,16 @@ from backend.services.prompts import defaults
 logger = logging.getLogger(__name__)
 
 COLLECTION = "prompts"
+# Immutable per-edit history. Each doc ``_id = "<key>@<content_hash>"`` is written
+# once and never mutated, so a published graph pinned to a hash always resolves to
+# the exact same prompt body — independent of later edits to the live HEAD.
+VERSIONS_COLLECTION = "prompt_versions"
 _CACHE_TTL_SECONDS = 60.0
+
+
+def content_hash(content: str) -> str:
+    """Stable content-addressed id for a prompt body (the pin identity)."""
+    return "sha256:" + hashlib.sha256((content or "").encode("utf-8")).hexdigest()
 
 
 class MongoUnavailableError(RuntimeError):
@@ -81,6 +91,90 @@ class PromptStore:
     def reset_cache(self) -> None:
         with self._lock:
             self._cache.clear()
+
+    # --- version pinning ----------------------------------------------------
+    # The HEAD read path above is unchanged: ``get`` still returns the live
+    # content. These methods add an immutable version layer so a published graph
+    # can freeze the EXACT prompt it ran with (reproducible replay).
+    @staticmethod
+    def _write_version(db, key, content, c_hash, *, parent_hash, version, created_by) -> None:
+        """Append an immutable version doc (idempotent on hash; never overwrites)."""
+        try:
+            db[VERSIONS_COLLECTION].update_one(
+                {"_id": f"{key}@{c_hash}"},
+                {
+                    "$setOnInsert": {
+                        "key": key,
+                        "version": version,
+                        "content": content,
+                        "content_hash": c_hash,
+                        "parent_hash": parent_hash,
+                        "created_at": datetime.utcnow().isoformat(),
+                        "created_by": created_by,
+                    }
+                },
+                upsert=True,
+            )
+        except PyMongoError as error:
+            logger.warning("Mongo version write failed for %s: %s", key, error)
+
+    def head_pin(self, key: str) -> dict:
+        """Return a pin ``{key, version, hash}`` for the current HEAD content.
+
+        Called when a canvas/graph is published, to freeze the exact prompt. An
+        override is materialized as an immutable version so the pin survives
+        later edits; default-equal content needs no version doc (``get_pinned``
+        resolves it from the bundled default). Works (best-effort) when Mongo is
+        down — it pins to the default body, which the fallback can still resolve.
+        """
+        content = self.get(key)  # HEAD (raises KeyError on an unknown key)
+        h = content_hash(content)
+        db = get_mongo_db()
+        if db is None:
+            return {"key": key, "version": 0, "hash": h}
+        try:
+            head = db[COLLECTION].find_one({"_id": key}, {"version": 1, "content_hash": 1})
+        except PyMongoError:
+            return {"key": key, "version": 0, "hash": h}
+        version = (head or {}).get("version") or 0
+        if (head or {}).get("content_hash") == h and version:
+            return {"key": key, "version": version, "hash": h}
+        if content != defaults.get_default_content(key):
+            version = (version + 1) if version else 1
+            self._write_version(
+                db, key, content, h,
+                parent_hash=(head or {}).get("content_hash"), version=version, created_by=None,
+            )
+            try:
+                db[COLLECTION].update_one(
+                    {"_id": key}, {"$set": {"version": version, "content_hash": h}}
+                )
+            except PyMongoError:
+                pass
+            return {"key": key, "version": version, "hash": h}
+        return {"key": key, "version": 0, "hash": h}
+
+    def get_pinned(self, key: str, prompt_hash: str) -> str:
+        """Resolve the EXACT pinned content (content-addressed). Replay-safe.
+
+        Resolution order: immutable version doc → bundled-default fallback (when
+        the pin is to the default body) → ``KeyError``. Independent of the live
+        HEAD, so editing a prompt never changes what a published graph runs.
+        """
+        db = get_mongo_db()
+        if db is not None:
+            try:
+                doc = db[VERSIONS_COLLECTION].find_one(
+                    {"_id": f"{key}@{prompt_hash}"}, {"content": 1}
+                )
+                if doc and doc.get("content") is not None:
+                    return doc["content"]
+            except PyMongoError as error:
+                logger.warning("Mongo pinned read failed for %s: %s", key, error)
+        default = defaults.get_default_content(key)
+        if default is not None and content_hash(default) == prompt_hash:
+            return default
+        raise KeyError(f"Pinned prompt not found: {key}@{prompt_hash}")
 
     # --- seeding ------------------------------------------------------------
     def seed_defaults(self) -> int:
@@ -169,11 +263,24 @@ class PromptStore:
             raise MongoUnavailableError("MongoDB is unavailable; cannot edit prompts.")
         default = defaults.get_default(key)
         default_content = default.content if default else None
+        # Version lineage: read the current HEAD's version/hash so a content change
+        # bumps the version and records an immutable history entry.
+        try:
+            head = db[COLLECTION].find_one({"_id": key}, {"version": 1, "content_hash": 1})
+        except PyMongoError:
+            head = None
+        prev_hash = (head or {}).get("content_hash")
+        prev_version = (head or {}).get("version") or 0
+        new_hash = content_hash(content)
+        changed = new_hash != prev_hash
+        new_version = (prev_version + 1) if changed else (prev_version or 1)
         set_fields = {
             "content": content,
             "is_overridden": content != default_content,
             "updated_at": datetime.utcnow().isoformat(),
             "updated_by": updated_by,
+            "version": new_version,
+            "content_hash": new_hash,
         }
         on_insert = {
             "scope": default.scope if default else "custom",
@@ -190,6 +297,11 @@ class PromptStore:
             )
         except PyMongoError as error:
             raise MongoUnavailableError(f"Mongo write failed: {error}") from error
+        if changed or prev_version == 0:
+            self._write_version(
+                db, key, content, new_hash,
+                parent_hash=prev_hash, version=new_version, created_by=updated_by,
+            )
         self.invalidate(key)
         return self.get_doc(key)
 

@@ -1,0 +1,209 @@
+{
+  "title": "App Space",
+  "subtitle": "Manage and iterate on the products you've deployed",
+  "empty": "No deployed apps yet. Once a full-stack generation is deployed, the app will show up here.",
+  "notFound": "App not found or access denied",
+  "search": "Search by name",
+  "filters": {
+    "status": "Deploy status",
+    "health": "Health",
+    "all": "All"
+  },
+  "columns": {
+    "app": "App",
+    "status": "Deploy status",
+    "health": "Health",
+    "deployedAt": "Last deployed",
+    "updatedAt": "Updated",
+    "visibility": "Visibility",
+    "actions": "Actions"
+  },
+  "view": {
+    "card": "Card view",
+    "table": "Table view"
+  },
+  "tabs": {
+    "overview": "Overview",
+    "resources": "Resources",
+    "database": "Database",
+    "code": "Code",
+    "iterate": "Iterate",
+    "logs": "Logs"
+  },
+  "resources": {
+    "viewCode": "View code",
+    "files": "files",
+    "none": "No artifact yet",
+    "database": "Database",
+    "engine": "Engine",
+    "dbName": "DB name",
+    "tables": "Tables",
+    "manageDb": "Manage database"
+  },
+  "database": {
+    "title": "Database",
+    "sqlite": "This app uses a container-local SQLite; online browsing isn't supported.",
+    "unavailable": "Database unavailable or not configured.",
+    "noTables": "No tables",
+    "pickTable": "Pick a table to view its schema and data",
+    "sampleRows": "Sample rows (first few)",
+    "noRows": "No rows"
+  },
+  "code": {
+    "download": "Download source",
+    "empty": "No source artifact yet",
+    "pickFile": "Pick a file to view its content",
+    "binary": "Binary file — preview not supported",
+    "truncated": "Truncated (content too long)"
+  },
+  "actions": {
+    "open": "Open app",
+    "detail": "Details",
+    "iterate": "Iterate",
+    "redeploy": "Redeploy",
+    "replay": "Execution record",
+    "openProject": "Open project",
+    "back": "Back to App Space",
+    "retry": "Retry",
+    "stop": "Stop"
+  },
+  "deployStatus": {
+    "pending": "Pending",
+    "provisioning": "Provisioning",
+    "building": "Building",
+    "starting": "Starting",
+    "running": "Running",
+    "failed": "Failed",
+    "stopped": "Stopped",
+    "rolled_back": "Rolled back"
+  },
+  "health": {
+    "healthy": "Healthy",
+    "unhealthy": "Unhealthy",
+    "unknown": "Unknown",
+    "refresh": "Refresh health"
+  },
+  "runStatus": {
+    "queued": "Queued",
+    "running": "Running",
+    "paused": "Awaiting review",
+    "completed": "Completed",
+    "partial": "Partial",
+    "failed": "Failed",
+    "cancelled": "Cancelled"
+  },
+  "iterationStatus": {
+    "draft": "Draft",
+    "analyzing": "Analyzing",
+    "awaiting_plan_approval": "Awaiting approval",
+    "generating": "Generating",
+    "staging_deploying": "Deploying",
+    "staging_ready": "Staging ready",
+    "release_pending": "Release pending",
+    "released": "Released",
+    "failed": "Failed",
+    "cancelled": "Cancelled"
+  },
+  "lanes": {
+    "frontend": "Frontend",
+    "backend": "Backend",
+    "middleware": "Middleware",
+    "deploy": "Deploy",
+    "requirements": "Requirements",
+    "contract": "Contract",
+    "assets": "Assets"
+  },
+  "detail": {
+    "requirement": "Initial requirement",
+    "apiBase": "API base",
+    "previewUrl": "Preview URL",
+    "techStack": "Tech stack",
+    "recentRuns": "Recent runs",
+    "github": "GitHub repository",
+    "devBranch": "Dev branch"
+  },
+  "iterate": {
+    "title": "Secondary development",
+    "subtitle": "Start a change iteration from a deployed app. Review the impact analysis and plan, confirm, then regenerate and deploy.",
+    "new": "New iteration",
+    "changeType": "Change goal",
+    "changeTypes": {
+      "bug_fix": "Fix a bug",
+      "new_feature": "New feature",
+      "ui_change": "Adjust UI",
+      "backend_logic": "Adjust backend logic",
+      "data_model": "Adjust data model",
+      "other": "Other"
+    },
+    "instruction": "Change description",
+    "instructionPlaceholder": "Describe the change in a sentence, e.g. add a membership tiers & benefits page…",
+    "impactScope": "Impact scope",
+    "impactScopeAuto": "Auto-detect (can override)",
+    "scopes": {
+      "frontend": "Frontend only",
+      "backend": "Backend only",
+      "frontend_backend": "Frontend + Backend",
+      "backend_middleware": "Backend + Middleware",
+      "fullstack": "Full-stack"
+    },
+    "allowContract": "Allow API contract changes",
+    "allowDb": "Allow database schema changes",
+    "deployToProd": "Deploy to production when done",
+    "submit": "Start impact analysis",
+    "submitting": "Submitting…",
+    "instructionRequired": "Please describe the change",
+    "history": "Iterations",
+    "noHistory": "No iterations yet",
+    "changeFlags": "Affected layers",
+    "flags": {
+      "requirement": "Requirement",
+      "ui": "UI",
+      "frontend": "Frontend",
+      "backend": "Backend",
+      "middleware": "Middleware",
+      "contract": "Contract",
+      "database": "Database",
+      "assets": "Assets"
+    },
+    "reasoning": "Reasoning",
+    "steps": "Steps",
+    "risks": "Risks",
+    "confirm": "Confirm & generate",
+    "confirming": "Starting…",
+    "confirmHint": "Confirming regenerates the affected projects by scope; you can deploy once they finish.",
+    "needsConfirm": "This is a high-risk / breaking change — please confirm before continuing.",
+    "generating": "Regenerating…",
+    "generationReady": "Generation done — ready to deploy the new version",
+    "deploy": "Deploy new version",
+    "deploying": "Deploying…",
+    "released": "Released as the current live version",
+    "failed": "This iteration failed",
+    "viewRun": "Execution record",
+    "riskLevels": {
+      "low": "Low risk",
+      "medium": "Medium risk",
+      "high": "High risk"
+    }
+  },
+  "toast": {
+    "iterationCreated": "Impact analysis started",
+    "iterationConfirmed": "Plan confirmed — generation started",
+    "deployStarted": "Deployment started",
+    "noRun": "No execution record yet",
+    "error": "Action failed",
+    "stopped": "Deployment stopped"
+  },
+  "scope": {
+    "label": "Scope",
+    "personal": "Personal",
+    "createdBy": "By {{name}}",
+    "unknownMember": "a member"
+  },
+  "loadMore": "Load more",
+  "logs": {
+    "tail": "Last {{n}} lines",
+    "refresh": "Refresh",
+    "unavailable": "App not running or no logs",
+    "empty": "No logs"
+  }
+}

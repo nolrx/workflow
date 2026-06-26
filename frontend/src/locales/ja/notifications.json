@@ -1,0 +1,43 @@
+{
+  "title": "通知",
+  "empty": "通知はありません",
+  "markAllRead": "すべて既読",
+  "time": {
+    "justNow": "たった今",
+    "minutesAgo": "{{count}}分前",
+    "hoursAgo": "{{count}}時間前",
+    "daysAgo": "{{count}}日前"
+  },
+  "actions": {
+    "accept": "承認",
+    "decline": "辞退"
+  },
+  "toast": {
+    "accepted": "チーム「{{team}}」に参加しました",
+    "declined": "招待を辞退しました",
+    "failed": "操作に失敗しました。もう一度お試しください"
+  },
+  "types": {
+    "team_invite": {
+      "title": "チームへの招待",
+      "message": "{{inviter}} さんがチーム「{{team}}」へ招待しました",
+      "messageNoInviter": "チーム「{{team}}」へ招待されました"
+    },
+    "team_invite_accepted": {
+      "title": "招待が承認されました",
+      "message": "{{user}} さんがチーム「{{team}}」に参加しました"
+    },
+    "team_invite_rejected": {
+      "title": "招待が辞退されました",
+      "message": "{{user}} さんがチーム「{{team}}」への参加を辞退しました"
+    },
+    "code_deploy_succeeded": {
+      "title": "アプリが公開されました",
+      "message": "アプリのデプロイが完了し、公開されました。タップで確認。"
+    },
+    "run_failed": {
+      "title": "タスクが失敗しました",
+      "message": "タスクの一つが失敗しました。タップで確認。"
+    }
+  }
+}

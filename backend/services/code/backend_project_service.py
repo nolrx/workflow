@@ -28,7 +28,11 @@ import tempfile
 from pathlib import Path
 from typing import Callable, Optional
 
-from backend.services.code.docker_env import container_user, host_workdir
+from backend.services.code.docker_env import (
+    container_user,
+    host_workdir,
+    mount_failure_hint,
+)
 from backend.services.prompts import prompt_store
 
 logger = logging.getLogger(__name__)
@@ -48,6 +52,15 @@ _CONTAINER_SCRIPT = r"""
 export HOME="${HOME:-/home/node}"
 WORK=/tmp/work
 mkdir -p "$WORK" && cd "$WORK"
+# Iteration (二次开发) seed: when an existing project source was provided at
+# /out/_base, copy it into the workdir so the agent EDITS it in place (真实续改)
+# instead of generating from scratch. No-op (identical to fresh generation) when
+# /out/_base is absent. Removed afterwards so it is never tarred into the output.
+if [ -d /out/_base ] && [ -n "$(ls -A /out/_base 2>/dev/null)" ]; then
+  cp -a /out/_base/. "$WORK"/ 2>/dev/null || true
+  rm -rf /out/_base
+  echo seeded > /out/seeded
+fi
 export CODEX_HOME="$HOME/.codex"
 export PATH="$HOME/bin:$PATH"
 mkdir -p "$HOME/bin" "$CODEX_HOME"
@@ -439,6 +452,60 @@ class BackendProjectService:
             out = out.replace(f"[[{key}]]", value if value is not None else "")
         return out
 
+    def _build_prompt(
+        self, fill_vals: dict, edit_mode: bool, base_files: dict,
+        change_instruction: str, change_plan: str,
+    ) -> str:
+        """Pick + fill the generation prompt (edit-mode variant for 二次开发续改)."""
+        if not edit_mode:
+            return self._fill(self._load_prompt("backend_project_prompt.txt"), **fill_vals)
+        base_list = "\n".join(f"- {p}" for p in sorted(base_files)[:300])
+        edit_vals = dict(
+            fill_vals,
+            CHANGE_INSTRUCTION=(change_instruction or "")[:4_000],
+            CHANGE_PLAN=(change_plan or "")[:4_000],
+            BASE_FILES=base_list,
+        )
+        try:
+            return self._fill(self._load_prompt("backend_project_edit_prompt.txt"), **edit_vals)
+        except Exception:  # noqa: BLE001 — edit template missing: prepend a续改 preamble
+            base = self._fill(self._load_prompt("backend_project_prompt.txt"), **fill_vals)
+            return (
+                "【二次开发·基于现有项目续改】当前目录已是现有后端工程,请只针对下述变更"
+                "修改/新增相关文件,保持其余文件不变,不要整体重写。\n"
+                f"变更要求:{(change_instruction or '')[:4000]}\n执行计划:\n{(change_plan or '')[:4000]}\n\n"
+                + base
+            )
+
+    @staticmethod
+    def _seed_base(base_dir: "Path", files: dict) -> None:
+        """Write the existing project source under workdir/_base (binary-safe).
+
+        Hardened against path traversal: a crafted zip member name like
+        ``../../x`` must not escape ``base_dir`` and write onto the host. Absolute
+        paths, ``..`` segments, and anything that resolves outside base_dir are
+        skipped (the source zips come from agent output — defence in depth).
+        """
+        base_resolved = base_dir.resolve()
+        written = 0
+        for rel, content in files.items():
+            if written > 4000:  # backstop against a pathological file count
+                break
+            norm = str(rel).replace("\\", "/")
+            if not norm or norm.startswith("/") or ".." in norm.split("/"):
+                continue
+            try:
+                dest = base_dir / norm
+                resolved = dest.resolve()
+                if base_resolved != resolved and base_resolved not in resolved.parents:
+                    continue  # escaped base_dir → skip
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                data = content if isinstance(content, (bytes, bytearray)) else str(content).encode("utf-8")
+                dest.write_bytes(bytes(data))
+                written += 1
+            except Exception:  # noqa: BLE001 — skip any single bad path, keep seeding
+                continue
+
     @staticmethod
     def _extract_json(text: str) -> Optional[dict]:
         if not text:
@@ -526,10 +593,19 @@ class BackendProjectService:
         contract_block: str = "",
         middleware_block: str = "",
         context_ledger: str = "",
+        base_files: Optional[dict] = None,
+        change_instruction: str = "",
+        change_plan: str = "",
         on_event: Optional[Callable[[dict], None]] = None,
         is_cancelled: Optional[Callable[[], bool]] = None,
     ) -> dict:
         """Run the containerized agent to produce the backend project source.
+
+        ``base_files`` (二次开发 iteration): when provided, the existing project
+        source is seeded into the container so the agent EDITS it per
+        ``change_instruction`` / ``change_plan`` instead of generating from
+        scratch (真实续改). The reinforce pass is skipped in edit mode so it can't
+        rewrite the inherited project.
 
         Returns ``{success, error, files, stack, dockerfile_source, summary,
         usage, cost_usd, workdir}``. Never raises on agent/model failure (returns
@@ -537,6 +613,7 @@ class BackendProjectService:
         """
         if not self.is_configured():
             return self._empty("ANTHROPIC_API_KEY not configured")
+        edit_mode = bool(base_files)
 
         _cap = 16_000
         # Shared anchor injection for BOTH the first-gen prompt and the reinforce
@@ -550,11 +627,17 @@ class BackendProjectService:
             CONTRACT=contract_block or "",
             MIDDLEWARE=middleware_block or "",
         )
-        prompt = self._fill(self._load_prompt("backend_project_prompt.txt"), **fill_vals)
+        prompt = self._build_prompt(
+            fill_vals, edit_mode, base_files or {}, change_instruction, change_plan
+        )
 
         workdir = Path(tempfile.mkdtemp(prefix="be-agent-"))
         os.chmod(workdir, 0o777)
         (workdir / "prompt.txt").write_text(prompt, encoding="utf-8")
+        # Edit mode: seed the existing project source so the container copies it
+        # into the agent workdir (真实续改). Binary-safe; skips pathological files.
+        if base_files:
+            self._seed_base(workdir / "_base", base_files)
         # The generation-time self-heal rung reuses the deploy repair prompt; the
         # container appends the live native build/test logs before re-invoking
         # claude. Written to /out (NOT into the project) so it is never tarred out.
@@ -566,14 +649,19 @@ class BackendProjectService:
             (workdir / "repair_prompt.txt").write_text("", encoding="utf-8")
         # BMAD reinforce prompt (second pass). Fail-soft: an empty file makes the
         # container skip the reinforce pass (`[ -s ]` is false), degrading to a
-        # single generation — so a missing template never sinks the run.
-        try:
-            (workdir / "reinforce_prompt.txt").write_text(
-                self._fill(self._load_prompt("backend_project_reinforce_prompt.txt"), **fill_vals),
-                encoding="utf-8",
-            )
-        except Exception:  # noqa: BLE001 — reinforce rung degrades to skip if absent
+        # single generation — so a missing template never sinks the run. SKIPPED in
+        # edit mode: a fresh-generation reinforce pass would rewrite the inherited
+        # project from FR/NFR anchors, undoing the targeted续改.
+        if edit_mode:
             (workdir / "reinforce_prompt.txt").write_text("", encoding="utf-8")
+        else:
+            try:
+                (workdir / "reinforce_prompt.txt").write_text(
+                    self._fill(self._load_prompt("backend_project_reinforce_prompt.txt"), **fill_vals),
+                    encoding="utf-8",
+                )
+            except Exception:  # noqa: BLE001 — reinforce rung degrades to skip if absent
+                (workdir / "reinforce_prompt.txt").write_text("", encoding="utf-8")
         api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
 
         user = container_user()
@@ -1043,6 +1131,9 @@ class BackendProjectService:
         summary, stderr, non_json_stdout, build_logs,
     ) -> str:
         reasons: list[str] = []
+        mount_hint = mount_failure_hint(stderr)
+        if mount_hint:
+            reasons.append(mount_hint)
         if docker_exit not in (0, None):
             reasons.append(f"container exited with code {docker_exit}")
         if claude_exit not in (0, None):

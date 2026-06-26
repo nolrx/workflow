@@ -1,0 +1,43 @@
+{
+  "title": "Notifications",
+  "empty": "No notifications yet",
+  "markAllRead": "Mark all read",
+  "time": {
+    "justNow": "just now",
+    "minutesAgo": "{{count}}m ago",
+    "hoursAgo": "{{count}}h ago",
+    "daysAgo": "{{count}}d ago"
+  },
+  "actions": {
+    "accept": "Accept",
+    "decline": "Decline"
+  },
+  "toast": {
+    "accepted": "Joined team “{{team}}”",
+    "declined": "Invitation declined",
+    "failed": "Action failed, please try again"
+  },
+  "types": {
+    "team_invite": {
+      "title": "Team invitation",
+      "message": "{{inviter}} invited you to join team “{{team}}”",
+      "messageNoInviter": "You've been invited to join team “{{team}}”"
+    },
+    "team_invite_accepted": {
+      "title": "Invitation accepted",
+      "message": "{{user}} joined team “{{team}}”"
+    },
+    "team_invite_rejected": {
+      "title": "Invitation declined",
+      "message": "{{user}} declined to join team “{{team}}”"
+    },
+    "code_deploy_succeeded": {
+      "title": "App is live",
+      "message": "Your app finished deploying and is now live. Tap to open."
+    },
+    "run_failed": {
+      "title": "Task failed",
+      "message": "One of your tasks failed. Tap to review."
+    }
+  }
+}

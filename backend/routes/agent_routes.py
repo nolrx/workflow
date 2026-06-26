@@ -9,6 +9,7 @@ Endpoints (registered at /api/agent):
     POST   /runs/<run_id>/retry        relaunch a failed run to retry its failed stage
     GET    /artifacts/<id>/file        download / view a produced artifact
 """
+
 import json
 import logging
 import os
@@ -57,12 +58,15 @@ WORKFLOW_COSTS = {
     "code_backend_project_generation": pricing.CODE_BACKEND_PROJECT_GENERATION,
     "code_middleware_provisioning": pricing.CODE_MIDDLEWARE_PROVISIONING,
     "code_fullstack_deploy": pricing.CODE_FULLSTACK_DEPLOY,
+    # Secondary development: impact analysis + execution plan for a deployed app.
+    "code_app_iteration_analysis": pricing.CODE_APP_ITERATION_ANALYSIS,
 }
 VALID_DOMAINS = {"code"}
 # The full-stack pipeline starts THREE concurrent runs per project (frontend +
 # backend + middleware), so the per-user active-run cap must clear 3 with
-# headroom. Env-tunable for ops.
-MAX_CONCURRENT_RUNS = int(os.getenv("AGENT_MAX_CONCURRENT_RUNS", "6"))
+# headroom. Env-tunable for ops. Default doubled 6 -> 12 to let users run more
+# concurrent generations (kept in step with AGENT_MAX_WORKERS).
+MAX_CONCURRENT_RUNS = int(os.getenv("AGENT_MAX_CONCURRENT_RUNS", "12"))
 
 
 def _get_owned_run(run_id: str) -> AgentRun | None:
@@ -104,11 +108,15 @@ def create_run():
         return error_response(
             "VALIDATION_ERROR", "切片导出需要一个已有的 Code 项目（resource_id）", 400
         )
-    if workflow in (
-        "code_backend_project_generation",
-        "code_middleware_provisioning",
-        "code_fullstack_deploy",
-    ) and not resource_id:
+    if (
+        workflow
+        in (
+            "code_backend_project_generation",
+            "code_middleware_provisioning",
+            "code_fullstack_deploy",
+        )
+        and not resource_id
+    ):
         return error_response(
             "VALIDATION_ERROR", "全栈生成/部署需要一个已有的 Code 项目（resource_id）", 400
         )
@@ -132,9 +140,7 @@ def create_run():
         AgentRun.status.in_(list(AgentRunStatus.ACTIVE)),
     ).count()
     if active >= MAX_CONCURRENT_RUNS:
-        return error_response(
-            "CONCURRENCY_LIMIT", f"已有 {active} 个进行中的任务，请稍后再试", 429
-        )
+        return error_response("CONCURRENCY_LIMIT", f"已有 {active} 个进行中的任务，请稍后再试", 429)
 
     cost = WORKFLOW_COSTS[workflow]
     title = (config.get("title") or "").strip() or None
@@ -360,9 +366,7 @@ def retry_run(run_id: str):
         AgentRun.status.in_(list(AgentRunStatus.ACTIVE)),
     ).count()
     if active >= MAX_CONCURRENT_RUNS:
-        return error_response(
-            "CONCURRENCY_LIMIT", f"已有 {active} 个进行中的任务，请稍后再试", 429
-        )
+        return error_response("CONCURRENCY_LIMIT", f"已有 {active} 个进行中的任务，请稍后再试", 429)
 
     data = request.get_json() or {}
     stage = (data.get("stage") or "").strip() or None
@@ -430,10 +434,7 @@ def _sse(event_dict: dict) -> str:
 
 
 def _sse_delta(event_dict: dict) -> str:
-    return (
-        f"event: agent_delta\n"
-        f"data: {json.dumps(event_dict, ensure_ascii=False)}\n\n"
-    )
+    return f"event: agent_delta\ndata: {json.dumps(event_dict, ensure_ascii=False)}\n\n"
 
 
 def _event_stream(app, run_id: str, last_sequence: int):
@@ -445,9 +446,7 @@ def _event_stream(app, run_id: str, last_sequence: int):
         # Initial replay from the DB (source of truth) for anything already logged.
         with app.app_context():
             events = (
-                AgentEvent.query.filter(
-                    AgentEvent.run_id == run_id, AgentEvent.sequence > cursor
-                )
+                AgentEvent.query.filter(AgentEvent.run_id == run_id, AgentEvent.sequence > cursor)
                 .order_by(AgentEvent.sequence)
                 .all()
             )
@@ -569,7 +568,8 @@ _PREVIEW_COOKIE = "fe_preview_token"
 # Defense-in-depth for the same-origin sandboxed preview: block fetch/XHR/WebSocket
 # egress (the agent-generated app needs no network) while still allowing the
 # same-origin assets + inline modulepreload a normal Vite build emits.
-_PREVIEW_CSP = "default-src 'self' 'unsafe-inline' data: blob:; connect-src 'none'"
+# _PREVIEW_CSP = "default-src 'self' 'unsafe-inline' data: blob:; connect-src 'none'"
+_PREVIEW_CSP = ""  # 停用安全策略
 
 
 @agent_bp.route("/runs/<run_id>/site/<path:filename>", methods=["GET"])

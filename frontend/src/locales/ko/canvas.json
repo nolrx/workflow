@@ -12,6 +12,11 @@
     "addAgent": "에이전트",
     "addMerge": "병합",
     "addBranch": "분기",
+    "addStage": "단계…",
+    "addSource": "기존…",
+    "freeze": "고정",
+    "frozen": "{{count}}개 단계 프롬프트 고정됨",
+    "freezeFailed": "고정 실패",
     "run": "캔버스 실행",
     "running": "실행 중…"
   },
@@ -20,6 +25,37 @@
     "saved": "저장됨",
     "loading": "불러오는 중…",
     "loadFailed": "불러오기 실패"
+  },
+  "stage": {
+    "node": "단계",
+    "unavailable": "아직 실행 불가",
+    "pinned": "고정됨",
+    "name": {
+      "requirements": "요구사항",
+      "flow": "개발 흐름",
+      "documents": "문서 분할",
+      "style": "스타일",
+      "preview": "UI 미리보기",
+      "fe_build": "프론트엔드",
+      "be_build": "백엔드",
+      "mw_provision": "미들웨어",
+      "deploy": "배포"
+    }
+  },
+  "source": {
+    "existing": {
+      "frontend": "기존 프론트엔드",
+      "backend": "기존 백엔드",
+      "contract": "기존 API 계약",
+      "middleware": "기존 미들웨어"
+    }
+  },
+  "review": {
+    "awaiting": "「{{stage}}」 확인 — 승인 또는 수정 요청",
+    "placeholder": "수정 지시(‘수정’용)",
+    "revise": "수정",
+    "approve": "승인",
+    "failed": "재개 실패"
   },
   "runFailed": "캔버스 실행 실패"
 }

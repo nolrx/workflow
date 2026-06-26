@@ -33,7 +33,10 @@
     "helper": "Enter / Ctrl+Enter ですぐに開始",
     "cancel": "キャンセル",
     "start": "生成を開始",
-    "starting": "開始中…"
+    "starting": "開始中…",
+    "scopeLabel": "作成先",
+    "scopePersonal": "個人",
+    "scopeHelper": "チーム内で作成したアプリは、メンバー全員に表示されます。"
   },
   "requirements": {
     "title": "ユーザー要件と要件文書",

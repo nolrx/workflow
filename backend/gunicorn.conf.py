@@ -13,11 +13,17 @@ The deploy script normally drains explicitly first (scripts/deploy-backend.sh);
 either way, in-flight runs are resumed by the next process from their persisted
 phase (reconcile_orphaned_runs). Used via ``gunicorn ... -c backend/gunicorn.conf.py``.
 """
+import os
 import signal
 
 bind = "0.0.0.0:5001"
 workers = 1
-threads = 8
+# Each long-lived SSE stream (an agent-run watch + the per-user notification
+# stream) holds one thread for its lifetime — mostly blocked on a queue with the
+# GIL released — so the headroom above the original 8 leaves room for concurrent
+# live streams plus the regular request load. Env-tunable; the frontend only opens
+# a notification stream while the tab is visible, keeping the steady-state low.
+threads = int(os.getenv("GUNICORN_THREADS", "16"))
 worker_class = "gthread"
 timeout = 600
 graceful_timeout = 30

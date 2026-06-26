@@ -1,0 +1,43 @@
+{
+  "title": "알림",
+  "empty": "알림이 없습니다",
+  "markAllRead": "모두 읽음",
+  "time": {
+    "justNow": "방금",
+    "minutesAgo": "{{count}}분 전",
+    "hoursAgo": "{{count}}시간 전",
+    "daysAgo": "{{count}}일 전"
+  },
+  "actions": {
+    "accept": "수락",
+    "decline": "거절"
+  },
+  "toast": {
+    "accepted": "팀 “{{team}}”에 참여했습니다",
+    "declined": "초대를 거절했습니다",
+    "failed": "작업에 실패했습니다. 다시 시도해 주세요"
+  },
+  "types": {
+    "team_invite": {
+      "title": "팀 초대",
+      "message": "{{inviter}}님이 팀 “{{team}}”에 초대했습니다",
+      "messageNoInviter": "팀 “{{team}}”에 초대되었습니다"
+    },
+    "team_invite_accepted": {
+      "title": "초대 수락됨",
+      "message": "{{user}}님이 팀 “{{team}}”에 참여했습니다"
+    },
+    "team_invite_rejected": {
+      "title": "초대 거절됨",
+      "message": "{{user}}님이 팀 “{{team}}” 참여를 거절했습니다"
+    },
+    "code_deploy_succeeded": {
+      "title": "앱이 배포됨",
+      "message": "앱 배포가 완료되어 게시되었습니다. 탭하여 확인하세요."
+    },
+    "run_failed": {
+      "title": "작업 실패",
+      "message": "작업 중 하나가 실패했습니다. 탭하여 확인하세요."
+    }
+  }
+}

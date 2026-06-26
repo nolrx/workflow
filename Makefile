@@ -13,6 +13,16 @@ help: ## List available targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
+# ---- Database ---------------------------------------------------------------
+.PHONY: migrate migrate-prod
+# NOTE: additive column changes self-heal at boot (schema_guard); these targets are
+# for NON-additive Alembic migrations (rename/drop/type/data), run manually as needed.
+migrate: ## Apply Alembic migrations locally (host; dev/sqlite). Non-additive only — additive columns self-heal at boot
+	cd backend && uv run alembic upgrade head
+
+migrate-prod: ## Apply Alembic migrations inside the running backend container (compose/postgres); manual, for non-additive changes
+	$(COMPOSE) exec -T backend sh -c 'cd /app/backend && alembic upgrade head'
+
 # ---- Docker (single-machine deploy) -----------------------------------------
 .PHONY: build fe-agent up down restart deploy redeploy rebuild logs ps config destroy
 .PHONY: drain undrain drain-status

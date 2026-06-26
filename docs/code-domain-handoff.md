@@ -121,7 +121,7 @@ AgentRun (1) ──< AgentStep   (order_index, 可 parent_step_id 嵌套)
 
 ## 3. Agent Swarm 运行底座（`services/agent/`）
 
-- **runtime.py**：进程级单例 `agent_runtime = AgentRuntime(max_workers=int(os.getenv("AGENT_MAX_WORKERS", "8")))`（`ThreadPoolExecutor`，**默认全进程同时最多 8 个 run**；为支撑全栈 3 个并发容器构建 run 从 4 提到 8）。
+- **runtime.py**：进程级单例 `agent_runtime = AgentRuntime(max_workers=int(os.getenv("AGENT_MAX_WORKERS", "16")))`（`ThreadPoolExecutor`，**默认全进程同时最多 16 个 run**；为支撑全栈 3 个并发容器构建 run 从 4→8→16）。
   - workflow 用 `register_workflow(key, fn)` 注册进 `_WORKFLOWS`，模块加载时 `_register_builtin_workflows()` 注册上述七个 key。
   - `start(app, run_id)` → `executor.submit(self._execute, ...)` 立即返回；`_execute` 在 `with app.app_context():` 内跑，首启发 `RUN_STARTED`、置 `RUNNING`/`started_at`，调 `workflow_fn(ctx, recorder)`。
   - workflow 返回 `{status, resource_id?, extra_credits}`。结算：`credit_used = credit_reserved + extra_credits`。
@@ -265,7 +265,7 @@ UI-baseline 确认（`status=ui_confirmed`）之后才生成代码。容器化 w
 ### 8.2 `/api/agent`（Agent Swarm，`@jwt_required`，owner 校验 `_get_owned_run`）
 | 方法 | 路径 | 用途 |
 |---|---|---|
-| POST | `/runs` | 创建并启动 run（校验 domain/workflow，预扣 `WORKFLOW_COSTS[workflow]`；每用户活跃 run 上限 `MAX_CONCURRENT_RUNS`，默认 **6**（env `AGENT_MAX_CONCURRENT_RUNS`，为支撑全栈 3 并发 run 从 2 提到 6），超限 429 `CONCURRENCY_LIMIT`）|
+| POST | `/runs` | 创建并启动 run（校验 domain/workflow，预扣 `WORKFLOW_COSTS[workflow]`；每用户活跃 run 上限 `MAX_CONCURRENT_RUNS`，默认 **12**（env `AGENT_MAX_CONCURRENT_RUNS`，为支撑全栈 3 并发 run 从 2→6→12），超限 429 `CONCURRENCY_LIMIT`）|
 | GET | `/runs` | 列当前用户 run（按 domain/resource_id 过滤）|
 | GET | `/runs/<id>` | run + steps + events + artifacts 快照 |
 | GET | `/runs/<id>/stream` | SSE（`?last_sequence=` 断点续传）|
@@ -356,8 +356,8 @@ UI-baseline 确认（`status=ui_confirmed`）之后才生成代码。容器化 w
 | `AI_TEXT_READ_TIMEOUT` | Claude 单请求读超时(s) | 120 |
 | `OPENAI_API_KEY` / `AI_IMAGE_*` | 图像 provider（预览图）| — |
 | `CODE_PREVIEW_SETTLE_SECONDS` | 预览图逐张间隔(s, 0–30) | 2.0 |
-| `AGENT_MAX_WORKERS` | runtime 线程池上限（全进程并发 run）| 8 |
-| `AGENT_MAX_CONCURRENT_RUNS` | 每用户活跃 run 上限 | 6 |
+| `AGENT_MAX_WORKERS` | runtime 线程池上限（全进程并发 run）| 16 |
+| `AGENT_MAX_CONCURRENT_RUNS` | 每用户活跃 run 上限 | 12 |
 | `PRICE_CODE_FULL` / `_CONTEXT_VERIFY` / `_FRONTEND_PROJECT` / `_SECTION_REVISE` / `_FIGMA_SLICE` / `_CANVAS_RUN` / `_CONTRACT_SYNTHESIS` / `_BACKEND_PROJECT` / `_MIDDLEWARE` / `_FULLSTACK_DEPLOY` | 各操作积分单价（见 §9）| 0 |
 | `FE_AGENT_IMAGE` | 前端容器镜像 | `fe-agent:latest` |
 | `BE_AGENT_IMAGE` | 后端容器镜像（🆕 全栈）| `be-agent:latest` |

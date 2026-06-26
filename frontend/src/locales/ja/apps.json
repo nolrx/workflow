@@ -1,0 +1,209 @@
+{
+  "title": "アプリスペース",
+  "subtitle": "デプロイ済みのプロダクトを一元的に確認・改善",
+  "empty": "デプロイ済みのアプリはまだありません。フルスタック生成をデプロイすると、ここに表示されます。",
+  "notFound": "アプリが存在しないか、アクセス権がありません",
+  "search": "アプリ名で検索",
+  "filters": {
+    "status": "デプロイ状態",
+    "health": "ヘルス",
+    "all": "すべて"
+  },
+  "columns": {
+    "app": "アプリ",
+    "status": "デプロイ状態",
+    "health": "ヘルス",
+    "deployedAt": "最終デプロイ",
+    "updatedAt": "更新日時",
+    "visibility": "公開範囲",
+    "actions": "操作"
+  },
+  "view": {
+    "card": "カード表示",
+    "table": "テーブル表示"
+  },
+  "tabs": {
+    "overview": "概要",
+    "resources": "リソース",
+    "database": "データベース",
+    "code": "コード",
+    "iterate": "二次開発",
+    "logs": "ログ"
+  },
+  "resources": {
+    "viewCode": "コードを見る",
+    "files": "ファイル",
+    "none": "成果物なし",
+    "database": "データベース",
+    "engine": "エンジン",
+    "dbName": "DB 名",
+    "tables": "テーブル数",
+    "manageDb": "データベース管理"
+  },
+  "database": {
+    "title": "データベース",
+    "sqlite": "このアプリはコンテナ内 SQLite を使用しており、オンライン閲覧は未対応です。",
+    "unavailable": "データベースが利用できないか未設定です。",
+    "noTables": "テーブルなし",
+    "pickTable": "左のテーブルを選択して構造とデータを表示",
+    "sampleRows": "データプレビュー（先頭数行）",
+    "noRows": "データなし"
+  },
+  "code": {
+    "download": "ソースをダウンロード",
+    "empty": "ソース成果物なし",
+    "pickFile": "左のファイルを選択して内容を表示",
+    "binary": "バイナリファイル — プレビュー非対応",
+    "truncated": "内容が長いため切り詰めました"
+  },
+  "actions": {
+    "open": "アプリを開く",
+    "detail": "詳細",
+    "iterate": "二次開発",
+    "redeploy": "再デプロイ",
+    "replay": "実行記録",
+    "openProject": "元のプロジェクト",
+    "back": "アプリスペースへ戻る",
+    "retry": "再試行",
+    "stop": "停止"
+  },
+  "deployStatus": {
+    "pending": "保留中",
+    "provisioning": "準備中",
+    "building": "ビルド中",
+    "starting": "起動中",
+    "running": "稼働中",
+    "failed": "失敗",
+    "stopped": "停止",
+    "rolled_back": "ロールバック済み"
+  },
+  "health": {
+    "healthy": "正常",
+    "unhealthy": "異常",
+    "unknown": "不明",
+    "refresh": "ヘルス更新"
+  },
+  "runStatus": {
+    "queued": "待機中",
+    "running": "実行中",
+    "paused": "確認待ち",
+    "completed": "完了",
+    "partial": "一部完了",
+    "failed": "失敗",
+    "cancelled": "キャンセル"
+  },
+  "iterationStatus": {
+    "draft": "下書き",
+    "analyzing": "分析中",
+    "awaiting_plan_approval": "計画の承認待ち",
+    "generating": "生成中",
+    "staging_deploying": "デプロイ中",
+    "staging_ready": "ステージング準備完了",
+    "release_pending": "リリース待ち",
+    "released": "リリース済み",
+    "failed": "失敗",
+    "cancelled": "キャンセル"
+  },
+  "lanes": {
+    "frontend": "フロントエンド",
+    "backend": "バックエンド",
+    "middleware": "ミドルウェア",
+    "deploy": "デプロイ",
+    "requirements": "要件",
+    "contract": "契約",
+    "assets": "画像アセット"
+  },
+  "detail": {
+    "requirement": "初期要件",
+    "apiBase": "API ベース",
+    "previewUrl": "プレビュー URL",
+    "techStack": "技術スタック",
+    "recentRuns": "最近の実行",
+    "github": "GitHub リポジトリ",
+    "devBranch": "開発ブランチ"
+  },
+  "iterate": {
+    "title": "二次開発",
+    "subtitle": "デプロイ済みアプリから変更イテレーションを開始します。影響分析と実行計画を確認し、承認後に再生成・デプロイします。",
+    "new": "新しいイテレーション",
+    "changeType": "変更の目的",
+    "changeTypes": {
+      "bug_fix": "バグ修正",
+      "new_feature": "機能追加",
+      "ui_change": "UI 調整",
+      "backend_logic": "バックエンドロジック調整",
+      "data_model": "データモデル調整",
+      "other": "その他"
+    },
+    "instruction": "変更内容",
+    "instructionPlaceholder": "変更を一文で記述してください。例：会員ランクと特典ページを追加…",
+    "impactScope": "影響範囲",
+    "impactScopeAuto": "自動判定（手動で上書き可）",
+    "scopes": {
+      "frontend": "フロントエンドのみ",
+      "backend": "バックエンドのみ",
+      "frontend_backend": "フロント + バックエンド",
+      "backend_middleware": "バックエンド + ミドルウェア",
+      "fullstack": "フルスタック"
+    },
+    "allowContract": "API 契約の変更を許可",
+    "allowDb": "データベース schema の変更を許可",
+    "deployToProd": "完了後に本番へデプロイ",
+    "submit": "影響分析を開始",
+    "submitting": "送信中…",
+    "instructionRequired": "変更内容を入力してください",
+    "history": "イテレーション",
+    "noHistory": "二次開発の記録はまだありません",
+    "changeFlags": "影響レイヤー",
+    "flags": {
+      "requirement": "要件",
+      "ui": "UI",
+      "frontend": "フロント",
+      "backend": "バックエンド",
+      "middleware": "ミドルウェア",
+      "contract": "契約",
+      "database": "データベース",
+      "assets": "画像アセット"
+    },
+    "reasoning": "判定根拠",
+    "steps": "実行ステップ",
+    "risks": "リスク",
+    "confirm": "承認して生成開始",
+    "confirming": "開始中…",
+    "confirmHint": "承認すると影響範囲に応じて該当プロジェクトを再生成します。完了後にデプロイできます。",
+    "needsConfirm": "高リスク / 破壊的な変更です。続行する前に確認してください。",
+    "generating": "再生成中…",
+    "generationReady": "生成完了 — 新バージョンをデプロイできます",
+    "deploy": "新バージョンをデプロイ",
+    "deploying": "デプロイ中…",
+    "released": "現在の本番バージョンとしてリリース済み",
+    "failed": "このイテレーションは失敗しました",
+    "viewRun": "実行記録",
+    "riskLevels": {
+      "low": "低リスク",
+      "medium": "中リスク",
+      "high": "高リスク"
+    }
+  },
+  "toast": {
+    "iterationCreated": "影響分析を開始しました",
+    "iterationConfirmed": "計画を承認し、生成を開始しました",
+    "deployStarted": "デプロイを開始しました",
+    "noRun": "実行記録はまだありません",
+    "error": "操作に失敗しました",
+    "stopped": "デプロイを停止しました"
+  },
+  "scope": {
+    "label": "範囲",
+    "personal": "個人",
+    "createdBy": "作成者：{{name}}",
+    "unknownMember": "メンバー"
+  },
+  "loadMore": "もっと読み込む",
+  "logs": {
+    "tail": "最新 {{n}} 行",
+    "refresh": "更新",
+    "unavailable": "アプリ未稼働またはログなし",
+    "empty": "ログなし"
+  }
+}

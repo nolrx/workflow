@@ -1,9 +1,10 @@
 """
 Team models for collaboration
 """
-import uuid
 import secrets
+import uuid
 from datetime import datetime, timedelta
+
 from backend.extensions import db
 
 
@@ -95,6 +96,7 @@ class TeamInvitation(db.Model):
 
     expires_at = db.Column(db.DateTime, nullable=False, default=lambda: datetime.utcnow() + timedelta(days=7))
     accepted_at = db.Column(db.DateTime)
+    rejected_at = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     # Relationships
@@ -109,6 +111,15 @@ class TeamInvitation(db.Model):
     def is_accepted(self) -> bool:
         return self.accepted_at is not None
 
+    @property
+    def is_rejected(self) -> bool:
+        return self.rejected_at is not None
+
+    @property
+    def is_pending(self) -> bool:
+        """Actionable: neither accepted nor rejected, and not yet expired."""
+        return not self.is_accepted and not self.is_rejected and not self.is_expired
+
     def to_dict(self) -> dict:
         return {
             "id": self.id,
@@ -116,8 +127,11 @@ class TeamInvitation(db.Model):
             "team": self.team.to_dict() if self.team else None,
             "email": self.email,
             "role": self.role,
+            "inviter": self.inviter.to_dict(include_email=False) if self.inviter else None,
             "is_expired": self.is_expired,
             "is_accepted": self.is_accepted,
+            "is_rejected": self.is_rejected,
+            "is_pending": self.is_pending,
             "expires_at": self.expires_at.isoformat() if self.expires_at else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

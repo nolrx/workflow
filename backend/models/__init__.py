@@ -26,6 +26,7 @@ from backend.models.code import (
     GitHubRepoLink,
 )
 from backend.models.credit import CreditBalance, CreditTransaction, TeamCreditBalance
+from backend.models.notification import Notification
 from backend.models.team import Team, TeamInvitation, TeamMember
 from backend.models.user import Plan, User
 
@@ -41,6 +42,8 @@ __all__ = [
     "CreditBalance",
     "CreditTransaction",
     "TeamCreditBalance",
+    # Notifications
+    "Notification",
     # Code Studio
     "CodeProject",
     "CodeProjectStatus",

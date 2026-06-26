@@ -276,6 +276,24 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
                     payload={"phase": phase},
                 )
 
+        # 二次开发·真实续改: when this run is an iteration AND a prior backend
+        # source exists, seed it so the agent EDITS the existing project per the
+        # change instruction instead of regenerating from scratch.
+        from backend.services.agent.workflows._iteration_support import (
+            iteration_change,
+            load_prior_source,
+        )
+
+        change = iteration_change(ctx)
+        base_files = load_prior_source(project_id, "backend") if change else {}
+        if change and base_files:
+            recorder.emit(
+                AgentEventType.PROGRESS,
+                step_id=step.id,
+                message=f"续改模式：基于现有后端工程（{len(base_files)} 个文件）改动",
+                payload={"mode": "iteration", "base_files": len(base_files)},
+            )
+
         result = service.build_project(
             requirement=project.requirement_input,
             requirements_doc=project.requirements_doc,
@@ -284,6 +302,9 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
             contract_block=contract_block,
             middleware_block=middleware_block,
             context_ledger=injected,
+            base_files=base_files or None,
+            change_instruction=(change or {}).get("instruction", ""),
+            change_plan=(change or {}).get("plan_text", ""),
             on_event=on_event,
             is_cancelled=ctx.is_cancelled,
         )

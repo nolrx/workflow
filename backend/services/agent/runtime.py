@@ -51,6 +51,45 @@ def _run_produced_nothing(run_id: str) -> bool:
     return AgentArtifact.query.filter_by(run_id=run_id).count() == 0
 
 
+# --- Run-finished notification producer --------------------------------------
+# Surfaces long, walk-away outcomes in the generic in-app notification feed (see
+# notification_service — the feed is type-driven, this is just one producer).
+# Curated to avoid noise: a deploy going live, or ANY failed run. Fail-soft — a
+# notification must never break the run's own bookkeeping.
+_DEPLOY_WORKFLOW = "code_fullstack_deploy"
+
+
+def _notify_run_finished(run: AgentRun) -> None:
+    """Emit a notice to the run's owner for notable terminal outcomes."""
+    try:
+        from backend.services import notification_service as ns
+
+        link = f"/apps/{run.resource_id}" if run.resource_id else None
+        if run.status == AgentRunStatus.COMPLETED and run.workflow == _DEPLOY_WORKFLOW:
+            ns.create_notification(
+                run.user_id, ns.TYPE_CODE_DEPLOY_SUCCEEDED, level=ns.LEVEL_SUCCESS,
+                data={"workflow": run.workflow, "run_id": run.id,
+                      "resource_id": run.resource_id, "link": link},
+                ref_type="agent_run", ref_id=run.id,
+            )
+            db.session.commit()
+        elif run.status == AgentRunStatus.FAILED:
+            ns.create_notification(
+                run.user_id, ns.TYPE_RUN_FAILED, level=ns.LEVEL_ERROR,
+                data={"workflow": run.workflow, "run_id": run.id,
+                      "resource_id": run.resource_id,
+                      "link": link if run.workflow == _DEPLOY_WORKFLOW else None},
+                ref_type="agent_run", ref_id=run.id,
+            )
+            db.session.commit()
+    except Exception:  # noqa: BLE001 — best-effort: never fail the run on a notice
+        logger.error("run-finished notification failed for %s", run.id, exc_info=True)
+        try:
+            db.session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 # --- Resume-across-restart policy --------------------------------------------
 # Which workflows a restart should RESUME (continue from their persisted state)
 # instead of failing. Two strategies, by how the workflow persists progress:
@@ -71,6 +110,9 @@ RESUME_FROM_SCRATCH = {
     "code_frontend_project_generation",
     "code_backend_project_generation",
     "code_middleware_provisioning",
+    # The iteration analysis is a single cheap planning pass with no external side
+    # effects — a restart safely re-runs it from the top.
+    "code_app_iteration_analysis",
 }
 _RESUMABLE = RESUME_AS_RETRY | RESUME_FROM_SCRATCH
 # Everything else (notably ``code_fullstack_deploy``) is NOT auto-resumed: a crash
@@ -346,6 +388,7 @@ class AgentRuntime:
                         message="工作流结束",
                         payload={"status": run.status, "resource_id": run.resource_id},
                     )
+                    _notify_run_finished(run)
             except Exception as exc:  # noqa: BLE001 - persist failure, never crash the worker
                 logger.error("Agent run %s failed: %s", run_id, exc, exc_info=True)
                 db.session.rollback()
@@ -395,6 +438,9 @@ class AgentRuntime:
                     )
                 except Exception:  # noqa: BLE001
                     logger.error("Failed to emit run_completed for run %s", run_id, exc_info=True)
+                failed_run = db.session.get(AgentRun, run_id)
+                if failed_run:
+                    _notify_run_finished(failed_run)
             finally:
                 self._clear_cancel(run_id)
                 # ThreadPoolExecutor reuses threads across runs; reset the
@@ -406,10 +452,15 @@ class AgentRuntime:
 # fans out THREE concurrent container/model runs per project (frontend + backend
 # + middleware), so the default headroom is raised above the original 4 — each
 # run mostly blocks on `docker run`, so the slots are I/O-bound, not CPU-bound.
-agent_runtime = AgentRuntime(max_workers=int(os.getenv("AGENT_MAX_WORKERS", "8")))
+# Default doubled 8 -> 16 to raise overall throughput; each extra slot may spin
+# up a Docker build, so size this to the host's CPU/memory.
+agent_runtime = AgentRuntime(max_workers=int(os.getenv("AGENT_MAX_WORKERS", "16")))
 
 
 def _register_builtin_workflows() -> None:
+    from backend.services.agent.workflows.code_app_iteration_workflow import (
+        run_code_app_iteration_analysis_workflow,
+    )
     from backend.services.agent.workflows.code_backend_project_workflow import (
         run_code_backend_project_workflow,
     )
@@ -431,6 +482,9 @@ def _register_builtin_workflows() -> None:
     from backend.services.agent.workflows.code_workflow import run_code_workflow
 
     register_workflow("code_full_generation", run_code_workflow)
+    register_workflow(
+        "code_app_iteration_analysis", run_code_app_iteration_analysis_workflow
+    )
     register_workflow("code_frontend_project_generation", run_code_frontend_project_workflow)
     register_workflow("code_canvas_generation", run_code_canvas_generation)
     register_workflow("code_figma_slice_generation", run_code_figma_slice_workflow)

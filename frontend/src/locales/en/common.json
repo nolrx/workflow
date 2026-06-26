@@ -2,6 +2,7 @@
   "nav": {
     "dashboard": "Dashboard",
     "codeStudio": "Software Studio",
+    "apps": "App Space",
     "pptStudio": "PPT Studio",
     "redbookStudio": "RedBook Studio",
     "settings": "Settings",

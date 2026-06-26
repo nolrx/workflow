@@ -18,6 +18,7 @@ import { useTranslation } from "react-i18next"
 import { Link, useParams } from "react-router-dom"
 import { toast } from "sonner"
 
+import { EXISTING_SOURCE_KINDS, type SourceKind } from "@/api/canvas"
 import { NodeConfigPanel } from "@/components/canvas/NodeConfigPanel"
 import { canvasNodeTypes } from "@/components/canvas/nodeTypes"
 import { Button } from "@/components/ui/button"
@@ -39,7 +40,15 @@ function CanvasInner() {
   const onEdgesChange = useCanvasStore((s) => s.onEdgesChange)
   const onConnect = useCanvasStore((s) => s.onConnect)
   const addNode = useCanvasStore((s) => s.addNode)
+  const addStageNode = useCanvasStore((s) => s.addStageNode)
+  const addSourceNode = useCanvasStore((s) => s.addSourceNode)
+  const nodeContracts = useCanvasStore((s) => s.nodeContracts)
+  const loadNodeContracts = useCanvasStore((s) => s.loadNodeContracts)
   const runCanvas = useCanvasStore((s) => s.runCanvas)
+  const freezeCanvas = useCanvasStore((s) => s.freezeCanvas)
+  const paused = useCanvasStore((s) => s.paused)
+  const reviewStage = useCanvasStore((s) => s.reviewStage)
+  const resumeCanvas = useCanvasStore((s) => s.resumeCanvas)
   const loadForProject = useCanvasStore((s) => s.loadForProject)
   const reset = useCanvasStore((s) => s.reset)
 
@@ -57,6 +66,26 @@ function CanvasInner() {
     }
   }
 
+  const handleFreeze = async () => {
+    try {
+      const pinned = await freezeCanvas()
+      toast.success(t("toolbar.frozen", { count: pinned }))
+    } catch {
+      toast.error(t("toolbar.freezeFailed"))
+    }
+  }
+
+  const [reviseText, setReviseText] = useState("")
+  const reviewLabel = nodes.find((n) => n.id === reviewStage)?.data.label ?? reviewStage ?? ""
+  const handleResume = async (action: "approve" | "revise") => {
+    try {
+      await resumeCanvas(action, action === "revise" ? reviseText : "")
+      setReviseText("")
+    } catch {
+      toast.error(t("review.failed"))
+    }
+  }
+
   // Ensure the project is loaded (source nodes are seeded from its products).
   useEffect(() => {
     if (projectId && project?.id !== projectId) void loadProject(projectId)
@@ -67,6 +96,11 @@ function CanvasInner() {
     if (project?.id && project.id === projectId) void loadForProject(project)
     return () => reset()
   }, [project, projectId, loadForProject, reset])
+
+  // Load the typed node-contract catalog once (drives the stage palette).
+  useEffect(() => {
+    void loadNodeContracts()
+  }, [loadNodeContracts])
 
   return (
     <div className="flex h-screen flex-col">
@@ -91,6 +125,42 @@ function CanvasInner() {
           <GitBranch className="mr-1 h-4 w-4" />
           <span className="hidden sm:inline">{t("toolbar.addBranch")}</span>
         </Button>
+        {Object.keys(nodeContracts).length > 0 && (
+          <select
+            className="h-8 rounded-md border bg-background px-2 text-sm"
+            value=""
+            onChange={(e) => {
+              const key = e.target.value
+              if (!key) return
+              addStageNode(key, t(`stage.name.${key}`, { defaultValue: key }))
+            }}
+          >
+            <option value="">{t("toolbar.addStage")}</option>
+            {Object.values(nodeContracts).map((c) => (
+              <option key={c.node_type} value={c.node_type} disabled={!c.executable}>
+                {t(`stage.name.${c.node_type}`, { defaultValue: c.node_type })}
+                {c.executable ? "" : " ·"}
+              </option>
+            ))}
+          </select>
+        )}
+        <select
+          className="h-8 rounded-md border bg-background px-2 text-sm"
+          value=""
+          onChange={(e) => {
+            const kind = e.target.value as SourceKind
+            if (!kind) return
+            const short = kind.replace("existing_", "")
+            addSourceNode(kind, t(`source.existing.${short}`, { defaultValue: kind }))
+          }}
+        >
+          <option value="">{t("toolbar.addSource")}</option>
+          {EXISTING_SOURCE_KINDS.map((k) => (
+            <option key={k} value={k}>
+              {t(`source.existing.${k.replace("existing_", "")}`, { defaultValue: k })}
+            </option>
+          ))}
+        </select>
         <div className="ml-auto flex items-center gap-3">
           <span className="text-xs text-muted-foreground">
             {saving ? (
@@ -105,6 +175,15 @@ function CanvasInner() {
               <span className="text-red-500">{t("status.loadFailed")}</span>
             ) : null}
           </span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleFreeze}
+            disabled={running || status !== "ready"}
+          >
+            <span className="hidden sm:inline">{t("toolbar.freeze")}</span>
+            <span className="sm:hidden">📌</span>
+          </Button>
           <Button size="sm" onClick={handleRun} disabled={running || status !== "ready"}>
             {running ? (
               <Loader2 className="mr-1 h-4 w-4 animate-spin" />
@@ -117,6 +196,28 @@ function CanvasInner() {
           </Button>
         </div>
       </header>
+      {paused && (
+        <div className="flex flex-wrap items-center gap-2 border-b bg-amber-50 px-4 py-2 text-sm dark:bg-amber-950/30">
+          <span className="font-medium">{t("review.awaiting", { stage: reviewLabel })}</span>
+          <input
+            className="h-8 min-w-48 flex-1 rounded-md border bg-background px-2 text-sm"
+            placeholder={t("review.placeholder")}
+            value={reviseText}
+            onChange={(e) => setReviseText(e.target.value)}
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!reviseText.trim()}
+            onClick={() => handleResume("revise")}
+          >
+            {t("review.revise")}
+          </Button>
+          <Button size="sm" onClick={() => handleResume("approve")}>
+            {t("review.approve")}
+          </Button>
+        </div>
+      )}
       <div className="flex min-h-0 flex-1">
         <div className="flex-1">
           <ReactFlow<FlowNode, FlowEdge>

@@ -366,6 +366,135 @@ def count_tables(database_url: Optional[str]) -> Optional[int]:
 
 
 _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+# --- Read-only introspection (App Space 数据库管理入口) ------------------------
+def project_database_url(db_name: Optional[str]) -> Optional[str]:
+    """The per-project Postgres connection URL from a deployment's ``db_name``.
+
+    Returns ``None`` for sqlite-local deployments (db_name is None) or when the
+    platform has no admin DATABASE_URL — those have no introspectable shared DB.
+    """
+    if not db_name:
+        return None
+    admin = _admin_database_url()
+    if not admin or admin.startswith("sqlite"):
+        return None
+    try:
+        return _project_database_url(admin, db_name)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _jsonable(value):
+    """Coerce a DB value to something JSON-serializable (best effort)."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            return value.decode("utf-8")
+        except Exception:  # noqa: BLE001
+            return f"<{len(value)} bytes>"
+    return str(value)
+
+
+def introspect_database(
+    database_url: Optional[str], *, max_tables: int = 200, max_columns: int = 200
+) -> dict:
+    """Read-only schema introspection of a project's Postgres database.
+
+    Returns ``{engine, available, tables:[{name, columns:[{name,type}], row_count}]}``.
+    Postgres-only (sqlite/unknown → available=False). Bounded + best-effort: never
+    raises, never mutates. Identifiers come from ``information_schema`` and are
+    validated against ``_IDENT_RE`` before any quoted interpolation.
+    """
+    if not database_url:
+        return {"engine": "unknown", "available": False, "tables": []}
+    if database_url.startswith("sqlite"):
+        return {"engine": "sqlite", "available": False, "tables": []}
+    out = {"engine": "postgres", "available": True, "tables": []}
+    try:
+        engine = create_engine(
+            database_url, isolation_level="AUTOCOMMIT", connect_args=_PG_DDL_CONNECT_ARGS
+        )
+        with engine.connect() as conn:
+            tnames = [
+                r[0]
+                for r in conn.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema='public' AND table_type='BASE TABLE' "
+                        "ORDER BY table_name"
+                    )
+                )
+            ][:max_tables]
+            cols_by_table: dict[str, list] = {}
+            for tn, cn, dt in conn.execute(
+                text(
+                    "SELECT table_name, column_name, data_type FROM information_schema.columns "
+                    "WHERE table_schema='public' ORDER BY table_name, ordinal_position"
+                )
+            ):
+                cols_by_table.setdefault(tn, []).append({"name": cn, "type": dt})
+            for tn in tnames:
+                row_count = None
+                if _IDENT_RE.match(tn):
+                    try:
+                        row_count = conn.execute(text(f'SELECT count(*) FROM "{tn}"')).scalar()
+                    except Exception:  # noqa: BLE001
+                        row_count = None
+                out["tables"].append(
+                    {
+                        "name": tn,
+                        "columns": cols_by_table.get(tn, [])[:max_columns],
+                        "row_count": int(row_count) if row_count is not None else None,
+                    }
+                )
+        engine.dispose()
+        return out
+    except Exception as error:  # noqa: BLE001 — read-only, never raised
+        logger.warning("introspect_database failed: %s", error)
+        return {"engine": "postgres", "available": False, "tables": [], "error": str(error)[:200]}
+
+
+def sample_rows(database_url: Optional[str], table: str, limit: int = 20) -> dict:
+    """Read-only sample of up to ``limit`` rows from a project DB table.
+
+    The table name is validated against ``_IDENT_RE`` AND verified to exist in
+    ``information_schema`` (parameterized) before the quoted ``SELECT *`` — so no
+    arbitrary/injected identifier reaches the query. Read-only, bounded, never raises.
+    """
+    if not database_url or database_url.startswith("sqlite"):
+        return {"available": False, "columns": [], "rows": []}
+    if not (table and _IDENT_RE.match(table)):
+        return {"available": False, "columns": [], "rows": [], "error": "invalid table name"}
+    try:
+        limit = max(1, min(int(limit or 20), 200))
+    except (TypeError, ValueError):
+        limit = 20
+    try:
+        engine = create_engine(
+            database_url, isolation_level="AUTOCOMMIT", connect_args=_PG_DDL_CONNECT_ARGS
+        )
+        with engine.connect() as conn:
+            exists = conn.execute(
+                text(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema='public' AND table_name=:t"
+                ),
+                {"t": table},
+            ).scalar()
+            if not exists:
+                engine.dispose()
+                return {"available": False, "columns": [], "rows": [], "error": "table not found"}
+            result = conn.execute(text(f'SELECT * FROM "{table}" LIMIT {limit}'))
+            columns = list(result.keys())
+            rows = [[_jsonable(v) for v in row] for row in result.fetchall()]
+        engine.dispose()
+        return {"available": True, "columns": columns, "rows": rows, "limit": limit}
+    except Exception as error:  # noqa: BLE001
+        logger.warning("sample_rows failed: %s", error)
+        return {"available": False, "columns": [], "rows": [], "error": str(error)[:200]}
 # Explicit type ALLOW-LIST for the ADD COLUMN path. ctype comes from an LLM, so a
 # permissive "DDL-fragment" regex (letters/digits/()/,/space) would let a type
 # string smuggle a constraint clause into ADD COLUMN — `TEXT REFERENCES secret(id)`,

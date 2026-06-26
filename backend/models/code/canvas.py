@@ -27,9 +27,10 @@ class CodeCanvasNodeType:
     AGENT = "agent"  # free-prompt LLM node (selectable role + model)
     MERGE = "merge"  # concatenate upstream outputs, no LLM call
     BRANCH = "branch"  # route downstream by a classified key
+    STAGE = "stage"  # typed contract node — runs a real generation stage (see contracts/)
 
-    ALL = (SOURCE_DOC, AGENT, MERGE, BRANCH)
-    EXECUTABLE = (AGENT, MERGE, BRANCH)  # source_doc is pre-filled, not executed
+    ALL = (SOURCE_DOC, AGENT, MERGE, BRANCH, STAGE)
+    EXECUTABLE = (AGENT, MERGE, BRANCH, STAGE)  # source_doc is pre-filled, not executed
 
 
 class CodeCanvas(db.Model):

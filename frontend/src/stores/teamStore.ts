@@ -38,12 +38,20 @@ export interface TeamMember {
 export interface TeamInvitation {
   id: string
   team_id: string
+  team?: Team | null
   email: string
   role: "admin" | "member" | "viewer"
   token: string
   invited_by: string
+  inviter?: {
+    id: string
+    display_name: string | null
+    avatar_url: string | null
+  } | null
   expires_at: string
   accepted_at: string | null
+  rejected_at?: string | null
+  is_pending?: boolean
   created_at: string
 }
 
@@ -61,6 +69,10 @@ interface TeamState {
   currentTeam: Team | null
   members: TeamMember[]
   invitations: TeamInvitation[]
+  /** Pending invitations addressed to the current user (to act on). */
+  pendingInvitations: TeamInvitation[]
+  /** Active App Space / creation scope: null = personal, otherwise a team id. */
+  scopeTeamId: string | null
   isLoading: boolean
   error: string | null
 
@@ -69,9 +81,12 @@ interface TeamState {
   fetchTeam: (teamId: string) => Promise<void>
   createTeam: (data: CreateTeamRequest) => Promise<Team>
   setCurrentTeam: (team: Team | null) => void
+  setScopeTeamId: (teamId: string | null) => void
   fetchMembers: (teamId: string) => Promise<void>
   inviteMember: (teamId: string, data: InviteMemberRequest) => Promise<void>
   acceptInvitation: (token: string) => Promise<void>
+  rejectInvitation: (token: string) => Promise<void>
+  fetchPendingInvitations: () => Promise<void>
   clearError: () => void
 }
 
@@ -82,6 +97,8 @@ export const useTeamStore = create<TeamState>()(
       currentTeam: null,
       members: [],
       invitations: [],
+      pendingInvitations: [],
+      scopeTeamId: null,
       isLoading: false,
       error: null,
 
@@ -143,6 +160,8 @@ export const useTeamStore = create<TeamState>()(
         set({ currentTeam: team, members: [], invitations: [] })
       },
 
+      setScopeTeamId: (teamId) => set({ scopeTeamId: teamId }),
+
       fetchMembers: async (teamId) => {
         set({ isLoading: true, error: null })
         try {
@@ -185,7 +204,13 @@ export const useTeamStore = create<TeamState>()(
             `/teams/invitations/${token}/accept`
           )
           set((state) => ({
-            teams: [...state.teams, response.team],
+            // Dedupe — the team may already be present from a prior fetch.
+            teams: state.teams.some((t) => t.id === response.team.id)
+              ? state.teams
+              : [...state.teams, response.team],
+            pendingInvitations: state.pendingInvitations.filter(
+              (inv) => inv.token !== token
+            ),
             isLoading: false,
           }))
         } catch (error: unknown) {
@@ -197,12 +222,43 @@ export const useTeamStore = create<TeamState>()(
         }
       },
 
+      rejectInvitation: async (token) => {
+        set({ isLoading: true, error: null })
+        try {
+          await api.post<{ message: string }>(`/teams/invitations/${token}/reject`)
+          set((state) => ({
+            pendingInvitations: state.pendingInvitations.filter(
+              (inv) => inv.token !== token
+            ),
+            isLoading: false,
+          }))
+        } catch (error: unknown) {
+          const message =
+            (error as { response?: { data?: { error?: string } } })?.response
+              ?.data?.error || t('errors:team.rejectInvitationFailed')
+          set({ error: message, isLoading: false })
+          throw error
+        }
+      },
+
+      fetchPendingInvitations: async () => {
+        try {
+          const response = await api.get<{ invitations: TeamInvitation[] }>(
+            "/teams/invitations/pending"
+          )
+          set({ pendingInvitations: response.invitations })
+        } catch {
+          /* non-critical: the notification feed is the primary surface */
+        }
+      },
+
       clearError: () => set({ error: null }),
     }),
     {
       name: "team-store",
       partialize: (state) => ({
         currentTeam: state.currentTeam,
+        scopeTeamId: state.scopeTeamId,
       }),
     }
   )

@@ -250,6 +250,12 @@ def start_deploy(project_id: str):
     if not project:
         return error_response("NOT_FOUND", "项目不存在或无权访问", 404)
 
+    # Optional: link this deploy to a 二次开发 iteration (App Space). When present
+    # the iteration advances to STAGING_DEPLOYING and reconciles to RELEASED once
+    # the deploy run completes and the deployment is RUNNING (see apps_routes).
+    body = request.get_json(silent=True) or {}
+    iteration_id = body.get("iteration_id")
+
     # Require a completed backend run (the deploy reads its source).
     backend_done = (
         AgentRun.query.filter_by(
@@ -290,6 +296,7 @@ def start_deploy(project_id: str):
         AgentRun.status.in_(list(AgentRunStatus.ACTIVE)),
     ).first()
     if in_flight:
+        _link_iteration_deploy(iteration_id, user_id, project_id, in_flight.id)
         return success_response(
             {"run_id": in_flight.id, "stream_url": f"/api/agent/runs/{in_flight.id}/stream"},
             "部署已在进行中",
@@ -298,11 +305,34 @@ def start_deploy(project_id: str):
     run = _start_run(user_id, project.team_id, "code_fullstack_deploy", project_id, {})
     if run is None:
         return error_response("INSUFFICIENT_CREDITS", "积分不足，无法启动部署", 402)
+    _link_iteration_deploy(iteration_id, user_id, project_id, run.id)
     return success_response(
         {"run_id": run.id, "stream_url": f"/api/agent/runs/{run.id}/stream"},
         "应用部署已启动",
         201,
     )
+
+
+def _link_iteration_deploy(
+    iteration_id: str | None, user_id: str, project_id: str, run_id: str
+) -> None:
+    """Attach a deploy run to a 二次开发 iteration and advance it to staging.
+
+    Owner-scoped + best-effort: an unknown / unowned iteration is ignored. Imported
+    lazily to avoid an apps_routes ⇄ fullstack_routes import cycle.
+    """
+    if not iteration_id:
+        return
+    from backend.models.code.fullstack import CodeAppIteration, IterationStatus
+
+    iteration = CodeAppIteration.query.filter_by(
+        id=iteration_id, project_id=project_id, user_id=user_id
+    ).first()
+    if not iteration:
+        return
+    iteration.deploy_run_id = run_id
+    iteration.status = IterationStatus.STAGING_DEPLOYING
+    db.session.commit()
 
 
 @fullstack_bp.route("/projects/<project_id>/fullstack/status", methods=["GET"])

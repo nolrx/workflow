@@ -8,7 +8,7 @@
  */
 import { api } from "@/api/client"
 
-export type CanvasNodeType = "source_doc" | "agent" | "merge" | "branch"
+export type CanvasNodeType = "source_doc" | "agent" | "merge" | "branch" | "stage"
 
 /** What a source node references on the project (read-only input). */
 export type SourceKind =
@@ -17,6 +17,20 @@ export type SourceKind =
   | "style_prompt"
   | "preview"
   | "code_document"
+  // "Existing built product" sources: reuse a current product (e.g. an existing
+  // frontend) instead of regenerating it — wire into a deploy / build input.
+  | "existing_frontend"
+  | "existing_backend"
+  | "existing_contract"
+  | "existing_middleware"
+
+/** The "existing built product" source kinds — added manually, not auto-seeded. */
+export const EXISTING_SOURCE_KINDS: SourceKind[] = [
+  "existing_frontend",
+  "existing_backend",
+  "existing_contract",
+  "existing_middleware",
+]
 
 export interface SourceDocConfig {
   source_kind: SourceKind
@@ -65,11 +79,45 @@ export interface BranchConfig {
   model?: NodeModel | null
 }
 
+/** A typed stage node: runs a real generation stage via its node contract. */
+export interface PromptPin {
+  key: string
+  version: number | null
+  hash: string | null
+}
+
+export interface StageConfig {
+  contract_key: string
+  prompt?: string
+  model?: NodeModel | null
+  /** Frozen prompt version stamped at publish time (absent ⇒ follow live HEAD). */
+  prompt_pin?: PromptPin | null
+}
+
+/** One typed port on a node contract (catalog view). */
+export interface NodeContractPort {
+  name: string
+  type: string
+  required?: boolean
+}
+
+/** A node contract as exposed to the canvas palette (the composable "component"). */
+export interface NodeContractCatalogItem {
+  node_type: string
+  role: string
+  review_gate: boolean
+  executable: boolean
+  inputs: NodeContractPort[]
+  outputs: NodeContractPort[]
+  prompt_key: string | null
+}
+
 export type CanvasNodeConfig =
   | SourceDocConfig
   | AgentConfig
   | MergeConfig
   | BranchConfig
+  | StageConfig
   | Record<string, unknown>
 
 export interface CanvasNodeData {
@@ -165,5 +213,23 @@ export const canvasApi = {
   },
   remove: async (projectId: string, canvasId: string): Promise<void> => {
     await api.delete<Envelope<unknown>>(`/code/projects/${projectId}/canvases/${canvasId}`)
+  },
+  /** The typed node-contract catalog that drives the typed-node palette. */
+  nodeContracts: async (): Promise<NodeContractCatalogItem[]> => {
+    const res = await api.get<Envelope<{ node_contracts: NodeContractCatalogItem[] }>>(
+      "/code/node-contracts"
+    )
+    return res.data.node_contracts
+  },
+  /** Freeze typed stage prompts to exact versions (reproducible runs). */
+  freeze: async (
+    projectId: string,
+    canvasId: string
+  ): Promise<{ canvas: Canvas; pinned: number }> => {
+    const res = await api.post<Envelope<{ canvas: Canvas; pinned: number }>>(
+      `/code/projects/${projectId}/canvases/${canvasId}/freeze`,
+      {}
+    )
+    return res.data
   },
 }

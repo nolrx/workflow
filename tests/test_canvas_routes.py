@@ -49,6 +49,42 @@ def auth(app):
     }
 
 
+def test_node_contracts_catalog(auth):
+    """The canvas palette fetches the typed node-contract catalog."""
+    client, headers = auth["client"], auth["headers"]
+    resp = client.get("/api/code/node-contracts", headers=headers)
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    catalog = resp.get_json()["data"]["node_contracts"]
+    by_type = {c["node_type"]: c for c in catalog}
+    assert {"requirements", "flow", "deploy"} <= set(by_type)
+    assert by_type["requirements"]["executable"] is True
+    assert by_type["requirements"]["outputs"][0]["type"] == "code:requirements_doc"
+
+
+def test_freeze_canvas_pins_stage_prompts(auth):
+    """Freezing stamps a frozen prompt pin onto each typed stage node."""
+    client, headers, pid = auth["client"], auth["headers"], auth["project_id"]
+    nodes = [
+        {
+            "id": "R",
+            "type": "stage",
+            "position": {"x": 0, "y": 0},
+            "data": {"label": "需求", "config": {"contract_key": "requirements"}},
+        }
+    ]
+    resp = client.post(
+        f"/api/code/projects/{pid}/canvases", json={"name": "c", "nodes": nodes}, headers=headers
+    )
+    cid = resp.get_json()["data"]["canvas"]["id"]
+
+    resp = client.post(f"/api/code/projects/{pid}/canvases/{cid}/freeze", headers=headers)
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    data = resp.get_json()["data"]
+    assert data["pinned"] == 1
+    rnode = next(n for n in data["canvas"]["nodes"] if n["id"] == "R")
+    assert rnode["data"]["config"]["prompt_pin"]["key"] == "code/requirements_prompt.txt"
+
+
 def test_canvas_crud_roundtrip(auth, monkeypatch):
     client, headers, pid = auth["client"], auth["headers"], auth["project_id"]
 

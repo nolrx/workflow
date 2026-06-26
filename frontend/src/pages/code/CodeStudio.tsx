@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Info } from "lucide-react";
+import { Info, Workflow } from "lucide-react";
 import { toast } from "sonner";
 import { AgentRunPanel } from "@/components/agent/AgentRunPanel";
 import { CodeStepper } from "@/components/code/CodeStepper";
@@ -30,6 +30,7 @@ import { useCodeStore } from "@/stores/codeStore";
 export function CodeStudio() {
     const { t } = useTranslation("code");
     const { t: ta } = useTranslation("agent");
+    const { t: tc } = useTranslation("canvas");
 
     const project = useCodeStore((state) => state.project);
     const selectedStyleIds = useCodeStore((state) => state.selectedStyleIds);
@@ -256,6 +257,19 @@ export function CodeStudio() {
                         />
                     </div>
                     <div className="flex shrink-0 items-center justify-end gap-2">
+                        {/* Blueprint / canvas mode: compose this project's stages into a
+                custom node graph (the composable-workflow canvas). */}
+                        {project && (
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8 sm:h-9"
+                                onClick={() => navigate(`/code/${project.id}/canvas`)}
+                            >
+                                <Workflow className="h-4 w-4 sm:mr-1.5" />
+                                <span className="hidden sm:inline">{tc("entry")}</span>
+                            </Button>
+                        )}
                         {/* GitHub auto-sync status (read-only): repo link + latest push. Renders
                 nothing until the session has a repo or a sync event. */}
                         {project && <GitHubRepoCard projectId={project.id} />}

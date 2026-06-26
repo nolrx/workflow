@@ -20,6 +20,7 @@ import { create } from "zustand"
 
 import { AGENT_API_BASE, agentApi, type AgentStepStatus } from "@/api/agent"
 import {
+  EXISTING_SOURCE_KINDS,
   canvasApi,
   type AgentConfig,
   type BranchConfig,
@@ -30,7 +31,10 @@ import {
   type CanvasNodeData,
   type CanvasNodeType,
   type MergeConfig,
+  type NodeContractCatalogItem,
+  type SourceDocConfig,
   type SourceKind,
+  type StageConfig,
 } from "@/api/canvas"
 import type { CodeProject } from "@/api/code"
 import { tokenManager } from "@/api/client"
@@ -68,7 +72,12 @@ function genId(prefix: string): string {
   return `${prefix}_${rand}`
 }
 
-const SOURCE_LABELS: Record<Exclude<SourceKind, "code_document">, string> = {
+// Only the auto-seeded stage-product sources need labels here; the "existing
+// built product" source kinds are wired manually, not seeded.
+const SOURCE_LABELS: Record<
+  "requirements_doc" | "development_flow" | "style_prompt" | "preview",
+  string
+> = {
   requirements_doc: "需求文档",
   development_flow: "开发流程",
   style_prompt: "风格文档",
@@ -114,6 +123,7 @@ const DEFAULT_LABEL: Record<CanvasNodeType, string> = {
   agent: "Agent",
   merge: "合并",
   branch: "条件分支",
+  stage: "阶段",
 }
 
 /** Build read-only source nodes from the project's existing stage products. */
@@ -168,13 +178,20 @@ function toCanvasEdges(edges: FlowEdge[]): CanvasEdge[] {
   })
 }
 
+/** Auto-seeded stage-product sources are read-only; manually-added "existing
+ * product" sources are deletable. */
+function isExistingProductSource(config: unknown): boolean {
+  const kind = (config as { source_kind?: string } | null)?.source_kind
+  return !!kind && (EXISTING_SOURCE_KINDS as string[]).includes(kind)
+}
+
 function fromCanvas(canvas: Canvas): { nodes: FlowNode[]; edges: FlowEdge[] } {
   const nodes: FlowNode[] = (canvas.nodes || []).map((n) => ({
     id: n.id,
     type: n.type,
     position: n.position,
     data: n.data,
-    deletable: n.type !== "source_doc",
+    deletable: n.type !== "source_doc" || isExistingProductSource(n.data?.config),
   }))
   const edges: FlowEdge[] = (canvas.edges || []).map((e) => ({
     id: e.id,
@@ -199,16 +216,28 @@ interface CanvasState {
   runId: string | null
   /** Per-node live execution status, keyed by node id (set during a run). */
   nodeRunStatus: Record<string, NodeRunStatus>
+  /** Typed node-contract catalog (the composable "components"), keyed by node_type. */
+  nodeContracts: Record<string, NodeContractCatalogItem>
+  /** Set when a review-gated stage node paused the run; reviewStage is that node id. */
+  paused: boolean
+  reviewStage: string | null
 
   loadForProject: (project: CodeProject) => Promise<void>
+  loadNodeContracts: () => Promise<void>
   onNodesChange: (changes: NodeChange<FlowNode>[]) => void
   onEdgesChange: (changes: EdgeChange<FlowEdge>[]) => void
   onConnect: (connection: Connection) => void
   addNode: (type: CanvasNodeType, position?: { x: number; y: number }) => void
+  addStageNode: (contractKey: string, label: string, position?: { x: number; y: number }) => void
+  addSourceNode: (sourceKind: SourceKind, label: string, position?: { x: number; y: number }) => void
   updateNodeConfig: (nodeId: string, patch: Record<string, unknown>) => void
   updateNodeLabel: (nodeId: string, label: string) => void
   removeNode: (nodeId: string) => void
   runCanvas: () => Promise<void>
+  /** Freeze typed stage prompts to exact versions; returns how many were pinned. */
+  freezeCanvas: () => Promise<number>
+  /** Approve / revise a paused review gate and resume the run. */
+  resumeCanvas: (action: "approve" | "revise", instruction?: string) => Promise<void>
   /** Fetch a node's produced artifact text from the last run, if any. */
   fetchNodeOutput: (nodeId: string) => Promise<string | null>
   save: () => Promise<void>
@@ -279,13 +308,19 @@ export const useCanvasStore = create<CanvasState>()((set, get) => {
           try {
             const event = JSON.parse(dataStr) as {
               event_type: string
-              payload?: { agent_key?: string }
+              payload?: { agent_key?: string; stage?: string }
             }
             const nodeId = event.payload?.agent_key
             if (nodeId && event.event_type === "step_started") {
               set((s) => ({ nodeRunStatus: { ...s.nodeRunStatus, [nodeId]: "running" } }))
             } else if (nodeId && event.event_type === "step_completed") {
               set((s) => ({ nodeRunStatus: { ...s.nodeRunStatus, [nodeId]: "completed" } }))
+            }
+            // A review-gated stage node paused the run for confirmation.
+            if (event.event_type === "step_awaiting_review") {
+              await settle()
+              set({ running: false, paused: true, reviewStage: event.payload?.stage ?? null })
+              return
             }
             if (event.event_type === "run_completed") {
               await settle()
@@ -318,6 +353,9 @@ export const useCanvasStore = create<CanvasState>()((set, get) => {
     running: false,
     runId: null,
     nodeRunStatus: {},
+    nodeContracts: {},
+    paused: false,
+    reviewStage: null,
 
     // Load (or lazily create) the project's first canvas. A new canvas is seeded
     // with read-only source nodes built from the project's existing products.
@@ -350,6 +388,20 @@ export const useCanvasStore = create<CanvasState>()((set, get) => {
       }
     },
 
+    // Fetch the typed node-contract catalog once (it's global/static). Non-fatal:
+    // a failure just leaves the typed-node palette empty.
+    loadNodeContracts: async () => {
+      if (Object.keys(get().nodeContracts).length) return
+      try {
+        const list = await canvasApi.nodeContracts()
+        const map: Record<string, NodeContractCatalogItem> = {}
+        for (const c of list) map[c.node_type] = c
+        set({ nodeContracts: map })
+      } catch {
+        // Palette stays empty; retried on next mount.
+      }
+    },
+
     onNodesChange: (changes) => {
       set((state) => ({ nodes: applyNodeChanges(changes, state.nodes) }))
       scheduleSave()
@@ -372,6 +424,35 @@ export const useCanvasStore = create<CanvasState>()((set, get) => {
         position: position || { x: 320 + Math.random() * 120, y: 120 + Math.random() * 120 },
         data: { label: DEFAULT_LABEL[type], config: defaultConfig(type) },
         deletable: type !== "source_doc",
+      }
+      set((state) => ({ nodes: [...state.nodes, node] }))
+      scheduleSave()
+    },
+
+    // Add a deletable "existing built product" source (existing frontend / backend
+    // / contract / middleware) so the user can reuse a current product — e.g. wire
+    // an existing backend into a deploy node instead of regenerating it.
+    addSourceNode: (sourceKind, label, position) => {
+      const node: FlowNode = {
+        id: genId("src"),
+        type: "source_doc",
+        position: position || { x: 40 + Math.random() * 80, y: 320 + Math.random() * 120 },
+        data: { label, config: { source_kind: sourceKind } satisfies SourceDocConfig },
+        deletable: true,
+      }
+      set((state) => ({ nodes: [...state.nodes, node] }))
+      scheduleSave()
+    },
+
+    // Add a typed stage node bound to a node contract (contract_key). Its ports /
+    // handles are rendered by StageNode from the catalog.
+    addStageNode: (contractKey, label, position) => {
+      const node: FlowNode = {
+        id: genId("stage"),
+        type: "stage",
+        position: position || { x: 320 + Math.random() * 120, y: 120 + Math.random() * 120 },
+        data: { label, config: { contract_key: contractKey } satisfies StageConfig },
+        deletable: true,
       }
       set((state) => ({ nodes: [...state.nodes, node] }))
       scheduleSave()
@@ -423,7 +504,7 @@ export const useCanvasStore = create<CanvasState>()((set, get) => {
       const { projectId, canvasId, running } = get()
       if (!projectId || !canvasId || running) return
       await get().save()
-      set({ running: true, nodeRunStatus: {} })
+      set({ running: true, paused: false, reviewStage: null, nodeRunStatus: {} })
       try {
         const result = await agentApi.createRun({
           domain: "code",
@@ -436,6 +517,37 @@ export const useCanvasStore = create<CanvasState>()((set, get) => {
         void streamRun(result.run_id)
       } catch (error) {
         set({ running: false })
+        throw error
+      }
+    },
+
+    // Persist first, then stamp each typed stage node with its prompt's current
+    // pinned version so this saved canvas keeps running the same prompt later.
+    freezeCanvas: async () => {
+      const { projectId, canvasId } = get()
+      if (!projectId || !canvasId) return 0
+      await get().save()
+      const { canvas, pinned } = await canvasApi.freeze(projectId, canvasId)
+      const { nodes, edges } = fromCanvas(canvas)
+      set({ nodes, edges })
+      return pinned
+    },
+
+    // Approve (continue past the gate) or revise (re-run the gated node with an
+    // instruction) a paused review checkpoint, then resume streaming node statuses.
+    resumeCanvas: async (action, instruction) => {
+      const { runId, reviewStage } = get()
+      if (!runId || !reviewStage) return
+      set({ running: true, paused: false })
+      try {
+        await agentApi.resumeRun(runId, {
+          action,
+          stage: reviewStage,
+          instruction: instruction ?? "",
+        })
+        void streamRun(runId)
+      } catch (error) {
+        set({ running: false, paused: true })
         throw error
       }
     },
@@ -473,6 +585,8 @@ export const useCanvasStore = create<CanvasState>()((set, get) => {
         running: false,
         runId: null,
         nodeRunStatus: {},
+        paused: false,
+        reviewStage: null,
       })
     },
   }

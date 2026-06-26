@@ -50,7 +50,8 @@
     "createTeamFailed": "팀 생성에 실패했습니다",
     "fetchMembersFailed": "멤버 목록을 가져오는 데 실패했습니다",
     "inviteMemberFailed": "초대 전송에 실패했습니다",
-    "acceptInvitationFailed": "초대 수락에 실패했습니다"
+    "acceptInvitationFailed": "초대 수락에 실패했습니다",
+    "rejectInvitationFailed": "초대 거절에 실패했습니다"
   },
   "credit": {
     "fetchBalanceFailed": "잔액을 가져오는 데 실패했습니다",

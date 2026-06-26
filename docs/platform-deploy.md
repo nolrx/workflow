@@ -50,6 +50,12 @@ make undrain        # 恢复接收新任务(例如取消了一次发布)
 - **健康探针拆分**:`/health`(=`/health/live`)是**存活**探针,排空时仍 200(进程还活着,
   Docker `HEALTHCHECK` / 重启策略用它);`/health/ready` 是**就绪**探针,排空时 503,
   部署脚本与未来的负载均衡据此判断"别再往这个实例发新流量"。
+- **数据库 schema(无需在 redeploy 里跑迁移)**:**加列**这种附加变更由 boot 时的
+  `backend/services/schema_guard.py::ensure_model_columns` 自愈——每次启动、serving 之前,
+  对已存在的表 `ALTER TABLE ADD COLUMN` 补齐模型新列(幂等、fail-soft、dev/prod 都跑)。所以
+  redeploy **不需要**迁移步骤。**Alembic** 仅保留给**非加列**迁移(改名/删列/类型/数据),按需
+  **手动**执行:容器内 `make migrate-prod`、本地 `make migrate`——刻意不在 redeploy 里自动跑,
+  避免对平台库产生多余的 `alembic_version` 副作用。
 - **nginx upstream 陈旧 IP**:`frontend` 容器的 nginx 在配置加载时把 `backend` 解析成
   当时的 IP;`backend` 重建后可能换 IP,不 reload 会持续 502。脚本在新实例就绪后
   `nginx -s reload`(best-effort)。

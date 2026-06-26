@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next"
 import * as DialogPrimitive from "@radix-ui/react-dialog"
-import { Download, ExternalLink, Minus, Plus, X, ZoomIn } from "lucide-react"
+import { Download, ExternalLink, Info, Minus, Plus, X, ZoomIn } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 
@@ -14,6 +14,7 @@ interface PreviewToolbarProps {
   onZoomOut: () => void
   onOpenInNewTab: () => void
   onDownload: () => void
+  onShowCaption?: () => void
 }
 
 export function PreviewToolbar({
@@ -25,6 +26,7 @@ export function PreviewToolbar({
   onZoomOut,
   onOpenInNewTab,
   onDownload,
+  onShowCaption,
 }: PreviewToolbarProps) {
   const { t } = useTranslation("common")
 
@@ -62,6 +64,13 @@ export function PreviewToolbar({
           onClick={onDownload}
           title={t("preview.download")}
         />
+        {onShowCaption && (
+          <ToolbarButton
+            icon={<Info className="h-5 w-5" />}
+            onClick={onShowCaption}
+            title={t("preview.showCaption")}
+          />
+        )}
         <DialogPrimitive.Close asChild>
           <ToolbarButton
             icon={<X className="h-5 w-5" />}

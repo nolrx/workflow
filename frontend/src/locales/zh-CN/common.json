@@ -107,6 +107,8 @@
     "openInNewTab": "在新标签页打开",
     "zoomIn": "放大",
     "zoomOut": "缩小",
+    "showCaption": "显示说明",
+    "captionTitle": "图片信息",
     "hint": "点击图片放大 · 拖动平移 · 滚轮缩放 · 点击空白处或按 Esc 关闭"
   }
 }

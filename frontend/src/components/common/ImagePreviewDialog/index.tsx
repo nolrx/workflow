@@ -1,9 +1,17 @@
+import * as React from "react"
 import * as DialogPrimitive from "@radix-ui/react-dialog"
+import { useTranslation } from "react-i18next"
 
 import { cn } from "@/lib/utils"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import type { PreviewImage } from "./types"
 import { useImagePreview } from "./useImagePreview"
-import { PreviewCaption } from "./PreviewCaption"
 import { PreviewImageStage } from "./PreviewImageStage"
 import { PreviewToolbar } from "./PreviewToolbar"
 
@@ -35,7 +43,13 @@ export function ImagePreviewDialog({
   index,
   onIndexChange,
 }: ImagePreviewDialogProps) {
+  const { t } = useTranslation("common")
+  const [captionOpen, setCaptionOpen] = React.useState(false)
   const safeIndex = Math.max(0, Math.min(index, images.length - 1))
+
+  React.useEffect(() => {
+    if (!open) setCaptionOpen(false)
+  }, [open])
   const current = images[safeIndex]
   const hasPrev = safeIndex > 0
   const hasNext = safeIndex < images.length - 1
@@ -122,6 +136,7 @@ export function ImagePreviewDialog({
             onZoomOut={zoomOut}
             onOpenInNewTab={handleOpenInNewTab}
             onDownload={handleDownload}
+            onShowCaption={() => setCaptionOpen(true)}
           />
 
           <PreviewImageStage
@@ -138,7 +153,21 @@ export function ImagePreviewDialog({
             onNext={goNext}
           />
 
-          <PreviewCaption alt={current.alt} />
+          <Dialog open={captionOpen} onOpenChange={setCaptionOpen}>
+            <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto p-6 sm:max-w-4xl sm:p-8">
+              <DialogHeader>
+                <DialogTitle>{t("preview.captionTitle")}</DialogTitle>
+                {current.alt ? (
+                  <DialogDescription className="break-words whitespace-pre-wrap text-base font-medium text-foreground">
+                    {current.alt}
+                  </DialogDescription>
+                ) : null}
+              </DialogHeader>
+              <div className="break-words whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
+                <p>{t("preview.hint")}</p>
+              </div>
+            </DialogContent>
+          </Dialog>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>

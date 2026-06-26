@@ -106,6 +106,8 @@
     "openInNewTab": "新しいタブで開く",
     "zoomIn": "拡大",
     "zoomOut": "縮小",
+    "showCaption": "説明を表示",
+    "captionTitle": "画像情報",
     "hint": "画像をクリックして拡大 · ドラッグで移動 · ホイールで拡大縮小 · 空白をクリックまたは Esc で閉じる"
   }
 }

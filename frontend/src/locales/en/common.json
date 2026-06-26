@@ -107,6 +107,8 @@
     "openInNewTab": "Open in new tab",
     "zoomIn": "Zoom in",
     "zoomOut": "Zoom out",
+    "showCaption": "Show caption",
+    "captionTitle": "Image info",
     "hint": "Click image to zoom · drag to pan · scroll to zoom · click blank area or press Esc to close"
   }
 }

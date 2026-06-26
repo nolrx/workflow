@@ -107,6 +107,8 @@
     "openInNewTab": "새 탭에서 열기",
     "zoomIn": "확대",
     "zoomOut": "축소",
+    "showCaption": "설명 표시",
+    "captionTitle": "이미지 정보",
     "hint": "이미지 클릭하여 확대 · 드래그로 이동 · 휠로 확대/축소 · 빈 공간 클릭 또는 Esc로 닫기"
   }
 }

@@ -132,6 +132,43 @@ def _docker(args: list[str], timeout: int) -> subprocess.CompletedProcess:
     )
 
 
+def _docker_build(workdir: Path, tag: str, timeout: int) -> subprocess.CompletedProcess:
+    """Build a Docker image from a local directory via tarball stdin.
+
+    When the backend itself runs inside Docker on Windows/WSL2 Docker Desktop,
+    the host Docker daemon cannot resolve Windows-drive build contexts passed
+    by the in-container ``docker build PATH``. Streaming a tar archive from the
+    in-container directory avoids the path translation entirely and works for
+    both legacy and BuildKit builders.
+    """
+    tar_cmd = ["tar", "-C", str(workdir), "-c", "."]
+    build_cmd = [DOCKER_BIN, "build", "-t", tag, "-"]
+    tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        build_result = subprocess.run(
+            build_cmd,
+            stdin=tar_proc.stdout,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    finally:
+        if tar_proc.stdout:
+            tar_proc.stdout.close()
+        tar_proc.wait()
+
+    stderr_parts: list[str] = []
+    if tar_proc.stderr:
+        stderr_parts.append(tar_proc.stderr.read().decode("utf-8", errors="replace"))
+    stderr_parts.append(build_result.stderr)
+    return subprocess.CompletedProcess(
+        args=build_cmd,
+        returncode=build_result.returncode or tar_proc.returncode,
+        stdout=build_result.stdout,
+        stderr="".join(stderr_parts),
+    )
+
+
 def docker_available() -> bool:
     try:
         return _docker(["version", "--format", "{{.Server.Version}}"], 15).returncode == 0
@@ -608,7 +645,7 @@ def deploy(
         def _repair_log(message: str) -> None:
             phase("build", message)
 
-        build = _docker(["build", "-t", image_tag, str(workdir)], BUILD_TIMEOUT)
+        build = _docker_build(workdir, image_tag, BUILD_TIMEOUT)
         max_repairs = int(os.getenv("APP_BUILD_REPAIRS", "3"))
         attempt = 0
         while build.returncode != 0 and attempt < max_repairs:
@@ -624,7 +661,7 @@ def deploy(
             if not rep.get("ran"):
                 phase("build", "AI 修复不可用(未配置密钥),跳过")
                 break
-            build = _docker(["build", "-t", image_tag, str(workdir)], BUILD_TIMEOUT)
+            build = _docker_build(workdir, image_tag, BUILD_TIMEOUT)
             if build.returncode == 0:
                 phase("build", f"AI 修复后构建成功(第 {attempt} 轮)", {"repaired": True})
                 dep.set_detail({**dep.get_detail(), "build_repaired_rounds": attempt})
@@ -967,7 +1004,7 @@ def deploy(
                         break
                     new_tag = f"{image_tag}-fix{round_n}"
                     phase("repair", "修复/对齐完成,重新自建镜像(docker build)")
-                    build = _docker(["build", "-t", new_tag, str(workdir)], BUILD_TIMEOUT)
+                    build = _docker_build(workdir, new_tag, BUILD_TIMEOUT)
                     if build.returncode != 0:
                         phase("repair", "修复后镜像重建失败,保留修复前容器,停止修复(尽力放行)")
                         break

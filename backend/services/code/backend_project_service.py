@@ -28,6 +28,7 @@ import tempfile
 from pathlib import Path
 from typing import Callable, Optional
 
+from backend.services.code.docker_env import container_user, host_workdir
 from backend.services.prompts import prompt_store
 
 logger = logging.getLogger(__name__)
@@ -44,10 +45,9 @@ _BINARY_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".ico", ".bmp", ".pdf"
 # build does the real thing), guarantees a Dockerfile, and tars the source out.
 # Phase sentinels ({"type":"be_phase",...}) narrate progress on the host timeline.
 _CONTAINER_SCRIPT = r"""
+export HOME="${HOME:-/home/node}"
 WORK=/tmp/work
 mkdir -p "$WORK" && cd "$WORK"
-
-export HOME=/home/node
 export CODEX_HOME="$HOME/.codex"
 export PATH="$HOME/bin:$PATH"
 mkdir -p "$HOME/bin" "$CODEX_HOME"
@@ -325,7 +325,7 @@ fi
 # the docker build context. claude edits the project in place; the deploy step
 # then re-runs ``docker build``.
 _REPAIR_SCRIPT = r"""
-export HOME=/home/node
+export HOME="${HOME:-/home/node}"
 export PATH="$HOME/bin:$PATH"
 cd /out
 claude -p --output-format stream-json --verbose --permission-mode bypassPermissions --allowedTools Read Write Edit Bash || true
@@ -345,9 +345,9 @@ claude -p --output-format stream-json --verbose --permission-mode bypassPermissi
 # source). `exec` replaces the shell so codex's exit code IS the container's.
 _CODEX_REPAIR_SCRIPT = r"""
 set -u
-export HOME=/home/node
-export CODEX_HOME=/home/node/.codex
-export PATH="/home/node/bin:$PATH"
+export HOME="${HOME:-/home/node}"
+export CODEX_HOME="$HOME/.codex"
+export PATH="$HOME/bin:$PATH"
 mkdir -p "$CODEX_HOME"
 # Drain the host-piped aggregated brief off stdin into a temp file OUTSIDE /out
 # (so it never pollutes the rebuild context / promoted source), THEN feed it to
@@ -576,8 +576,10 @@ class BackendProjectService:
             (workdir / "reinforce_prompt.txt").write_text("", encoding="utf-8")
         api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
 
+        user = container_user()
         cmd = [
-            self.docker, "run", "--rm", "--user", "node",
+            self.docker, "run", "--rm",
+            "--user", user,
             "-e", "ANTHROPIC_API_KEY",
             "-e", "OPENAI_API_KEY",
             "-e", f"BE_AGENT_TIMEOUT={self.gen_timeout}",
@@ -589,8 +591,12 @@ class BackendProjectService:
             "-e", f"BE_AGENT_REPAIR_TIMEOUT={self.repair_timeout}",
             "-e", f"BE_AGENT_REINFORCE={self.reinforce_enabled}",
             "-e", f"BE_AGENT_REINFORCE_TIMEOUT={self.reinforce_timeout}",
-            "-v", f"{workdir}:/out", self.image, "bash", "-c", _CONTAINER_SCRIPT,
+            "-v", f"{host_workdir(workdir)}:/out", self.image, "bash", "-c", _CONTAINER_SCRIPT,
         ]
+        if user != "node":
+            # When matching the host UID the image's /home/node is owned by uid
+            # 1000 and is not writable. Use /tmp as HOME instead (always 1777).
+            cmd += ["-e", "HOME=/tmp"]
         env = dict(os.environ, ANTHROPIC_API_KEY=api_key or "")
         openai_key = os.getenv("OPENAI_API_KEY")
         if openai_key:
@@ -814,11 +820,15 @@ class BackendProjectService:
         # writable so claude can edit the existing (backend-written) files.
         self._make_writable(wd)
         api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
+        user = container_user()
         cmd = [
-            self.docker, "run", "--rm", "-i", "--user", "node",
+            self.docker, "run", "--rm", "-i",
+            "--user", user,
             "-e", "ANTHROPIC_API_KEY", "-e", "OPENAI_API_KEY",
-            "-v", f"{wd}:/out", self.image, "bash", "-c", _REPAIR_SCRIPT,
+            "-v", f"{host_workdir(wd)}:/out", self.image, "bash", "-c", _REPAIR_SCRIPT,
         ]
+        if user != "node":
+            cmd += ["-e", "HOME=/tmp"]
         env = dict(os.environ, ANTHROPIC_API_KEY=api_key or "")
         openai_key = os.getenv("OPENAI_API_KEY")
         if openai_key:
@@ -895,13 +905,17 @@ class BackendProjectService:
         # The container runs as the non-root ``node`` uid; make the staged tree
         # writable so codex can edit the existing (backend-written) files.
         self._make_writable(wd)
+        user = container_user()
         cmd = [
-            self.docker, "run", "--rm", "-i", "--user", "node",
+            self.docker, "run", "--rm", "-i",
+            "--user", user,
             "-e", "OPENAI_API_KEY",
             "-e", f"BE_CODEX_REPAIR_TIMEOUT={self.codex_repair_timeout}",
             "-e", f"BE_CODEX_REPAIR_FLAGS={self.codex_repair_flags}",
-            "-v", f"{wd}:/out", self.image, "bash", "-c", _CODEX_REPAIR_SCRIPT,
+            "-v", f"{host_workdir(wd)}:/out", self.image, "bash", "-c", _CODEX_REPAIR_SCRIPT,
         ]
+        if user != "node":
+            cmd += ["-e", "HOME=/tmp"]
         env = dict(os.environ, OPENAI_API_KEY=os.getenv("OPENAI_API_KEY") or "")
 
         tail: list[str] = []

@@ -30,6 +30,7 @@ import tempfile
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
+from backend.services.code.docker_env import container_user, host_workdir
 from backend.services.code.figma.ir import (
     Box,
     IRNode,
@@ -258,12 +259,14 @@ class FigmaSliceService:
         os.chmod(workdir / "preview.png", 0o644)
 
         api_key = os.getenv("OPENAI_API_KEY")
+        user = container_user()
         cmd = [
-            self.docker, "run", "--rm", "--user", "node",
+            self.docker, "run", "--rm",
+            "--user", user,
             "-e", "OPENAI_API_KEY",
             "-e", f"SLICER_CODEX_FLAGS={self.codex_flags}",
             "-e", f"CODEX_TIMEOUT={self.codex_timeout}",
-            "-v", f"{workdir}:/out",
+            "-v", f"{host_workdir(workdir)}:/out",
             self.image, "bash", "-c", _CONTAINER_SCRIPT,
         ]
         env = dict(os.environ, OPENAI_API_KEY=api_key or "")

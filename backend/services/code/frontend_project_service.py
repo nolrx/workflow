@@ -40,6 +40,7 @@ from typing import Callable, Optional
 
 from werkzeug.utils import secure_filename
 
+from backend.services.code.docker_env import container_user, host_workdir
 from backend.services.prompts import prompt_store
 
 logger = logging.getLogger(__name__)
@@ -80,10 +81,9 @@ _BUNDLE_EXTS = {".js", ".mjs", ".cjs", ".css", ".map", ".wasm"}
 #   5. synthesized dist       -- a minimal static page, so dist is NEVER empty
 # The reached rung is written to /out/degraded for the host to report.
 _CONTAINER_SCRIPT = r"""
+export HOME="${HOME:-/home/node}"
 WORK=/tmp/work
 mkdir -p "$WORK" && cd "$WORK"
-
-export HOME=/home/node
 export CODEX_HOME="$HOME/.codex"
 export PATH="$HOME/bin:$PATH"
 mkdir -p "$HOME/bin" "$HOME/.fe-assets" "$HOME/.claude/skills/image-assets" "$CODEX_HOME"
@@ -773,8 +773,10 @@ class FrontendProjectService:
                     logger.warning("failed to stage figma render %s", src)
         api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
 
+        user = container_user()
         cmd = [
-            self.docker, "run", "--rm", "--user", "node",
+            self.docker, "run", "--rm",
+            "--user", user,
             # Secrets passed by NAME (value pulled from `env` below) so they don't
             # show up in the `docker run` argv / process list.
             "-e", "ANTHROPIC_API_KEY",
@@ -786,13 +788,17 @@ class FrontendProjectService:
             "-e", f"FE_CODEX_TIMEOUT={self.codex_timeout}",
             "-e", f"FE_GENIMAGE_TIMEOUT={self.genimage_timeout}",
         ]
+        if user != "node":
+            # When matching the host UID the image's /home/node is owned by uid
+            # 1000 and is not writable. Use /tmp as HOME instead (always 1777).
+            cmd += ["-e", "HOME=/tmp"]
         # Non-secret OpenAI image config passthrough, so the in-container genimage
         # call stays aligned with the platform's image provider settings.
         for key in ("OPENAI_BASE_URL", "OPENAI_IMAGE_MODEL", "OPENAI_IMAGE_QUALITY", "OPENAI_IMAGE_SIZE"):
             value = os.getenv(key)
             if value:
                 cmd += ["-e", f"{key}={value}"]
-        cmd += ["-v", f"{workdir}:/out", self.image, "bash", "-c", _CONTAINER_SCRIPT]
+        cmd += ["-v", f"{host_workdir(workdir)}:/out", self.image, "bash", "-c", _CONTAINER_SCRIPT]
 
         env = dict(os.environ, ANTHROPIC_API_KEY=api_key or "")
         # OPENAI_API_KEY drives the image-assets skill (Codex). Optional: when

@@ -52,6 +52,7 @@ def create_app(config_name: str = None, *, reconcile_on_boot: bool = False) -> F
     from backend.routes.auth_routes import auth_bp
     from backend.routes.code import (
         app_proxy_bp,
+        apps_bp,
         code_preview_bp,
         code_project_bp,
         figma_bp,
@@ -59,12 +60,14 @@ def create_app(config_name: str = None, *, reconcile_on_boot: bool = False) -> F
         github_bp,
     )
     from backend.routes.credit_routes import credit_bp
+    from backend.routes.notification_routes import notification_bp
     from backend.routes.team_routes import team_bp
     from backend.routes.user_routes import user_bp
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(user_bp, url_prefix="/api/users")
     app.register_blueprint(team_bp, url_prefix="/api/teams")
+    app.register_blueprint(notification_bp, url_prefix="/api/notifications")
     app.register_blueprint(credit_bp, url_prefix="/api/credits")
     app.register_blueprint(agent_bp, url_prefix="/api/agent")
     app.register_blueprint(code_project_bp, url_prefix="/api/code")
@@ -73,6 +76,8 @@ def create_app(config_name: str = None, *, reconcile_on_boot: bool = False) -> F
     # Full-stack pipeline orchestration (start the 3 concurrent runs, deploy,
     # status, contract). Mounted under /api/code alongside the project routes.
     app.register_blueprint(fullstack_bp, url_prefix="/api/code")
+    # App Space (应用空间) + secondary development (二次开发) over deployed apps.
+    app.register_blueprint(apps_bp, url_prefix="/api/code")
     # Session-bound deployed preview of generated frontend projects. Mounted at the
     # top level (not under /api) so it reads like a real deployment; nginx proxies
     # the /preview prefix to the backend (see frontend/nginx/default.conf).
@@ -166,6 +171,18 @@ def create_app(config_name: str = None, *, reconcile_on_boot: bool = False) -> F
     # Create database tables
     with app.app_context():
         db.create_all()
+        # create_all() only creates ABSENT tables — a model column added after a
+        # table already existed is never backfilled (no Alembic in this project),
+        # so an INSERT referencing it fails with UndefinedColumn. Additively ADD
+        # any missing model columns to existing tables. Idempotent + fail-soft, and
+        # (unlike orphaned-run reconciliation) free of run-state side effects, so it
+        # runs on every boot — dev and prod alike — not just the gunicorn entry.
+        try:
+            from backend.services.schema_guard import ensure_model_columns
+
+            ensure_model_columns()
+        except Exception as error:  # noqa: BLE001 — never block startup on schema heal
+            logger.warning("Schema column self-heal skipped: %s", error)
 
     # Reconcile runs orphaned by a previous process (e.g. a restart / crash): the
     # background executor is in-process, so a replaced process leaves in-flight

@@ -12,6 +12,11 @@
     "addAgent": "Agent",
     "addMerge": "合并",
     "addBranch": "分支",
+    "addStage": "阶段…",
+    "addSource": "现有产物…",
+    "freeze": "冻结",
+    "frozen": "已固定 {{count}} 个阶段提示词",
+    "freezeFailed": "冻结失败",
     "run": "执行画布",
     "running": "执行中…"
   },
@@ -20,6 +25,37 @@
     "saved": "已保存",
     "loading": "加载中…",
     "loadFailed": "加载失败"
+  },
+  "stage": {
+    "node": "阶段节点",
+    "unavailable": "暂不可执行",
+    "pinned": "已固定",
+    "name": {
+      "requirements": "需求文档",
+      "flow": "开发流程",
+      "documents": "文档拆分",
+      "style": "风格文档",
+      "preview": "UI 预览",
+      "fe_build": "前端工程",
+      "be_build": "后端工程",
+      "mw_provision": "中间件",
+      "deploy": "部署"
+    }
+  },
+  "source": {
+    "existing": {
+      "frontend": "现有前端工程",
+      "backend": "现有后端工程",
+      "contract": "现有 API 契约",
+      "middleware": "现有中间件"
+    }
+  },
+  "review": {
+    "awaiting": "请确认「{{stage}}」——通过或提出调整",
+    "placeholder": "调整意见(用于「调整」)",
+    "revise": "调整",
+    "approve": "通过",
+    "failed": "继续失败"
   },
   "runFailed": "画布执行失败"
 }

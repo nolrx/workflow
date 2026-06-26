@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ScrollText,
   CornerDownRight,
+  Boxes,
   Loader2,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -214,6 +215,23 @@ export function SidebarContent({ onNavigate }: SidebarContentProps) {
             <Loader2 className="h-4 w-4 animate-spin" />
           </div>
         )}
+      </div>
+
+      {/* Primary nav: App Space (应用空间) — between recent sessions and settings */}
+      <div className="border-t">
+        <Link
+          to="/apps"
+          onClick={onNavigate}
+          className={cn(
+            "flex items-center gap-3 border-l-2 px-4 py-2.5 text-sm font-medium transition-colors",
+            location.pathname.startsWith("/apps")
+              ? "border-primary bg-primary/10 text-primary"
+              : "border-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+          )}
+        >
+          <Boxes className="h-4 w-4" />
+          {t("nav.apps")}
+        </Link>
       </div>
 
       {/* Settings nav */}

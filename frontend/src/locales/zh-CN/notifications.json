@@ -1,0 +1,43 @@
+{
+  "title": "通知",
+  "empty": "暂无通知",
+  "markAllRead": "全部已读",
+  "time": {
+    "justNow": "刚刚",
+    "minutesAgo": "{{count}} 分钟前",
+    "hoursAgo": "{{count}} 小时前",
+    "daysAgo": "{{count}} 天前"
+  },
+  "actions": {
+    "accept": "接受",
+    "decline": "拒绝"
+  },
+  "toast": {
+    "accepted": "已加入团队「{{team}}」",
+    "declined": "已拒绝邀请",
+    "failed": "操作失败，请重试"
+  },
+  "types": {
+    "team_invite": {
+      "title": "团队邀请",
+      "message": "{{inviter}} 邀请你加入团队「{{team}}」",
+      "messageNoInviter": "你被邀请加入团队「{{team}}」"
+    },
+    "team_invite_accepted": {
+      "title": "邀请已接受",
+      "message": "{{user}} 已加入团队「{{team}}」"
+    },
+    "team_invite_rejected": {
+      "title": "邀请被拒绝",
+      "message": "{{user}} 拒绝了加入团队「{{team}}」的邀请"
+    },
+    "code_deploy_succeeded": {
+      "title": "应用已上线",
+      "message": "你的应用已成功部署上线，点击查看。"
+    },
+    "run_failed": {
+      "title": "任务失败",
+      "message": "你有一个任务运行失败，点击查看。"
+    }
+  }
+}

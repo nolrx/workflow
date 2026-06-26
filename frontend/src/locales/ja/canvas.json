@@ -12,6 +12,11 @@
     "addAgent": "エージェント",
     "addMerge": "マージ",
     "addBranch": "分岐",
+    "addStage": "ステージ…",
+    "addSource": "既存…",
+    "freeze": "凍結",
+    "frozen": "{{count}} 件のステージプロンプトを固定",
+    "freezeFailed": "凍結に失敗しました",
     "run": "キャンバス実行",
     "running": "実行中…"
   },
@@ -20,6 +25,37 @@
     "saved": "保存済み",
     "loading": "読み込み中…",
     "loadFailed": "読み込み失敗"
+  },
+  "stage": {
+    "node": "ステージ",
+    "unavailable": "まだ実行不可",
+    "pinned": "固定済み",
+    "name": {
+      "requirements": "要件定義",
+      "flow": "開発フロー",
+      "documents": "ドキュメント分割",
+      "style": "スタイル",
+      "preview": "UIプレビュー",
+      "fe_build": "フロントエンド",
+      "be_build": "バックエンド",
+      "mw_provision": "ミドルウェア",
+      "deploy": "デプロイ"
+    }
+  },
+  "source": {
+    "existing": {
+      "frontend": "既存フロントエンド",
+      "backend": "既存バックエンド",
+      "contract": "既存APIコントラクト",
+      "middleware": "既存ミドルウェア"
+    }
+  },
+  "review": {
+    "awaiting": "「{{stage}}」を確認 — 承認または修正依頼",
+    "placeholder": "修正指示(「修正」用)",
+    "revise": "修正",
+    "approve": "承認",
+    "failed": "再開に失敗しました"
   },
   "runFailed": "キャンバスの実行に失敗しました"
 }

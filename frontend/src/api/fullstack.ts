@@ -104,10 +104,16 @@ export const fullstackApi = {
     return res.data
   },
 
-  /** Start the atomic deploy run (requires the backend run completed). */
-  deploy: async (projectId: string): Promise<{ run_id: string; stream_url: string }> => {
+  /** Start the atomic deploy run (requires the backend run completed). Pass
+   *  ``iterationId`` to link the deploy to a 二次开发 iteration (App Space) so the
+   *  iteration advances to staging_deploying → released as the deploy settles. */
+  deploy: async (
+    projectId: string,
+    iterationId?: string
+  ): Promise<{ run_id: string; stream_url: string }> => {
     const res = await api.post<Envelope<{ run_id: string; stream_url: string }>>(
-      `/code/projects/${projectId}/deploy`
+      `/code/projects/${projectId}/deploy`,
+      iterationId ? { iteration_id: iterationId } : undefined
     )
     return res.data
   },

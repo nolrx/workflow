@@ -33,7 +33,10 @@
     "helper": "Enter / Ctrl+Enter로 빠르게 시작",
     "cancel": "취소",
     "start": "생성 시작",
-    "starting": "시작 중…"
+    "starting": "시작 중…",
+    "scopeLabel": "생성 위치",
+    "scopePersonal": "개인",
+    "scopeHelper": "팀에서 만든 앱은 모든 팀원에게 표시됩니다."
   },
   "requirements": {
     "title": "사용자 요구와 요구 문서",

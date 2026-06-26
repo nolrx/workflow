@@ -33,7 +33,10 @@
     "helper": "Press Enter / Ctrl+Enter to start quickly",
     "cancel": "Cancel",
     "start": "Start generating",
-    "starting": "Starting…"
+    "starting": "Starting…",
+    "scopeLabel": "Create in",
+    "scopePersonal": "Personal",
+    "scopeHelper": "Apps created in a team are visible to all its members."
   },
   "requirements": {
     "title": "User Requirement and PRD",

@@ -33,7 +33,10 @@
     "helper": "Enter / Ctrl+Enter 快速开始",
     "cancel": "取消",
     "start": "开始生成",
-    "starting": "正在启动…"
+    "starting": "正在启动…",
+    "scopeLabel": "创建到",
+    "scopePersonal": "个人",
+    "scopeHelper": "在团队下创建的应用，团队所有成员都能看到。"
   },
   "requirements": {
     "title": "用户需求与需求文档",

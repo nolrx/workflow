@@ -50,7 +50,8 @@
     "createTeamFailed": "チームの作成に失敗しました",
     "fetchMembersFailed": "メンバー一覧の取得に失敗しました",
     "inviteMemberFailed": "招待の送信に失敗しました",
-    "acceptInvitationFailed": "招待の承諾に失敗しました"
+    "acceptInvitationFailed": "招待の承諾に失敗しました",
+    "rejectInvitationFailed": "招待の辞退に失敗しました"
   },
   "credit": {
     "fetchBalanceFailed": "残高の取得に失敗しました",

@@ -62,6 +62,13 @@ class AgentStep(db.Model):
     context_snapshot_raw = db.Column(db.Text, nullable=True)
     context_check_raw = db.Column(db.Text, nullable=True)
 
+    # Typed PortValue bindings for a composable-workflow (canvas) stage node: which
+    # typed inputs this step consumed (by port → reference), which typed outputs it
+    # produced, and the resolved prompt pin. Null for non-canvas / freeform steps.
+    # Lets a run be replayed with its exact data lineage — see
+    # docs/composable-workflow-schema.md §7.
+    port_bindings_raw = db.Column(db.Text, nullable=True)
+
     error_message = db.Column(db.Text, nullable=True)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -90,6 +97,12 @@ class AgentStep(db.Model):
     def set_context_check(self, data: dict | None) -> None:
         self.context_check_raw = json.dumps(data or {}, ensure_ascii=False)
 
+    def get_port_bindings(self) -> dict:
+        return self._load_json(self.port_bindings_raw, {})
+
+    def set_port_bindings(self, data: dict | None) -> None:
+        self.port_bindings_raw = json.dumps(data or {}, ensure_ascii=False)
+
     def to_dict(self) -> dict:
         return {
             "id": self.id,
@@ -113,6 +126,7 @@ class AgentStep(db.Model):
             "model_response": self.model_response,
             "context_snapshot": self.get_context_snapshot(),
             "context_check": self.get_context_check(),
+            "port_bindings": self.get_port_bindings(),
             "error_message": self.error_message,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "started_at": self.started_at.isoformat() + "Z" if self.started_at else None,

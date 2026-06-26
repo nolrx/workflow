@@ -724,6 +724,46 @@ def activate_one_stage_version(project_id: str, stage: str, version_id: str):
 
 
 # ---------------------------------------------------------------------------
+# Typed node-contract catalog (drives the canvas's typed-node palette)
+# ---------------------------------------------------------------------------
+
+
+@code_project_bp.route("/node-contracts", methods=["GET"])
+@jwt_required()
+def list_node_contracts():
+    """Return the typed node-contract catalog (the composable 'components')."""
+    from backend.services.agent.contracts.defaults import iter_default_node_contracts
+
+    catalog = [c.to_catalog() for c in iter_default_node_contracts()]
+    return success_response({"node_contracts": catalog})
+
+
+@code_project_bp.route(
+    "/projects/<project_id>/canvases/<canvas_id>/freeze", methods=["POST"]
+)
+@jwt_required()
+def freeze_canvas(project_id: str, canvas_id: str):
+    """Freeze the canvas's typed stage prompts to exact versions (reproducible runs)."""
+    canvas = _get_owned_canvas(project_id, canvas_id)
+    if not canvas:
+        return error_response("NOT_FOUND", "画布不存在", 404)
+
+    from backend.services.agent.contracts import freeze_stage_prompts
+    from backend.services.agent.contracts.defaults import get_default_contract
+    from backend.services.prompts import prompt_store
+
+    new_nodes, pinned = freeze_stage_prompts(
+        canvas.get_nodes(), get_default_contract, prompt_store.head_pin
+    )
+    canvas.set_nodes(new_nodes)
+    db.session.commit()
+    return success_response(
+        {"canvas": canvas.to_dict(), "pinned": pinned},
+        f"已固定 {pinned} 个阶段节点的提示词版本",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Remix canvas (n8n-style node graph) CRUD
 # ---------------------------------------------------------------------------
 

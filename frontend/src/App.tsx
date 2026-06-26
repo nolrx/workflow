@@ -12,6 +12,8 @@ import { Billing } from "@/pages/settings/Billing"
 import { Dashboard } from "@/pages/dashboard/Dashboard"
 import { CodeStudio } from "@/pages/code/CodeStudio"
 import { CodeCanvas } from "@/pages/code/CodeCanvas"
+import { AppSpace } from "@/pages/apps/AppSpace"
+import { AppDetail } from "@/pages/apps/AppDetail"
 import { PromptAdmin } from "@/pages/admin/PromptAdmin"
 import { AdminRoute } from "@/components/common/AdminRoute"
 
@@ -35,6 +37,11 @@ function App() {
             <Route path="/code" element={guarded(<CodeStudio />)} />
             <Route path="/code/:projectId" element={guarded(<CodeStudio />)} />
             <Route path="/code/:projectId/canvas" element={guarded(<CodeCanvas />)} />
+
+            {/* App Space (应用空间): manage + iterate deployed apps */}
+            <Route path="/apps" element={guarded(<AppSpace />)} />
+            <Route path="/apps/:projectId" element={guarded(<AppDetail />)} />
+            <Route path="/apps/:projectId/iterate" element={guarded(<AppDetail />)} />
 
             {/* Dashboard */}
             <Route path="/dashboard" element={guarded(<Dashboard />)} />

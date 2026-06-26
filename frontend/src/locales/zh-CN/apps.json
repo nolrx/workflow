@@ -1,0 +1,209 @@
+{
+  "title": "应用空间",
+  "subtitle": "集中查看与迭代你已部署的产品",
+  "empty": "还没有已部署的应用。完成一次全栈生成与部署后，应用会出现在这里。",
+  "notFound": "应用不存在或无权访问",
+  "search": "搜索应用名",
+  "filters": {
+    "status": "部署状态",
+    "health": "健康状态",
+    "all": "全部"
+  },
+  "columns": {
+    "app": "应用",
+    "status": "部署状态",
+    "health": "健康",
+    "deployedAt": "最近部署",
+    "updatedAt": "更新时间",
+    "visibility": "可见性",
+    "actions": "操作"
+  },
+  "view": {
+    "card": "卡片视图",
+    "table": "表格视图"
+  },
+  "tabs": {
+    "overview": "概览",
+    "resources": "资源",
+    "database": "数据库",
+    "code": "代码",
+    "iterate": "二次开发",
+    "logs": "日志"
+  },
+  "resources": {
+    "viewCode": "查看代码",
+    "files": "个文件",
+    "none": "暂无产物",
+    "database": "数据库",
+    "engine": "引擎",
+    "dbName": "库名",
+    "tables": "表数",
+    "manageDb": "管理数据库"
+  },
+  "database": {
+    "title": "数据库",
+    "sqlite": "该应用使用容器内 SQLite,平台暂不支持在线浏览。",
+    "unavailable": "数据库暂不可用或未配置。",
+    "noTables": "暂无数据表",
+    "pickTable": "选择左侧的表查看结构与数据",
+    "sampleRows": "数据预览(前若干行)",
+    "noRows": "暂无数据"
+  },
+  "code": {
+    "download": "下载源码",
+    "empty": "暂无源码产物",
+    "pickFile": "选择左侧文件查看内容",
+    "binary": "二进制文件,不支持预览",
+    "truncated": "内容过长已截断"
+  },
+  "actions": {
+    "open": "打开应用",
+    "detail": "查看详情",
+    "iterate": "二次开发",
+    "redeploy": "重新部署",
+    "replay": "查看执行记录",
+    "openProject": "进入原项目",
+    "back": "返回应用空间",
+    "retry": "重试",
+    "stop": "停止部署"
+  },
+  "deployStatus": {
+    "pending": "待部署",
+    "provisioning": "准备中",
+    "building": "构建中",
+    "starting": "启动中",
+    "running": "运行中",
+    "failed": "失败",
+    "stopped": "已停止",
+    "rolled_back": "已回滚"
+  },
+  "health": {
+    "healthy": "健康",
+    "unhealthy": "异常",
+    "unknown": "未知",
+    "refresh": "刷新健康"
+  },
+  "runStatus": {
+    "queued": "排队中",
+    "running": "运行中",
+    "paused": "等待确认",
+    "completed": "已完成",
+    "partial": "部分完成",
+    "failed": "失败",
+    "cancelled": "已取消"
+  },
+  "iterationStatus": {
+    "draft": "草稿",
+    "analyzing": "分析中",
+    "awaiting_plan_approval": "待确认计划",
+    "generating": "生成中",
+    "staging_deploying": "部署中",
+    "staging_ready": "预发就绪",
+    "release_pending": "待发布",
+    "released": "已发布",
+    "failed": "失败",
+    "cancelled": "已取消"
+  },
+  "lanes": {
+    "frontend": "前端",
+    "backend": "后端",
+    "middleware": "中间件",
+    "deploy": "部署",
+    "requirements": "需求",
+    "contract": "契约",
+    "assets": "图形资源"
+  },
+  "detail": {
+    "requirement": "初始需求",
+    "apiBase": "API 入口",
+    "previewUrl": "预览地址",
+    "techStack": "技术栈",
+    "recentRuns": "最近生成记录",
+    "github": "GitHub 仓库",
+    "devBranch": "二开分支"
+  },
+  "iterate": {
+    "title": "二次开发",
+    "subtitle": "从已部署应用发起一次变更迭代。先生成影响分析与执行计划，确认后再重新生成、部署。",
+    "new": "新建二次开发",
+    "changeType": "变更目标",
+    "changeTypes": {
+      "bug_fix": "修复 Bug",
+      "new_feature": "新增功能",
+      "ui_change": "调整 UI",
+      "backend_logic": "调整后端逻辑",
+      "data_model": "调整数据模型",
+      "other": "其他"
+    },
+    "instruction": "变更说明",
+    "instructionPlaceholder": "用一句话描述你想做的改动，例如：新增会员等级与权益页…",
+    "impactScope": "影响范围",
+    "impactScopeAuto": "自动分析（可人工覆盖）",
+    "scopes": {
+      "frontend": "仅前端",
+      "backend": "仅后端",
+      "frontend_backend": "前端 + 后端",
+      "backend_middleware": "后端 + 中间件",
+      "fullstack": "全栈"
+    },
+    "allowContract": "允许修改 API 契约",
+    "allowDb": "允许修改数据库 schema",
+    "deployToProd": "完成后部署到线上",
+    "submit": "开始影响分析",
+    "submitting": "提交中…",
+    "instructionRequired": "请填写变更说明",
+    "history": "迭代记录",
+    "noHistory": "还没有二次开发记录",
+    "changeFlags": "影响层",
+    "flags": {
+      "requirement": "需求",
+      "ui": "UI",
+      "frontend": "前端",
+      "backend": "后端",
+      "middleware": "中间件",
+      "contract": "契约",
+      "database": "数据库",
+      "assets": "图形资源"
+    },
+    "reasoning": "判定依据",
+    "steps": "执行步骤",
+    "risks": "风险提示",
+    "confirm": "确认并开始生成",
+    "confirming": "生成启动中…",
+    "confirmHint": "确认后将按影响范围重新生成对应工程，完成后可部署到应用。",
+    "needsConfirm": "此变更为高风险 / 破坏性变更，请确认后再继续。",
+    "generating": "正在重新生成…",
+    "generationReady": "生成完成，可部署新版本",
+    "deploy": "部署新版本",
+    "deploying": "部署中…",
+    "released": "已发布为当前线上版本",
+    "failed": "本次迭代失败",
+    "viewRun": "查看执行记录",
+    "riskLevels": {
+      "low": "低风险",
+      "medium": "中风险",
+      "high": "高风险"
+    }
+  },
+  "toast": {
+    "iterationCreated": "已开始影响分析",
+    "iterationConfirmed": "已确认计划，开始生成",
+    "deployStarted": "部署已启动",
+    "noRun": "暂无执行记录",
+    "error": "操作失败",
+    "stopped": "已停止部署"
+  },
+  "scope": {
+    "label": "作用域",
+    "personal": "个人",
+    "createdBy": "创建者：{{name}}",
+    "unknownMember": "某成员"
+  },
+  "loadMore": "加载更多",
+  "logs": {
+    "tail": "最近 {{n}} 行",
+    "refresh": "刷新",
+    "unavailable": "应用未运行或无日志",
+    "empty": "暂无日志"
+  }
+}

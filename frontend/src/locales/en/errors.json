@@ -55,7 +55,8 @@
     "createTeamFailed": "Failed to create team",
     "fetchMembersFailed": "Failed to fetch members",
     "inviteMemberFailed": "Failed to send invitation",
-    "acceptInvitationFailed": "Failed to accept invitation"
+    "acceptInvitationFailed": "Failed to accept invitation",
+    "rejectInvitationFailed": "Failed to decline invitation"
   },
   "credit": {
     "fetchBalanceFailed": "Failed to fetch balance",

@@ -226,6 +226,36 @@ def _latest_run(project_id: str, user_id: str, workflow: str) -> Optional[AgentR
     )
 
 
+def _latest_run_for_artifact(
+    project_id: str, user_id: str, workflow: str, domain_ref_type: str
+) -> Optional[AgentRun]:
+    """The run whose lane product we use for deploy.
+
+    Prefers a dedicated lane-generation run (existing behavior, unchanged). ONLY
+    when none exists, falls back to ANY run that published that product for this
+    project — e.g. a composable-canvas stage node (run = code_canvas_generation) —
+    so a canvas-generated frontend / backend / middleware is deployable too. Purely
+    additive: the linear path is untouched when its dedicated run exists.
+    """
+    run = _latest_run(project_id, user_id, workflow)
+    if run:
+        return run
+    art = (
+        AgentArtifact.query.filter_by(domain_ref_type=domain_ref_type, domain_ref_id=project_id)
+        .join(AgentRun, AgentArtifact.run_id == AgentRun.id)
+        .filter(AgentRun.user_id == user_id, AgentRun.status.in_(_BUILT))
+        .order_by(AgentArtifact.created_at.desc())
+        .first()
+    )
+    return db.session.get(AgentRun, art.run_id) if art else None
+
+
+def _latest_backend_run(project_id: str, user_id: str) -> Optional[AgentRun]:
+    return _latest_run_for_artifact(
+        project_id, user_id, _BACKEND_WORKFLOW, "code_backend_project_zip"
+    )
+
+
 def _load_backend_source(run: AgentRun) -> dict:
     """Extract the backend source ({rel: bytes}) from the run's published zip."""
     zip_art = (
@@ -487,6 +517,59 @@ def resolve_proxy_target(project_id: str, user_id: str) -> Optional[tuple[str, i
     return dep.container_name, dep.internal_port or BACKEND_PORT
 
 
+# --- App Space operations (health re-probe / logs) ---------------------------
+# Authorization is the caller's responsibility (apps_routes gates each on the
+# project owner); these operate on a resolved deployment by project id. The
+# container stop lives in ``stop_deployment`` further below (reused by App Space).
+def probe_health(project_id: str, timeout: int = 5) -> dict:
+    """Re-probe a RUNNING deployment's health and persist it.
+
+    The stored ``health`` is only set at deploy time; this refreshes it on demand
+    (e.g. when the App Space detail page opens), so an app that became unhealthy
+    after deploy is reflected. A non-running deployment returns its stored health.
+    """
+    import requests
+
+    dep = get_deployment(project_id)
+    if not dep:
+        return {"available": False, "health": "unknown"}
+    if dep.status != DeploymentStatus.RUNNING or not dep.container_name:
+        return {"available": False, "health": dep.health or "unknown", "status": dep.status}
+    url = f"http://{dep.container_name}:{dep.internal_port or BACKEND_PORT}{HEALTH_PATH}"
+    health = "unhealthy"
+    try:
+        resp = requests.get(url, timeout=timeout)
+        health = "healthy" if resp.status_code < 500 else "unhealthy"
+    except Exception:  # noqa: BLE001 — unreachable container → unhealthy
+        health = "unhealthy"
+    dep.health = health
+    db.session.commit()
+    return {"available": True, "health": health, "status": dep.status}
+
+
+def container_logs(project_id: str, tail: int = 200) -> dict:
+    """Read-only tail of a deployment's container logs.
+
+    Bounded ``--tail`` + a byte cap; combines the container's stdout+stderr (apps
+    log to both). Never executes anything inside the container.
+    """
+    dep = get_deployment(project_id)
+    if not dep or not dep.container_name:
+        return {"available": False, "logs": ""}
+    try:
+        tail = max(1, min(int(tail or 200), 2000))
+    except (TypeError, ValueError):
+        tail = 200
+    try:
+        proc = _docker(["logs", "--tail", str(tail), "--timestamps", dep.container_name], 20)
+        out = (proc.stdout or "") + (proc.stderr or "")
+    except Exception as error:  # noqa: BLE001
+        return {"available": False, "logs": "", "error": str(error)[:200]}
+    if len(out) > 200_000:
+        out = "…(truncated)…\n" + out[-200_000:]
+    return {"available": True, "logs": out, "container": dep.container_name}
+
+
 # --- the atomic deploy -------------------------------------------------------
 def deploy(
     project: CodeProject,
@@ -514,11 +597,15 @@ def deploy(
     if not docker_available():
         return {"success": False, "error": "docker 不可用,无法部署生成的后端", "status": DeploymentStatus.FAILED}
 
-    backend_run = _latest_run(project.id, user_id, _BACKEND_WORKFLOW)
+    backend_run = _latest_backend_run(project.id, user_id)
     if not backend_run:
         return {"success": False, "error": "尚无已完成的后端工程,无法部署", "status": DeploymentStatus.FAILED}
-    frontend_run = _latest_run(project.id, user_id, _FRONTEND_WORKFLOW)
-    middleware_run = _latest_run(project.id, user_id, _MIDDLEWARE_WORKFLOW)
+    frontend_run = _latest_run_for_artifact(
+        project.id, user_id, _FRONTEND_WORKFLOW, "code_frontend_project_zip"
+    )
+    middleware_run = _latest_run_for_artifact(
+        project.id, user_id, _MIDDLEWARE_WORKFLOW, "code_middleware_meta"
+    )
 
     # Prefer the latest PROMOTED (deploy-repaired) backend source so a re-deploy
     # builds from the fixed code; fall back to the backend-generation run's zip.

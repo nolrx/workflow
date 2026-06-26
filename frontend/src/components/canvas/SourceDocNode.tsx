@@ -12,6 +12,11 @@ const KIND_LABEL: Record<string, string> = {
   style_prompt: "风格文档",
   preview: "UI 预览",
   code_document: "拆分文档",
+  // "Existing built product" sources — reuse instead of regenerate.
+  existing_frontend: "现有前端工程",
+  existing_backend: "现有后端工程",
+  existing_contract: "现有 API 契约",
+  existing_middleware: "现有中间件",
 }
 
 export function SourceDocNode({ id, data, selected }: NodeProps<FlowNode>) {

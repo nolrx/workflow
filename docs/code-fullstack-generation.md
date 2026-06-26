@@ -37,8 +37,8 @@
              → 注册 /app/<pid>/api 反代 → 前端 dist 运行时 API base 指向它 → 端到端联通校验
 ```
 
-- **并发上限**:`MAX_CONCURRENT_RUNS` 提到 6(env `AGENT_MAX_CONCURRENT_RUNS`);fullstack 编排端点创建 3 个 run,故须 ≥3 + 余量。
-- **线程池**:`agent_runtime` max_workers 提到 8(env `AGENT_MAX_WORKERS`);三个容器构建 run 多在等 `docker run`(I/O 阻塞),需足够 worker。
+- **并发上限**:`MAX_CONCURRENT_RUNS` 提到 12(env `AGENT_MAX_CONCURRENT_RUNS`);fullstack 编排端点创建 3 个 run,故须 ≥3 + 余量。
+- **线程池**:`agent_runtime` max_workers 提到 16(env `AGENT_MAX_WORKERS`);三个容器构建 run 多在等 `docker run`(I/O 阻塞),需足够 worker。
 - **每个 run 仍是单线程**(各自的 recorder/session)→ 不触发 recorder 并发问题。共识只走共享账本表,不靠 run 间内存通信。
 
 ## 部署与隔离(每项目长驻容器 + 共享设施命名空间)

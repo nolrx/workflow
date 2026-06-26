@@ -98,6 +98,15 @@ CODE_FULLSTACK_DEPLOY = _credits("PRICE_CODE_FULLSTACK_DEPLOY", 0)
 # up-front reservation) so a deploy with no provider configured isn't over-charged.
 CODE_FULLSTACK_INTEGRATION_TEST = _credits("PRICE_CODE_FULLSTACK_ITEST", 0)
 
+# --- Secondary development (二次开发 / 应用空间 iteration) -----------------------
+# A lightweight planning run that reads the deployed app's requirements / flow /
+# shared contract + the user's change ask and emits an impact analysis + a
+# user-confirmable execution plan (one or two text-model calls; degrades to a
+# deterministic plan when no provider is configured). The actual code regen reuses
+# the existing frontend/backend/middleware lane costs + the deploy cost, so only
+# the analysis itself is metered here. Defaults 0 (free) like the rest of Code.
+CODE_APP_ITERATION_ANALYSIS = _credits("PRICE_CODE_ITERATION_ANALYSIS", 0)
+
 
 # Operation label -> (resource_type, unit_cost). Used when writing CreditTransaction
 # records so the audit log carries a stable operation/resource vocabulary.
@@ -115,4 +124,5 @@ OPERATION = {
     "code_middleware": ("agent_run", CODE_MIDDLEWARE_PROVISIONING),
     "code_fullstack_deploy": ("agent_run", CODE_FULLSTACK_DEPLOY),
     "code_fullstack_itest": ("agent_run", CODE_FULLSTACK_INTEGRATION_TEST),
+    "code_app_iteration_analysis": ("agent_run", CODE_APP_ITERATION_ANALYSIS),
 }

@@ -64,6 +64,13 @@ until curl -fsS "$BASE_URL/health/ready" >/dev/null 2>&1; do
   sleep 2
 done
 
+# NOTE: additive schema changes (new model columns) are self-healed at BOOT by
+# backend/services/schema_guard.py::ensure_model_columns — every boot, before
+# serving — so a redeploy needs NO migration step for them. Alembic is reserved
+# for non-additive migrations (rename/drop/type/data) and is run MANUALLY when
+# needed: `make migrate-prod` (inside the container) — deliberately not auto-run
+# here to avoid a redundant alembic_version side effect on the platform DB.
+
 # 5. Reload nginx so it re-resolves the backend service name — a recreated
 #    container can get a NEW IP, and the upstream is resolved at config-load time,
 #    so without a reload the frontend would 502 against the old address.

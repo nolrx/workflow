@@ -6,10 +6,14 @@ from backend.models.code.figma_credential import FigmaCredential
 from backend.models.code.figma_design import CodeFigmaDesign
 from backend.models.code.figma_export import FigmaExportPackage
 from backend.models.code.fullstack import (
+    CodeAppIteration,
     CodeDeployment,
     CodeProjectLedger,
     ContractStatus,
     DeploymentStatus,
+    ImpactScope,
+    IterationChangeType,
+    IterationStatus,
 )
 from backend.models.code.github import (
     GitHubPushLog,
@@ -37,8 +41,12 @@ __all__ = [
     "FigmaExportPackage",
     "CodeProjectLedger",
     "CodeDeployment",
+    "CodeAppIteration",
     "ContractStatus",
     "DeploymentStatus",
+    "IterationStatus",
+    "IterationChangeType",
+    "ImpactScope",
     "GitHubRepoLink",
     "GitHubPushLog",
     "GitHubPushStatus",

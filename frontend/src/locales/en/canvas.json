@@ -12,6 +12,11 @@
     "addAgent": "Agent",
     "addMerge": "Merge",
     "addBranch": "Branch",
+    "addStage": "Stage…",
+    "addSource": "Existing…",
+    "freeze": "Freeze",
+    "frozen": "Pinned {{count}} stage prompt(s)",
+    "freezeFailed": "Freeze failed",
     "run": "Run canvas",
     "running": "Running…"
   },
@@ -20,6 +25,37 @@
     "saved": "Saved",
     "loading": "Loading…",
     "loadFailed": "Load failed"
+  },
+  "stage": {
+    "node": "Stage",
+    "unavailable": "not runnable yet",
+    "pinned": "pinned",
+    "name": {
+      "requirements": "Requirements",
+      "flow": "Dev flow",
+      "documents": "Doc split",
+      "style": "Style",
+      "preview": "UI preview",
+      "fe_build": "Frontend build",
+      "be_build": "Backend build",
+      "mw_provision": "Middleware",
+      "deploy": "Deploy"
+    }
+  },
+  "source": {
+    "existing": {
+      "frontend": "Existing frontend",
+      "backend": "Existing backend",
+      "contract": "Existing API contract",
+      "middleware": "Existing middleware"
+    }
+  },
+  "review": {
+    "awaiting": "Review “{{stage}}” — approve or request changes",
+    "placeholder": "Adjustment instruction (for Revise)",
+    "revise": "Revise",
+    "approve": "Approve",
+    "failed": "Resume failed"
   },
   "runFailed": "Canvas run failed"
 }

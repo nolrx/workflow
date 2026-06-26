@@ -1,7 +1,8 @@
 import { Link } from "react-router-dom"
 import { useTranslation } from "react-i18next"
-import { Bell, Menu, User } from "lucide-react"
+import { Menu, User } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { NotificationBell } from "./NotificationBell"
 
 interface HeaderProps {
   title?: string
@@ -41,9 +42,7 @@ export function Header({ title, onMenuClick }: HeaderProps) {
       </div>
 
       <div className="flex items-center gap-2">
-        <Button variant="ghost" size="icon" aria-label={t("a11y.notifications")}>
-          <Bell className="h-4 w-4" />
-        </Button>
+        <NotificationBell />
         <Button
           variant="ghost"
           size="icon"

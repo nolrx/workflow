@@ -40,7 +40,11 @@ from typing import Callable, Optional
 
 from werkzeug.utils import secure_filename
 
-from backend.services.code.docker_env import container_user, host_workdir
+from backend.services.code.docker_env import (
+    container_user,
+    host_workdir,
+    mount_failure_hint,
+)
 from backend.services.prompts import prompt_store
 
 logger = logging.getLogger(__name__)
@@ -84,6 +88,15 @@ _CONTAINER_SCRIPT = r"""
 export HOME="${HOME:-/home/node}"
 WORK=/tmp/work
 mkdir -p "$WORK" && cd "$WORK"
+# Iteration (二次开发) seed: when an existing project source was provided at
+# /out/_base, copy it into the workdir so the agent EDITS it in place (真实续改)
+# instead of generating fresh. No-op when /out/_base is absent. Removed afterwards
+# so it never gets tarred into the published source/dist.
+if [ -d /out/_base ] && [ -n "$(ls -A /out/_base 2>/dev/null)" ]; then
+  cp -a /out/_base/. "$WORK"/ 2>/dev/null || true
+  rm -rf /out/_base
+  echo seeded > /out/seeded
+fi
 export CODEX_HOME="$HOME/.codex"
 export PATH="$HOME/bin:$PATH"
 mkdir -p "$HOME/bin" "$HOME/.fe-assets" "$HOME/.claude/skills/image-assets" "$CODEX_HOME"
@@ -188,12 +201,32 @@ if [ -z "${REQUEST// /}" ]; then
   exit 0
 fi
 
+# Pull the project's visual-style context straight from the assembled prompt
+# (/out/prompt.txt already carries the 视觉风格规格 / UI 基调 / Figma sections),
+# so EVERY image is anchored to one consistent style family even when Claude's
+# per-image spec is terse. Sliced between the two stable section headers; cap the
+# bytes so a long style doc can't blow up Codex's context / wall-clock. Fail-soft:
+# missing file / no match -> empty -> no baseline block prepended.
+STYLE_CTX=""
+if [ -f /out/prompt.txt ]; then
+  STYLE_CTX="$(awk '/^# 视觉风格规格/{f=1} /^# 共享 API 契约/{f=0} f' /out/prompt.txt 2>/dev/null | head -c 6000)"
+fi
+STYLE_BLOCK=""
+if [ -n "${STYLE_CTX// /}" ]; then
+  STYLE_BLOCK="# 全局视觉风格基线(本工程统一视觉口径 — 所有图片必须严格遵循、属于同一风格家族)
+$STYLE_CTX
+
+请据上述风格基线,让所有图在以下维度保持一致(看起来像同一个产品出品):配色(尽量呼应基线里的主色/强调色)、媒介(写实照片 / 扁平插画 / 3D 等,全工程统一一种)、光影、质感、构图与背景处理。
+
+"
+fi
+
 INSTR="你是一个「资源图片生成」子 Agent。请为当前前端工程生成所需的位图资源。
-唯一的生成手段是调用本机脚本(它会请求 OpenAI 图像模型并把 PNG 写入文件):
+${STYLE_BLOCK}唯一的生成手段是调用本机脚本(它会请求 OpenAI 图像模型并把 PNG 写入文件):
   node \"$GENIMG\" --out <相对路径,统一放在 src/assets/ 下> --size <1024x1024|1536x1024|1024x1536> --prompt \"<英文图像提示词>\"
 要求:
 - 为下面每一项资源各调用一次该脚本,保存到 src/assets/ 指定路径(目录会自动创建)。
-- 提示词用英文、具体写实、贴合产品语境;图内不要渲染界面文字/按钮/水印/UI 截图。
+- **把上面的全局视觉风格基线融进每一条英文 prompt**(配色 / 媒介 / 光影 / 质感 / 构图保持一致),让所有图属于同一视觉风格家族、并呼应 UI 的主色与强调色;提示词用英文、具体写实、贴合产品语境;图内不要渲染界面文字 / 按钮 / 水印 / UI 截图。
 - 只能写入 src/assets/ 下的图片文件,不要改动任何其他源码。
 - 全部完成后,用一句话列出你实际写入的文件路径。
 
@@ -246,6 +279,7 @@ description: Generate real raster image assets (hero images, illustrations, phot
 ## 约束
 
 - 优先真实图片;**禁止**用 emoji 当图标/插画/装饰。
+- **风格一致**:Codex 子 Agent 看不到工程的视觉风格规格,只能读你写进 `gen-assets` 的描述——所以**每条描述都要带上统一的视觉风格简报(主色/强调色、媒介、光影、调性),全工程所有图共用同一套**,让它们属于同一风格家族并呼应 UI 配色。
 - 资源数量适度(一般 3–8 张),聚焦关键视觉位。
 - 图片放 `src/assets/`(被打包);不要放 `public/` 再用运行时绝对路径(子路径预览会失效)。
 - 若资源生成不可用,改用克制的 CSS/SVG 兜底,仍然不要用 emoji。
@@ -570,6 +604,59 @@ class FrontendProjectService:
             out = out.replace(f"[[{key}]]", value if value is not None else "")
         return out
 
+    def _build_prompt(
+        self, fill_vals: dict, edit_mode: bool, base_files: dict,
+        change_instruction: str, change_plan: str,
+    ) -> str:
+        """Pick + fill the generation prompt (edit-mode variant for 二次开发续改)."""
+        if not edit_mode:
+            return self._fill(self._load_prompt("frontend_project_prompt.txt"), **fill_vals)
+        base_list = "\n".join(f"- {p}" for p in sorted(base_files)[:300])
+        edit_vals = dict(
+            fill_vals,
+            CHANGE_INSTRUCTION=(change_instruction or "")[:4_000],
+            CHANGE_PLAN=(change_plan or "")[:4_000],
+            BASE_FILES=base_list,
+        )
+        try:
+            return self._fill(self._load_prompt("frontend_project_edit_prompt.txt"), **edit_vals)
+        except Exception:  # noqa: BLE001 — edit template missing: prepend a续改 preamble
+            base = self._fill(self._load_prompt("frontend_project_prompt.txt"), **fill_vals)
+            return (
+                "【二次开发·基于现有项目续改】当前目录已是现有前端工程,请只针对下述变更"
+                "修改/新增相关页面、组件、路由与 API 调用,保持其余文件不变,不要整体重写。\n"
+                f"变更要求:{(change_instruction or '')[:4000]}\n执行计划:\n{(change_plan or '')[:4000]}\n\n"
+                + base
+            )
+
+    @staticmethod
+    def _seed_base(base_dir: "Path", files: dict) -> None:
+        """Write the existing project source under workdir/_base (binary-safe).
+
+        Hardened against path traversal: a crafted zip member name like ``../../x``
+        must not escape ``base_dir`` and write onto the host. Absolute paths, ``..``
+        segments, and anything that resolves outside base_dir are skipped.
+        """
+        base_resolved = base_dir.resolve()
+        written = 0
+        for rel, content in files.items():
+            if written > 4000:
+                break
+            norm = str(rel).replace("\\", "/")
+            if not norm or norm.startswith("/") or ".." in norm.split("/"):
+                continue
+            try:
+                dest = base_dir / norm
+                resolved = dest.resolve()
+                if base_resolved != resolved and base_resolved not in resolved.parents:
+                    continue  # escaped base_dir → skip
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                data = content if isinstance(content, (bytes, bytearray)) else str(content).encode("utf-8")
+                dest.write_bytes(bytes(data))
+                written += 1
+            except Exception:  # noqa: BLE001
+                continue
+
     @staticmethod
     def _extract_json(text: str) -> Optional[dict]:
         """Tolerant single-object JSON parse (code-fence / prefix tolerant)."""
@@ -707,10 +794,18 @@ class FrontendProjectService:
         context_ledger: str = "",
         contract_block: str = "",
         figma_frames: Optional[list] = None,
+        base_files: Optional[dict] = None,
+        change_instruction: str = "",
+        change_plan: str = "",
         on_event: Optional[Callable[[dict], None]] = None,
         is_cancelled: Optional[Callable[[], bool]] = None,
     ) -> dict:
         """Run the containerized agent through its self-healing build ladder.
+
+        ``base_files`` (二次开发 iteration): when provided, the existing project
+        source is seeded so the agent EDITS it per ``change_instruction`` /
+        ``change_plan`` instead of regenerating (真实续改); the build ladder + dist
+        collection are unchanged so deploy/preview consume the output as before.
 
         Returns ``{success, degraded, degraded_reason, error, files, dist_files,
         summary, usage, cost_usd, workdir}``. The container always produces a
@@ -730,8 +825,8 @@ class FrontendProjectService:
         # time out and fall back to a degraded build. ``documents_digest`` is
         # already capped upstream (``_MAX_DIGEST_CHARS``).
         _cap = 16_000
-        prompt = self._fill(
-            self._load_prompt("frontend_project_prompt.txt"),
+        edit_mode = bool(base_files)
+        fill_vals = dict(
             CONTEXT_LEDGER=context_ledger or "",
             REQUIREMENT=(requirement or "")[:4_000],
             REQUIREMENTS_DOC=(requirements_doc or "")[:_cap],
@@ -745,6 +840,9 @@ class FrontendProjectService:
             # localStorage; empty in standalone mode (backward compatible).
             CONTRACT=(contract_block or "")[:9_000],
         )
+        prompt = self._build_prompt(
+            fill_vals, edit_mode, base_files or {}, change_instruction, change_plan
+        )
 
         workdir = Path(tempfile.mkdtemp(prefix="fe-agent-"))
         # The container runs as the non-root `node` user (uid 1000) and writes
@@ -753,6 +851,10 @@ class FrontendProjectService:
         # Mac is permissive and hides this), so open it up explicitly.
         os.chmod(workdir, 0o777)
         (workdir / "prompt.txt").write_text(prompt, encoding="utf-8")
+        # Edit mode: seed the existing project source so the container copies it
+        # into the agent workdir (真实续改). Binary-safe; skips pathological files.
+        if base_files:
+            self._seed_base(workdir / "_base", base_files)
         # The AI repair rung reuses this prompt; the container appends the live
         # build log before invoking claude a second time.
         (workdir / "repair_prompt.txt").write_text(
@@ -976,6 +1078,11 @@ class FrontendProjectService:
         npm_build_log: str,
     ) -> str:
         reasons: list[str] = []
+        # A bind-mount / OCI create failure (DooD) means the agent container never
+        # started — surface an actionable hint instead of a cryptic OCI error.
+        mount_hint = mount_failure_hint(stderr)
+        if mount_hint:
+            reasons.append(mount_hint)
         if docker_exit not in (0, None):
             reasons.append(f"container exited with code {docker_exit}")
         if claude_exit not in (0, None):

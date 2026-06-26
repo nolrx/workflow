@@ -148,6 +148,15 @@ class StepHandle:
             self.step.set_context_check(check)
         db.session.commit()
 
+    def set_port_bindings(self, bindings: dict | None):
+        """Persist this step's typed PortValue bindings (composable-workflow node).
+
+        Records which typed inputs the node consumed (by port → reference) and
+        produced, plus the resolved prompt pin, for replayable data lineage.
+        """
+        self.step.set_port_bindings(bindings)
+        db.session.commit()
+
     def add_artifact(
         self,
         artifact_type: str,

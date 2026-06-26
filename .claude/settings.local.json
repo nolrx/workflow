@@ -62,7 +62,9 @@
       "Bash(curl -s \"https://api.github.com/repos/bmad-code-org/bmad-method/branches?per_page=50\")",
       "Bash(curl -s \"https://api.github.com/repos/bmad-code-org/bmad-method/git/trees/V4?recursive=1\" -o bmad_v4.json)",
       "Bash(grep -E \"\\\\\\\\.py$\")",
-      "Bash(grep -E \"\\\\.txt$\")"
+      "Bash(grep -E \"\\\\.txt$\")",
+      "Bash(curl -sS -L -i --max-time 30 \"https://worksflow.xyz/preview/33693a52-7609-4b93-a5ef-453604a0b314/\")",
+      "Bash(curl -sSL -D - -o /tmp/preview.html \"https://worksflow.xyz/preview/33693a52-7609-4b93-a5ef-453604a0b314/\")"
     ]
   }
 }

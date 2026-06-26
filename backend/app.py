@@ -1,5 +1,5 @@
 """
-AI Creative Studio - Flask Application Factory
+Worksflow - Flask Application Factory
 """
 
 import logging
@@ -89,7 +89,7 @@ def create_app(config_name: str = None, *, reconcile_on_boot: bool = False) -> F
     @app.route("/health")
     @app.route("/health/live")
     def health():
-        return jsonify({"status": "healthy", "service": "ai-creative-studio"})
+        return jsonify({"status": "healthy", "service": "worksflow"})
 
     # Readiness: is this instance ready to take NEW work? Returns 503 while draining
     # for a graceful redeploy, so the deploy script (and any future load balancer)
@@ -107,7 +107,7 @@ def create_app(config_name: str = None, *, reconcile_on_boot: bool = False) -> F
     def index():
         return jsonify(
             {
-                "name": "AI Creative Studio API",
+                "name": "Worksflow API",
                 "version": "1.0.0",
                 "endpoints": {
                     "auth": "/api/auth",

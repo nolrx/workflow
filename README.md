@@ -1,4 +1,4 @@
-# AI Creative Studio
+# Worksflow
 
 AI 驱动的软件创作平台（**Code 域**）：从需求文档 → 开发流程 → 文档拆分 → 风格文档 → UI 预览 → **前端代码生成与预览**，并可进一步做**全栈生成（前端 + 后端 + 中间件）+ 应用部署**。所有耗时步骤通过可回放的 **Agent Swarm** 运行时执行。
 
@@ -121,7 +121,7 @@ npm run lint:frontend    # cd frontend && eslint .
 ## 项目结构
 
 ```
-ai-creative-studio/
+worksflow/
 ├── backend/
 │   ├── app.py           # Flask 应用入口（蓝图注册、错误处理、端口 5001）
 │   ├── config.py        # 配置管理

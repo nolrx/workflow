@@ -1,5 +1,5 @@
 """
-Database models for AI Creative Studio
+Database models for Worksflow
 """
 from backend.models.agent import (
     AgentArtifact,

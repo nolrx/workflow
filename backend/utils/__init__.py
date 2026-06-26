@@ -1,5 +1,5 @@
 """
-Utility functions for AI Creative Studio backend
+Utility functions for Worksflow backend
 """
 from backend.utils.response import success_response, error_response
 

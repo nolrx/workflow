@@ -29,8 +29,8 @@
     "deleteConfirmDescription": "プロジェクト「{{title}}」を削除しますか？この操作は元に戻せません。"
   },
   "brand": {
-    "name": "AI",
-    "subtitle": "クリエイティブスタジオ"
+    "name": "W",
+    "subtitle": "Worksflow"
   },
   "buttons": {
     "save": "保存",

@@ -242,7 +242,7 @@
     "sliceStarted": "Smart slicing started — grab the pairing code here once it finishes",
     "sliceFailed": "Failed to start smart slicing",
     "sliceGetCode": "Get Figma pairing code",
-    "pluginHint": "Run the \"AI Creative Studio Importer\" plugin in the Figma desktop app, enter your backend URL and this pairing code to import.",
+    "pluginHint": "Run the \"Worksflow Importer\" plugin in the Figma desktop app, enter your backend URL and this pairing code to import.",
     "attach": "Use a Figma design",
     "attachTitle": "Attach a Figma design",
     "attachDesc": "Connect Figma, then paste a file URL. We pull the whole file (all frames) and attach it to this project; generating the multi-file project then follows the design.",

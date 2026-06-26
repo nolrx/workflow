@@ -235,7 +235,7 @@
     "sliceStarted": "スマートスライスを開始しました。完了後にここでペアリングコードを取得できます",
     "sliceFailed": "スマートスライスの開始に失敗しました",
     "sliceGetCode": "Figma ペアリングコードを取得",
-    "pluginHint": "Figma デスクトップアプリで「AI Creative Studio Importer」プラグインを実行し、バックエンド URL とこのペアリングコードを入力して取り込みます。",
+    "pluginHint": "Figma デスクトップアプリで「Worksflow Importer」プラグインを実行し、バックエンド URL とこのペアリングコードを入力して取り込みます。",
     "attach": "Figma デザインを関連付け",
     "attachTitle": "Figma デザインを関連付け",
     "attachDesc": "Figma を接続してファイル URL を貼り付けます。ファイル全体（すべてのフレーム）を取得してこのプロジェクトに関連付け、マルチファイル生成時にデザインに従います。",

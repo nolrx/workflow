@@ -11,6 +11,9 @@ rollback on any failure (so a half-deployed app never lingers):
       → docker build the generated backend image (its OWN Dockerfile)
       → docker run a long-lived container on the shared app network
       → health-check  GET http://app-<pid>:<port>/health
+      → empty-schema guard (healthy ≠ tables exist: if the backend booted /health-
+                          green yet built ZERO tables, apply the init.sql fallback +
+                          restart so it ships with a real schema, not an empty db)
       → schema reconcile (align the live db to the contract db_schema: ADD missing
                           columns + WIDEN narrow string cols to TEXT; add/widen-only)
       → contract smoke   (sampled GETs must not 5xx)
@@ -48,7 +51,7 @@ from backend.services.code.backend_project_service import get_backend_project_se
 logger = logging.getLogger(__name__)
 
 DOCKER_BIN = os.getenv("DOCKER_BIN", "docker")
-APP_NETWORK = os.getenv("APP_NETWORK", "ai-creative-studio-net")
+APP_NETWORK = os.getenv("APP_NETWORK", "worksflow-net")
 BACKEND_PORT = int(os.getenv("APP_BACKEND_PORT", "8080"))
 BUILD_TIMEOUT = int(os.getenv("APP_BUILD_TIMEOUT", "900"))
 HEALTH_TIMEOUT = int(os.getenv("APP_HEALTH_TIMEOUT", "90"))
@@ -510,6 +513,29 @@ def deploy(
     # the running image (a failed round leaves the workdir dirty; we never promote
     # that). None until the ladder runs; then it advances only on a healthy round.
     good_source: Optional[dict] = None
+
+    def _fail_unhealthy(reason: str) -> dict:
+        """Roll back a health failure, but FIRST surface the container's boot log.
+
+        A "容器反复重启/启动即崩溃" message with no traceback is undebuggable, and
+        rollback removes the container so ``docker logs`` is gone afterwards. Capture
+        the tail into the deployment detail AND narrate it onto the run timeline the
+        user is watching, so the actual crash (DB connect / missing migration /
+        self-seed exception / import error …) is visible without DB access.
+        """
+        logs = _docker(["logs", "--tail", "80", container], 30)
+        log_tail = (logs.stdout or logs.stderr or "").strip()
+        dep.set_detail({**dep.get_detail(), "health": reason, "container_logs": log_tail[-4000:]})
+        db.session.commit()
+        if log_tail:
+            phase("health", "后端容器启动日志(末尾,用于定位崩溃原因):\n" + log_tail[-2000:],
+                  {"container_logs": log_tail[-2000:]})
+        return _fail(
+            dep, rollback,
+            reason + (f"\n容器日志末尾:\n{log_tail[-800:]}" if log_tail else ""),
+            narrate=phase,
+        )
+
     try:
         _ensure_network()
 
@@ -662,10 +688,66 @@ def deploy(
                 phase("health", f"兜底后容器重启失败:{(started.stderr or started.stdout)[-300:]}")
 
         if not healthy:
-            logs = _docker(["logs", "--tail", "60", container], 30)
-            dep.set_detail({**dep.get_detail(), "health": detail, "container_logs": (logs.stdout or logs.stderr or "")[-2000:]})
-            db.session.commit()
-            return _fail(dep, rollback, f"后端健康检查未通过:{detail}", narrate=phase)
+            return _fail_unhealthy(f"后端健康检查未通过:{detail}")
+
+        # --- 5a. Empty-schema guard (healthy ≠ tables exist) -----------------
+        # /health going 200 only proves the PROCESS bound its port — it says
+        # NOTHING about whether the backend ran create_all/migrations. A backend
+        # that boots healthy but fails to self-migrate (create_all never invoked,
+        # a swallowed migrate error, a `make migrate` step the start command
+        # never runs…) leaves the db with ZERO tables → every data endpoint 500s
+        # at runtime ("库表结构没建出来"). The not-healthy fallback above never
+        # catches this (it's gated on a boot CRASH), and the reconcile below
+        # refuses to CREATE whole missing tables. So: read the live table count
+        # (information_schema ground truth) and, if the db is provably EMPTY and
+        # an init.sql fallback exists, apply it to build the schema, then restart
+        # so the backend's boot-time demo self-seed reruns against the now-built
+        # schema. Applying to a zero-table db can't drift (nothing to conflict
+        # with). Best-effort: only an explicit 0 acts; None (sqlite/connect-fail)
+        # is left alone.
+        if not cancelled() and not init_applied:
+            import time as _time
+
+            live_tables = middleware_service.count_tables(prov.database_url)
+            # Grace re-poll: a backend may answer /health before an async
+            # create_all/migration finishes. Only treat the db as "genuinely
+            # empty" if it is still zero after a short settle window.
+            grace = 0
+            while live_tables == 0 and grace < 5 and not cancelled():
+                _time.sleep(3)
+                live_tables = middleware_service.count_tables(prov.database_url)
+                grace += 1
+
+            if live_tables == 0 and has_init_fallback:
+                phase("health",
+                      "健康检查通过但实库仍为空(后端未在启动时自建表):"
+                      "应用 init.sql 兜底建表后重启,让首屏 demo self-seed 在已建表的库上重跑")
+                ok_apply, apply_log = middleware_service.apply_init_sql(prov.database_url, init_sql)
+                restarted = _docker(["restart", container], 120)
+                phase("health", f"已应用 init.sql 兜底并重启容器:{apply_log}",
+                      {"applied": ok_apply, "restarted": restarted.returncode == 0})
+                if restarted.returncode == 0:
+                    healthy, detail = _wait_healthy(container, BACKEND_PORT, HEALTH_TIMEOUT, cancelled)
+                else:
+                    healthy, detail = False, (restarted.stderr or restarted.stdout or "")[-300:]
+                if not healthy:
+                    return _fail_unhealthy(f"空库兜底建表后健康检查未通过:{detail}")
+                init_applied = True
+                dep.set_detail({**dep.get_detail(),
+                                "init_sql_fallback": True,
+                                "empty_schema_recovered": True,
+                                "recovery": "empty-first; self-migration absent; init.sql applied post-health"})
+                db.session.commit()
+                phase("health", "空库兜底建表完成,健康检查复测通过(后端非自迁移,已用兜底 DDL 建表)",
+                      {"tables_built": True})
+            elif live_tables == 0:
+                # Empty db AND no init.sql fallback → not recoverable here. Surface
+                # it loudly so ops doesn't read the green deploy as data-complete.
+                phase("health",
+                      "⚠ 健康检查通过但实库为空且无 init.sql 兜底:后端未在启动时自建表(create_all/迁移),"
+                      "数据接口将在运行时报错。请确认后端启动命令执行了建表/迁移,或重新生成后端工程。",
+                      {"tables": 0, "fallback": False})
+
         dep.health = "healthy"
 
         # --- 5b. Schema reconcile against the authoritative contract db_schema ---

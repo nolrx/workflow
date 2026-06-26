@@ -12,7 +12,7 @@ claude code only use chinese respone question.
 
 ## 项目概述
 
-AI Creative Studio 是一个 monorepo：后端为 Flask（Python），前端为 React/TypeScript（Vite），由根目录 `package.json` 的 npm 脚本统一编排。当前产品域为 **Code**：
+Worksflow 是一个 monorepo：后端为 Flask（Python），前端为 React/TypeScript（Vite），由根目录 `package.json` 的 npm 脚本统一编排。当前产品域为 **Code**：
 
 - **Code**（`/api/code` + 共享的 `/api/agent`、`frontend .../code`）—— 软件创作工作流：需求文档 → 开发流程 → 文档拆分 → 风格文档 → UI 预览 → **前端代码生成与预览**，并可进一步做**全栈生成（前端 + 后端 + 中间件）+ 应用部署**。它通过下文的 **Agent Swarm** 运行时执行，产出可回放的 `AgentRun`。
 
@@ -137,7 +137,7 @@ React 19 + TypeScript + Vite。`@/` 是 `frontend/src/` 的别名。
 
 - **约定**：新增插件时新建 `plugin/<name>/` 目录，不要散落在根目录、也不要塞进 `frontend`。插件**不参与**根目录 `npm run dev`/`npm run build`/`npm run lint` 的编排（根 `package.json` 不引用 `plugin/*`），各插件在自己目录里用自己的脚本构建。插件与平台的耦合只通过 **HTTP API**（`/api/...`）和**共享数据契约**完成，不直接 import 后端/前端代码。
 
-**当前插件：`plugin/figma`（AI Creative Studio Importer）。** 一个 Figma 桌面插件，把平台导出的设计（Code 域 UI 预览 / 生成的前端）在 Figma 里重建为原生图层。
+**当前插件：`plugin/figma`（Worksflow Importer）。** 一个 Figma 桌面插件，把平台导出的设计（Code 域 UI 预览 / 生成的前端）在 Figma 里重建为原生图层。
 
 - **构成**：`manifest.json`（插件清单，`main=code.js`、`ui=ui.html`）、`src/code.ts`（主线程，重建图层）、`src/ir.ts`（Design IR 的插件侧镜像）、`ui.html`（插件 UI）。用 **esbuild** 把 `src/code.ts` 打包成 `code.js`（`code.js` 与 `node_modules` 都在 `.gitignore` 内，需本地构建）。
 - **构建 / 加载**：`cd plugin/figma && npm install && npm run build`（`npm run watch` 监听、`npm run typecheck` 跑 `tsc --noEmit`）；然后在 Figma 桌面端 **Plugins → Development → Import plugin from manifest…** 选择 `plugin/figma/manifest.json`，改完 `src/` 后重新 `build`。

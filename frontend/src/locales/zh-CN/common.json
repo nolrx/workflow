@@ -29,8 +29,8 @@
     "deleteConfirmDescription": "确定要删除项目「{{title}}」吗？删除后将无法恢复。"
   },
   "brand": {
-    "name": "AI",
-    "subtitle": "创意工作室"
+    "name": "W",
+    "subtitle": "Worksflow"
   },
   "buttons": {
     "save": "保存",

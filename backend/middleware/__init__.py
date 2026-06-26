@@ -1,5 +1,5 @@
 """
-Middleware components for AI Creative Studio
+Middleware components for Worksflow
 """
 from backend.middleware.logging import setup_request_logging
 

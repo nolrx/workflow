@@ -29,8 +29,8 @@
     "deleteConfirmDescription": "Are you sure you want to delete project \"{{title}}\"? This action cannot be undone."
   },
   "brand": {
-    "name": "AI",
-    "subtitle": "Creative Studio"
+    "name": "W",
+    "subtitle": "Worksflow"
   },
   "buttons": {
     "save": "Save",

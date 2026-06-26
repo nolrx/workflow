@@ -24,9 +24,11 @@ export function Header({ title, onMenuClick }: HeaderProps) {
         </Button>
 
         <Link to="/" className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <span className="text-sm font-bold">{t("brand.name")}</span>
-          </div>
+          <img
+            src={`${import.meta.env.BASE_URL}worksflow-icon.png`}
+            alt={t("brand.subtitle")}
+            className="h-8 w-8 rounded-lg"
+          />
           <span className="font-semibold">{t("brand.subtitle")}</span>
         </Link>
 

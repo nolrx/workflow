@@ -1,5 +1,5 @@
 # ==============================================================================
-# AI Creative Studio — full stack (frontend + backend + middleware)
+# Worksflow — full stack (frontend + backend + middleware)
 #   frontend : nginx serving the built SPA, reverse-proxying /api  (worksflow.xyz)
 #   backend  : Flask API via gunicorn
 #   postgres : primary datastore (middleware)
@@ -12,7 +12,7 @@ services:
     # --- Middleware: PostgreSQL ------------------------------------------------
     postgres:
         image: postgres:16-alpine
-        container_name: ai-creative-studio-postgres
+        container_name: worksflow-postgres
         restart: unless-stopped
         environment:
             POSTGRES_USER: ${POSTGRES_USER}
@@ -37,7 +37,7 @@ services:
     # --- Middleware: Redis -----------------------------------------------------
     redis:
         image: redis:7-alpine
-        container_name: ai-creative-studio-redis
+        container_name: worksflow-redis
         restart: unless-stopped
         ports:
             - "6379:6379"
@@ -54,7 +54,7 @@ services:
     # --- Middleware: MongoDB (editable system prompts) -------------------------
     mongo:
         image: mongo:7
-        container_name: ai-creative-studio-mongo
+        container_name: worksflow-mongo
         restart: unless-stopped
         ports:
             - "27017:27017"
@@ -80,8 +80,8 @@ services:
         build:
             context: .
             dockerfile: backend/Dockerfile
-        image: ai-creative-studio-backend:latest
-        container_name: ai-creative-studio-backend
+        image: worksflow-backend:latest
+        container_name: worksflow-backend
         restart: unless-stopped
         env_file:
             - .env
@@ -106,7 +106,7 @@ services:
             # (named explicitly below so the name is stable across compose project
             # names), so the backend reaches them by container name. APP_BACKEND_PORT
             # is the in-container port the generated backend listens on (PORT env).
-            APP_NETWORK: ai-creative-studio-net
+            APP_NETWORK: worksflow-net
             APP_BACKEND_PORT: "8080"
             # Deploy-time backend build self-heal. A failed `docker build` of the
             # generated project's own Dockerfile feeds its FULL log to the be-agent,
@@ -187,8 +187,8 @@ services:
         build:
             context: ./frontend
             dockerfile: Dockerfile
-        image: ai-creative-studio-frontend:latest
-        container_name: ai-creative-studio-frontend
+        image: worksflow-frontend:latest
+        container_name: worksflow-frontend
         restart: unless-stopped
         ports:
             - "80:80"
@@ -246,8 +246,8 @@ volumes:
 networks:
     app-net:
         # Explicit name so generated backend containers (started via DooD with
-        # `--network ai-creative-studio-net`) land on the SAME network as the
+        # `--network worksflow-net`) land on the SAME network as the
         # platform backend regardless of the compose project name, and are
         # reachable by container name for the /app/<pid>/api reverse proxy.
-        name: ai-creative-studio-net
+        name: worksflow-net
         driver: bridge

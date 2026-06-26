@@ -242,7 +242,7 @@
     "sliceStarted": "已开始智能切片分析，完成后可在此获取配对码",
     "sliceFailed": "启动智能切片失败",
     "sliceGetCode": "获取 Figma 配对码",
-    "pluginHint": "在 Figma 桌面端运行「AI Creative Studio Importer」插件，填入后端地址与此配对码即可导入。",
+    "pluginHint": "在 Figma 桌面端运行「Worksflow Importer」插件，填入后端地址与此配对码即可导入。",
     "attach": "关联 Figma 设计",
     "attachTitle": "关联 Figma 设计",
     "attachDesc": "连接 Figma 后粘贴文件链接，平台会拉取整套设计稿（所有画板）并关联到本项目；之后生成多文件项目时会按设计稿生成。",

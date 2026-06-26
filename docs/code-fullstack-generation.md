@@ -119,5 +119,5 @@
 1. **改过的 `frontend_project_prompt.txt` 需同步进 Mongo 才生效**(运行时读 Mongo,seed 不覆盖已存):
    `uv run python scripts/sync_code_prompts.py --key code/frontend_project_prompt.txt`
    新增的 4 个 prompt 是缺失 key,会被 `seed_defaults()` 自动插入,无需手动同步。
-2. **deploy 需在 docker-compose 栈内运行**:生成的后端容器接入 `ai-creative-studio-net`,平台 backend 也须在该网络(compose 已配)。先 `docker compose --profile setup build` 构建 fe-agent / be-agent / slicer-agent 镜像。
+2. **deploy 需在 docker-compose 栈内运行**:生成的后端容器接入 `worksflow-net`,平台 backend 也须在该网络(compose 已配)。先 `docker compose --profile setup build` 构建 fe-agent / be-agent / slicer-agent 镜像。
 3. 计费默认 0(免费);用 `PRICE_CODE_BACKEND_PROJECT` / `PRICE_CODE_MIDDLEWARE` / `PRICE_CODE_FULLSTACK_DEPLOY` / `PRICE_CODE_CONTRACT_SYNTHESIS` 开启计量。

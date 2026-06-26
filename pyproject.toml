@@ -1,5 +1,5 @@
 [project]
-name = "ai-creative-studio"
+name = "worksflow"
 version = "1.0.0"
 description = "AI-powered software creation studio (Code domain) with an agent swarm runtime"
 requires-python = ">=3.10"

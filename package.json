@@ -1,7 +1,7 @@
 {
-  "name": "ai-creative-studio",
+  "name": "worksflow",
   "version": "1.0.0",
-  "description": "AI-powered creative platform",
+  "description": "Worksflow — AI agents that turn a conversation into a deployed full-stack app",
   "private": true,
   "scripts": {
     "setup": "uv sync && npm install && cd frontend && npm install",

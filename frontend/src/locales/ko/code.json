@@ -242,7 +242,7 @@
     "sliceStarted": "스마트 슬라이스를 시작했습니다. 완료 후 여기서 페어링 코드를 받을 수 있습니다",
     "sliceFailed": "스마트 슬라이스 시작 실패",
     "sliceGetCode": "Figma 페어링 코드 받기",
-    "pluginHint": "Figma 데스크톱 앱에서 'AI Creative Studio Importer' 플러그인을 실행하고 백엔드 URL 과 이 페어링 코드를 입력하여 가져옵니다.",
+    "pluginHint": "Figma 데스크톱 앱에서 'Worksflow Importer' 플러그인을 실행하고 백엔드 URL 과 이 페어링 코드를 입력하여 가져옵니다.",
     "attach": "Figma 디자인 연결",
     "attachTitle": "Figma 디자인 연결",
     "attachDesc": "Figma 를 연결한 뒤 파일 URL 을 붙여넣으세요. 파일 전체(모든 프레임)를 가져와 이 프로젝트에 연결하며, 멀티파일 프로젝트 생성이 이 디자인을 따릅니다.",

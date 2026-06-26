@@ -29,8 +29,8 @@
     "deleteConfirmDescription": "프로젝트 \"{{title}}\"을(를) 삭제하시겠습니까? 되돌릴 수 없습니다."
   },
   "brand": {
-    "name": "AI",
-    "subtitle": "크리에이티브 스튜디오"
+    "name": "W",
+    "subtitle": "Worksflow"
   },
   "buttons": {
     "save": "저장",

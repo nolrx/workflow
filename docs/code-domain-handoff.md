@@ -362,7 +362,7 @@ UI-baseline 确认（`status=ui_confirmed`）之后才生成代码。容器化 w
 | `FE_AGENT_IMAGE` | 前端容器镜像 | `fe-agent:latest` |
 | `BE_AGENT_IMAGE` | 后端容器镜像（🆕 全栈）| `be-agent:latest` |
 | `CODEX_TIMEOUT` | Figma 切片 Codex 容器超时(s) | 300（生产 compose 设 900）|
-| `APP_NETWORK` / `APP_BACKEND_PORT` | 🆕 全栈：生成后端容器接入的 compose 网络 / 后端容器内监听端口 | `ai-creative-studio-net` / 8080 |
+| `APP_NETWORK` / `APP_BACKEND_PORT` | 🆕 全栈：生成后端容器接入的 compose 网络 / 后端容器内监听端口 | `worksflow-net` / 8080 |
 | `DOCKER_BIN` | docker 可执行 | `docker` |
 | `FE_AGENT_TIMEOUT/REPAIR_TIMEOUT/NPM_TIMEOUT/BUILD_TIMEOUT/TOTAL_TIMEOUT` | 容器各阶段超时(s) | 720/300/240/180/2400 |
 

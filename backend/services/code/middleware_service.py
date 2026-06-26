@@ -169,14 +169,31 @@ def _admin_database_url() -> Optional[str]:
 
 
 def _project_database_url(admin_url: str, db_name: str) -> str:
-    """Build the per-project connection URL, KEEPING the real password.
+    """Build the per-project connection URL injected into the backend container.
 
-    ``str(URL)`` renders the password as ``***`` (SQLAlchemy masks it to avoid
-    leaking it in logs) — injecting that into the backend container yields a
-    literal ``***`` password and a 28P01 auth failure. ``render_as_string(
-    hide_password=False)`` emits the real credential.
+    Two non-obvious things this must get right:
+
+    * **Keep the real password.** ``str(URL)`` renders it as ``***`` (SQLAlchemy
+      masks it to avoid leaking it in logs) — injecting that yields a literal
+      ``***`` password and a 28P01 auth failure. ``render_as_string(
+      hide_password=False)`` emits the real credential.
+    * **Pin an explicit ``sslmode``.** This URL is consumed by the GENERATED
+      backend's OWN driver, not SQLAlchemy. Go's ``lib/pq``/``pgx`` (and others)
+      DEFAULT to ``sslmode=require`` and hard-fail with ``pq: SSL is not enabled
+      on the server`` against the shared Postgres, which serves plaintext on the
+      private app network → the container crash-loops, health never passes. The
+      PLATFORM uses psycopg2 (default ``sslmode=prefer``, silent plaintext
+      fallback) so init.sql/reset/reconcile all work — masking the mismatch. Pin
+      ``sslmode`` (default ``disable`` for the internal network; override via
+      ``APP_DB_SSLMODE``) so every driver agrees. An explicit ``sslmode`` already
+      present in the admin URL is respected and not overridden.
     """
-    return make_url(admin_url).set(database=db_name).render_as_string(hide_password=False)
+    url = make_url(admin_url).set(database=db_name)
+    query = dict(url.query)
+    if "sslmode" not in query:
+        query["sslmode"] = os.getenv("APP_DB_SSLMODE", "disable")
+        url = url.set(query=query)
+    return url.render_as_string(hide_password=False)
 
 
 def provision_namespace(project_id: str) -> ProvisionResult:
@@ -312,6 +329,40 @@ def reset_namespace(database_url: Optional[str]) -> tuple[bool, str]:
     except Exception as error:  # noqa: BLE001 — surfaced to the deploy run
         logger.error("namespace reset failed: %s", error, exc_info=True)
         return False, f"reset failed: {error}"
+
+
+def count_tables(database_url: Optional[str]) -> Optional[int]:
+    """Count BASE TABLEs in the project DB's ``public`` schema (Postgres only).
+
+    Deploy-time ground truth for *"did the backend actually build its schema?"*.
+    Since deploy no longer pre-applies init.sql, table creation is delegated to
+    the backend's own create_all/migration on boot — but a backend can answer
+    ``GET /health`` 200 (process up, port bound) while having created ZERO tables
+    (create_all never invoked, a swallowed migrate error, a ``make migrate`` step
+    the start command never runs…). The deploy reads this to detect that case and
+    apply the init.sql fallback. Returns the count, or ``None`` when it can't be
+    determined (sqlite-local / no db / connect failure) — callers MUST treat
+    ``None`` as "unknown, do not act" (only an explicit ``0`` means provably
+    empty). Best-effort: never raises.
+    """
+    if not database_url or database_url.startswith("sqlite"):
+        return None
+    try:
+        engine = create_engine(
+            database_url, isolation_level="AUTOCOMMIT", connect_args=_PG_DDL_CONNECT_ARGS
+        )
+        with engine.connect() as conn:
+            n = conn.execute(
+                text(
+                    "SELECT count(*) FROM information_schema.tables "
+                    "WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"
+                )
+            ).scalar()
+        engine.dispose()
+        return int(n or 0)
+    except Exception as error:  # noqa: BLE001 — unknown table count, never raised
+        logger.warning("count_tables failed: %s", error)
+        return None
 
 
 _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")

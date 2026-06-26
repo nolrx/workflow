@@ -33,9 +33,11 @@ export function Login() {
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <span className="text-lg font-bold">{t('common:brand.name')}</span>
-          </div>
+          <img
+            src={`${import.meta.env.BASE_URL}worksflow-icon.png`}
+            alt={t('common:brand.subtitle')}
+            className="mx-auto mb-4 h-12 w-12 rounded-lg"
+          />
           <CardTitle className="text-2xl">{t('login.title')}</CardTitle>
           <CardDescription>
             {t('login.subtitle')}

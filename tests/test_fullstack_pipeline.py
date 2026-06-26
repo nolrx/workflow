@@ -230,10 +230,14 @@ def test_provision_namespace_sqlite_branch(app, monkeypatch):
 
 
 def test_project_database_url_keeps_password():
-    """Regression: the injected per-project URL must carry the REAL password.
+    """Regression: the injected per-project URL must carry the REAL password and
+    pin an explicit sslmode.
 
-    ``str(URL)`` masks it as ``***`` (→ a 28P01 auth failure in the deployed
-    backend); the provisioned URL must render the actual credential.
+    ``str(URL)`` masks the password as ``***`` (→ a 28P01 auth failure in the
+    deployed backend); the provisioned URL must render the actual credential. It
+    must also pin ``sslmode`` (default ``disable``) — a backend driver defaulting
+    to ``sslmode=require`` (Go ``lib/pq``) otherwise crash-loops with "SSL is not
+    enabled on the server" against the SSL-less shared Postgres.
     """
     from backend.services.code import middleware_service
 
@@ -242,7 +246,8 @@ def test_project_database_url_keeps_password():
     )
     assert "s3cr3t" in url
     assert "***" not in url
-    assert url.endswith("/app_abc123")
+    assert "/app_abc123" in url
+    assert "sslmode=disable" in url
 
 
 def test_split_sql_handles_statements_and_comments():

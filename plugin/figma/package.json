@@ -1,8 +1,8 @@
 {
-  "name": "ai-creative-studio-figma-plugin",
+  "name": "worksflow-figma-plugin",
   "version": "0.1.0",
   "private": true,
-  "description": "Figma plugin that rebuilds AI Creative Studio designs (exported as a Design IR) as native Figma layers.",
+  "description": "Figma plugin that rebuilds Worksflow designs (exported as a Design IR) as native Figma layers.",
   "scripts": {
     "build": "esbuild src/code.ts --bundle --target=es2017 --outfile=code.js",
     "watch": "esbuild src/code.ts --bundle --target=es2017 --outfile=code.js --watch",

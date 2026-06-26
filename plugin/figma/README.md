@@ -1,6 +1,6 @@
-# AI Creative Studio — Figma Importer plugin
+# Worksflow — Figma Importer plugin
 
-Rebuilds a design exported from AI Creative Studio (a Code-domain UI preview or
+Rebuilds a design exported from Worksflow (a Code-domain UI preview or
 generated app) as native Figma layers.
 
 ## How it works

@@ -1,5 +1,5 @@
 """
-Configuration settings for AI Creative Studio
+Configuration settings for Worksflow
 """
 
 import os

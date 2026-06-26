@@ -1,4 +1,4 @@
-# AI Creative Studio — common dev & single-machine deploy tasks.
+# Worksflow — common dev & single-machine deploy tasks.
 # Run `make` or `make help` to list targets.
 #
 # Override the compose binary on older hosts:  make up COMPOSE="docker-compose"

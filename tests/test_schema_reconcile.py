@@ -96,3 +96,11 @@ def test_reconcile_noop_on_empty_schema_without_connecting():
     )
     assert ok is True
     assert "empty db_schema" in log
+
+
+def test_count_tables_returns_none_for_sqlite_and_none_without_connecting():
+    # The empty-schema guard only acts on an explicit 0; sqlite-local / no-db
+    # must short-circuit to None (unknown → do not act) WITHOUT connecting.
+    assert middleware_service.count_tables(None) is None
+    assert middleware_service.count_tables("sqlite:////app/data/app.db") is None
+

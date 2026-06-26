@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AI Creative Studio — deployment smoke test.
+Worksflow — deployment smoke test.
 
 Exercises the live, reachable API surface end-to-end through the nginx
 frontend (the worksflow.xyz domain) -> Flask backend -> PostgreSQL. Covers the

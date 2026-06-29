@@ -42,6 +42,23 @@ STREAM_RETRY_BASE_DELAY = float(os.getenv("AI_TEXT_STREAM_RETRY_DELAY", "2"))
 STREAM_RETRY_MAX_DELAY = 15.0
 
 
+def _resolve_use_thinking(model: str) -> bool:
+    """Whether to send the Claude-specific adaptive ``thinking`` parameter.
+
+    Adaptive thinking is a Claude feature. A non-Claude model served through an
+    Anthropic-compatible gateway (e.g. ``deepseek-v4-*`` on zentao.panlaxy.io)
+    typically rejects the param, which would fail every text step. ``AI_TEXT_THINKING``:
+    ``auto`` (default) -> on IFF the model id starts with ``claude``; ``on`` /
+    ``off`` force it. So existing Claude setups are unchanged.
+    """
+    mode = os.getenv("AI_TEXT_THINKING", "auto").strip().lower()
+    if mode in ("on", "1", "true", "yes"):
+        return True
+    if mode in ("off", "0", "false", "no"):
+        return False
+    return (model or "").lower().startswith("claude")
+
+
 def _guess_media_type(data: bytes) -> str:
     """Best-effort image media type detection from magic bytes."""
     if data[:3] == b"\xff\xd8\xff":
@@ -60,29 +77,46 @@ class ClaudeProvider(AIProvider):
 
     def __init__(
         self,
-        api_key: str,
+        api_key: Optional[str] = None,
         model: str = DEFAULT_CLAUDE_MODEL,
         base_url: Optional[str] = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        auth_token: Optional[str] = None,
     ):
         super().__init__(api_key, model)
+        # auth_token (Authorization: Bearer) is used against third-party gateways
+        # such as https://zentao.panlaxy.io; api_key (x-api-key) is the official
+        # API. Exactly one is sent — see _configure.
+        self.auth_token = auth_token
         self.base_url = base_url
         self.max_tokens = max_tokens
+        # Adaptive thinking is Claude-only; disabled for non-Claude gateway models.
+        self._use_thinking = _resolve_use_thinking(model)
         self._client = None
         self._configured = False
         self._configure()
 
+    def _thinking_kwargs(self) -> dict:
+        """Extra messages.stream() kwargs for adaptive thinking (empty when off)."""
+        return {"thinking": {"type": "adaptive"}} if self._use_thinking else {}
+
     def _configure(self):
         """Configure the Anthropic client."""
-        if not self.api_key:
-            logger.warning("Claude API key not configured")
+        if not (self.api_key or self.auth_token):
+            logger.warning("Claude credential not configured (no API key or auth token)")
             return
 
         try:
             import anthropic
             import httpx
 
-            kwargs = {"api_key": self.api_key}
+            # Prefer the Bearer auth token when present and DO NOT also pass an
+            # api_key: the SDK would then send both an Authorization and an
+            # x-api-key header, which the API/gateway rejects (401).
+            if self.auth_token:
+                kwargs = {"auth_token": self.auth_token}
+            else:
+                kwargs = {"api_key": self.api_key}
             if self.base_url:
                 kwargs["base_url"] = self.base_url
             # Bound every request with a finite timeout. Streaming delivers chunks
@@ -148,8 +182,8 @@ class ClaudeProvider(AIProvider):
                 with self._client.messages.stream(
                     model=self.model,
                     max_tokens=self.max_tokens,
-                    thinking={"type": "adaptive"},
                     messages=messages,
+                    **self._thinking_kwargs(),
                 ) as stream:
                     message = stream.get_final_message()
 
@@ -253,8 +287,8 @@ class ClaudeProvider(AIProvider):
             with self._client.messages.stream(
                 model=self.model,
                 max_tokens=self.max_tokens,
-                thinking={"type": "adaptive"},
                 messages=messages,
+                **self._thinking_kwargs(),
             ) as stream:
                 for text in stream.text_stream:
                     if text:

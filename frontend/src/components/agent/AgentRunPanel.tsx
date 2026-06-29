@@ -1,3 +1,4 @@
+import { useEffect } from "react"
 import { useTranslation } from "react-i18next"
 import { CheckCircle2, Circle, Loader2, MinusCircle, XCircle } from "lucide-react"
 import { toast } from "sonner"
@@ -84,10 +85,19 @@ export function AgentRunPanel() {
   const cancelRun = useAgentStore((state) => state.cancelRun)
   const closePanel = useAgentStore((state) => state.closePanel)
   const panelOpen = useAgentStore((state) => state.panelOpen)
+  const stepDebugById = useAgentStore((state) => state.stepDebugById)
+  const loadStepDebug = useAgentStore((state) => state.loadStepDebug)
 
   const selectedStep = useAgentStore(selectCurrentStep)
   // Follow new events to the bottom, but yield if the user scrolls up to read back.
   const timelineRef = useStickToBottom(events.length)
+
+  // The run snapshot is fetched lite (no per-step prompt / response / context
+  // bodies). When the debug panel is open for a step, pull that step's heavy trace
+  // on demand; it lands in stepDebugById and is merged below.
+  useEffect(() => {
+    if (debugMode && selectedStepId) void loadStepDebug(selectedStepId)
+  }, [debugMode, selectedStepId, loadStepDebug])
 
   if (!run || !panelOpen) return null
 
@@ -95,11 +105,17 @@ export function AgentRunPanel() {
   const stepArtifacts: AgentArtifact[] = selectedStep
     ? (run.artifacts || []).filter((artifact) => artifact.step_id === selectedStep.id)
     : []
-  // Internal / debug-only context-ledger view (never shown to end users).
-  const ledgerSnapshot = selectedStep?.context_snapshot?.ledger
-  const contextCheck = selectedStep?.context_check
+  // Merge the on-demand debug trace (the lite snapshot omits these heavy bodies)
+  // over the selected step; fall back to the step's own fields for any path that
+  // still loads a full snapshot. Internal / debug-only (never shown to end users).
+  const stepDebug = selectedStep ? stepDebugById[selectedStep.id] : undefined
+  const promptSnapshot = stepDebug?.prompt_snapshot ?? selectedStep?.prompt_snapshot ?? null
+  const modelResponse = stepDebug?.model_response ?? selectedStep?.model_response ?? null
+  const contextSnapshot = stepDebug?.context_snapshot ?? selectedStep?.context_snapshot
+  const ledgerSnapshot = contextSnapshot?.ledger
+  const contextCheck = stepDebug?.context_check ?? selectedStep?.context_check
   const hasContext = Boolean(
-    selectedStep?.context_snapshot?.injected_text || ledgerSnapshot || contextCheck?.deterministic
+    contextSnapshot?.injected_text || ledgerSnapshot || contextCheck?.deterministic
   )
   const progress = run.progress
   const progressValue = progress.total_steps
@@ -277,10 +293,10 @@ export function AgentRunPanel() {
                         {t("tabs.artifacts")} ({stepArtifacts.length})
                       </TabsTrigger>
                     )}
-                    {debugMode && selectedStep.prompt_snapshot && (
+                    {debugMode && promptSnapshot && (
                       <TabsTrigger value="prompt">{t("tabs.prompt")}</TabsTrigger>
                     )}
-                    {debugMode && selectedStep.model_response && (
+                    {debugMode && modelResponse && (
                       <TabsTrigger value="response">{t("tabs.response")}</TabsTrigger>
                     )}
                     {debugMode && hasContext && (
@@ -323,18 +339,18 @@ export function AgentRunPanel() {
                     </TabsContent>
                   )}
 
-                  {debugMode && selectedStep.prompt_snapshot && (
+                  {debugMode && promptSnapshot && (
                     <TabsContent value="prompt" className="pt-3">
                       <pre className="whitespace-pre-wrap break-words rounded-md border bg-muted/40 p-3 text-xs leading-relaxed">
-                        {selectedStep.prompt_snapshot}
+                        {promptSnapshot}
                       </pre>
                     </TabsContent>
                   )}
 
-                  {debugMode && selectedStep.model_response && (
+                  {debugMode && modelResponse && (
                     <TabsContent value="response" className="pt-3">
                       <pre className="whitespace-pre-wrap break-words rounded-md border bg-muted/40 p-3 text-xs leading-relaxed">
-                        {selectedStep.model_response}
+                        {modelResponse}
                       </pre>
                     </TabsContent>
                   )}
@@ -344,13 +360,13 @@ export function AgentRunPanel() {
                       {contextCheck?.ai_gate?.conflict && (
                         <Badge variant="destructive">{t("context.conflict")}</Badge>
                       )}
-                      {selectedStep.context_snapshot?.injected_text && (
+                      {contextSnapshot?.injected_text && (
                         <div className="space-y-1">
                           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                             {t("context.injected")}
                           </p>
                           <pre className="whitespace-pre-wrap break-words rounded-md border bg-muted/40 p-3 text-xs leading-relaxed">
-                            {selectedStep.context_snapshot.injected_text}
+                            {contextSnapshot.injected_text}
                           </pre>
                         </div>
                       )}

@@ -184,6 +184,8 @@ export interface AppListParams {
   q?: string
   /** Scope: omit / null = personal apps; a team id = that team's apps. */
   team_id?: string | null
+  /** "all" = every deployed app platform-wide (admins only; ignored otherwise). */
+  scope?: string
   limit?: number
   offset?: number
 }
@@ -290,6 +292,7 @@ export const appsApi = {
     if (params?.health) q.set("health", params.health)
     if (params?.q) q.set("q", params.q)
     if (params?.team_id) q.set("team_id", params.team_id)
+    if (params?.scope) q.set("scope", params.scope)
     if (params?.limit != null) q.set("limit", String(params.limit))
     if (params?.offset != null) q.set("offset", String(params.offset))
     const res = await api.get<Envelope<AppListResult>>(`/code/apps?${q.toString()}`)

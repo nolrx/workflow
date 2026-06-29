@@ -99,6 +99,10 @@ MANIFEST: dict[str, dict] = {
         "mode": "fill",
         "placeholders": ["CONTEXT_LEDGER", "REQUIREMENT", "REQUIREMENTS_DOC", "DEVELOPMENT_FLOW", "DOCUMENTS", "STYLE_PROMPT", "UI_BASELINE", "FIGMA_DESIGN", "CONTRACT"],
         "must_contain": ["gen-assets", "base: './'", "npm run build", "npm install", "src/assets", "src/components", "src/types.ts", "React", "Vite", "localStorage", "window.__API_BASE__",
+            # Sub-path routing: the dist is served under /preview/<pid>/, so routing
+            # MUST be hash-based (HashRouter) — history routing escapes to the main
+            # domain. Keep the rule and its counter-example in the prompt.
+            "HashRouter", "BrowserRouter",
             # Login/auth consistency: the frontend must consume the contract's
             # fixed auth shape — read `resp.data.token`, persist it, send it as
             # `Authorization: Bearer`, and gate routes on it (this is "前端怎么验证通过").
@@ -114,7 +118,7 @@ MANIFEST: dict[str, dict] = {
     "frontend_project_repair_prompt.txt": {
         "mode": "plain",
         "placeholders": [],
-        "must_contain": ["npm run build", "base: './'"],
+        "must_contain": ["npm run build", "base: './'", "HashRouter"],
     },
     "frontend_project_critic_prompt.txt": {
         "mode": "fill",

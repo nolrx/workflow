@@ -52,6 +52,7 @@ from backend.services.agent.files import artifact_abs_path
 from backend.services.code import deploy_service, middleware_service
 from backend.services.code.fullstack import contract_service
 from backend.services.lifecycle import drain_guard
+from backend.utils.auth import is_admin
 from backend.utils.response import error_response, success_response
 
 # Latest published source zip per lane (prefer deploy-repaired backend source).
@@ -82,16 +83,21 @@ def _is_team_member(team_id: str | None, user_id: str) -> bool:
 
 
 def _accessible_project(project_id: str, user_id: str) -> CodeProject | None:
-    """Read-access lookup: the owner, OR a member of the project's team.
+    """Read-access lookup: the owner, a member of the project's team, OR an admin.
 
     Backs the App Space team-sharing requirement — a teammate can SEE (read) an app
-    that belongs to a team they're in. Mutating endpoints keep using
-    ``_owned_project`` so write access never crosses users.
+    that belongs to a team they're in — plus read-only admin oversight of any app.
+    Mutating endpoints keep using ``_owned_project`` so write access never crosses
+    users.
     """
     project = db.session.get(CodeProject, project_id)
     if not project:
         return None
-    if project.user_id == user_id or _is_team_member(project.team_id, user_id):
+    if (
+        project.user_id == user_id
+        or _is_team_member(project.team_id, user_id)
+        or is_admin(user_id)
+    ):
         return project
     return None
 
@@ -215,10 +221,12 @@ def _app_list_item(
 def list_apps():
     """List deployed apps in the requested scope (CodeDeployment ⨝ CodeProject).
 
-    Scope is governed by ``?team_id=``:
-      - absent → PERSONAL: the caller's own apps that aren't shared to any team
-        (``CodeDeployment.user_id == me`` AND ``CodeProject.team_id IS NULL``).
-      - present → TEAM: every app belonging to that team (``CodeProject.team_id ==
+    Scope is governed by ``?scope=`` / ``?team_id=``:
+      - ``scope=all`` (admins only) → PLATFORM: every deployed app across all
+        users/teams (read-only oversight). Silently ignored for non-admins.
+      - ``team_id`` absent → PERSONAL: the caller's own apps that aren't shared to
+        any team (``CodeDeployment.user_id == me`` AND ``CodeProject.team_id IS NULL``).
+      - ``team_id`` present → TEAM: every app belonging to that team (``CodeProject.team_id ==
         team_id``), created by ANY member — gated on the caller being a member.
 
     Also supports ``?status=``, ``?health=``, ``?q=`` (title search) and
@@ -226,6 +234,7 @@ def list_apps():
     """
     user_id = get_jwt_identity()
     team_id = (request.args.get("team_id") or "").strip() or None
+    admin_all = (request.args.get("scope") or "").strip().lower() == "all" and is_admin(user_id)
     if team_id and not _is_team_member(team_id, user_id):
         return error_response("FORBIDDEN", "无权访问该团队的应用空间", 403)
 
@@ -234,7 +243,9 @@ def list_apps():
         .join(CodeProject, CodeProject.id == CodeDeployment.project_id)
         .outerjoin(User, User.id == CodeProject.user_id)
     )
-    if team_id:
+    if admin_all:
+        pass  # no owner/team filter — list every deployed app
+    elif team_id:
         query = query.filter(CodeProject.team_id == team_id)
     else:
         query = query.filter(

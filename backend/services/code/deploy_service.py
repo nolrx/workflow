@@ -32,6 +32,7 @@ backend without a rebuild. Comments in English (Code/core convention).
 """
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -193,11 +194,54 @@ def _remove_container(name: str) -> None:
         pass
 
 
-def _run_container(container: str, image_tag: str, prov) -> subprocess.CompletedProcess:
+# A generated Python backend that drives SQLAlchemy's ASYNC engine
+# (``create_async_engine`` / ``sqlalchemy.ext.asyncio``) crash-loops on import when
+# handed the bare ``postgresql://`` URL we provision — SQLAlchemy resolves the default
+# sync ``psycopg2`` and raises "The asyncio extension requires an async driver ...
+# 'psycopg2' is not async". We detect that from the staged source and inject an
+# async-driver scheme (postgresql+asyncpg) into the container's DATABASE_URL ONLY.
+# Triggered strictly on the SQLAlchemy-async entrypoint — NOT bare ``asyncpg`` use: a
+# direct ``asyncpg.connect(dsn)`` wants a plain ``postgresql://`` DSN and a ``+driver``
+# scheme would break it.
+_ASYNC_SQLA_RE = re.compile(rb"create_async_engine|ext\.asyncio|ext\s*\.\s*asyncio|AsyncSession")
+
+
+def _detect_async_pg_driver(source: dict) -> Optional[str]:
+    """The async SQLAlchemy postgres driver the backend needs, or ``None``.
+
+    ``source`` is ``{rel: bytes}``. Returns the concrete driver name (picked from the
+    dependency footprint) only when the backend uses SQLAlchemy async; ``None`` for
+    sync / non-Python / direct-asyncpg backends (whose injected URL is left untouched).
+    """
+    uses_async_sqla = any(
+        rel.endswith(".py") and data and _ASYNC_SQLA_RE.search(data)
+        for rel, data in source.items()
+    )
+    if not uses_async_sqla:
+        return None
+    blob = b"\n".join(
+        data for rel, data in source.items()
+        if data and rel.rsplit("/", 1)[-1].endswith((".py", ".txt", ".toml", ".cfg", ".lock"))
+    )
+    # psycopg v3 (NOT psycopg2) also drives SQLAlchemy async; asyncpg is the de-facto
+    # default and what generated stacks almost always pin.
+    if b"asyncpg" in blob:
+        return "asyncpg"
+    if b"psycopg" in blob.replace(b"psycopg2-binary", b"").replace(b"psycopg2", b""):
+        return "psycopg"
+    return "asyncpg"
+
+
+def _run_container(
+    container: str, image_tag: str, prov, db_url: Optional[str] = None
+) -> subprocess.CompletedProcess:
     """(Re)start the backend container from ``image_tag`` on the shared network with
     the injected runtime env. Removes any existing container first so it is safe to
-    call both for the initial start and to swap in a repaired image."""
+    call both for the initial start and to swap in a repaired image. ``db_url`` overrides
+    the injected ``DATABASE_URL`` (used to hand an async-driver-adapted URL to a
+    SQLAlchemy-async backend); ``None`` falls back to the provisioned sync URL."""
     _remove_container(container)
+    eff_db_url = db_url if db_url is not None else prov.database_url
     run_args = [
         "run", "-d", "--name", container,
         "--network", APP_NETWORK,
@@ -206,8 +250,8 @@ def _run_container(container: str, image_tag: str, prov) -> subprocess.Completed
         "-e", f"PORT={BACKEND_PORT}",
         "-e", "NODE_ENV=production",
     ]
-    if prov.database_url:
-        run_args += ["-e", f"DATABASE_URL={prov.database_url}"]
+    if eff_db_url:
+        run_args += ["-e", f"DATABASE_URL={eff_db_url}"]
     if prov.redis_url:
         run_args += ["-e", f"REDIS_URL={prov.redis_url}"]
     if prov.redis_prefix:
@@ -680,6 +724,22 @@ def deploy(
         phase("provision", f"中间件就绪:{prov.engine_kind}" + (f" / {prov.db_name}" if prov.db_name else ""),
               {"middleware": prov.to_dict()})
 
+        # If the generated backend drives SQLAlchemy's ASYNC engine, the bare
+        # ``postgresql://`` URL we provisioned crash-loops it on import ("'psycopg2' is
+        # not async"). Inject an async-driver scheme into the CONTAINER's DATABASE_URL
+        # only — ``prov.database_url`` stays a sync libpq URL for the platform's own
+        # psycopg2 ops (init.sql / reset / count_tables / reconcile). Detected once from
+        # the source; reused for every (re)start of the container in this deploy.
+        container_db_url = prov.database_url
+        async_driver = _detect_async_pg_driver(source)
+        if async_driver:
+            container_db_url = middleware_service.container_database_url(prov.database_url, async_driver)
+            if container_db_url != prov.database_url:
+                phase("provision",
+                      f"检测到后端使用 SQLAlchemy 异步引擎,容器连接串改用异步驱动 postgresql+{async_driver}"
+                      "(平台自身的建表/对账仍走同步驱动)",
+                      {"async_driver": async_driver})
+
         # --- 2. Migrate the data layer (distinct, observable CI stage) --------
         # SINGLE schema source-of-truth = the backend ORM's self-migration on an
         # EMPTY db. We deliberately do NOT pre-apply init.sql by default: pre-applying
@@ -768,7 +828,7 @@ def deploy(
         dep.status = DeploymentStatus.STARTING
         db.session.commit()
         phase("start", "启动后端容器并接入共享网络")
-        run = _run_container(container, image_tag, prov)  # clears any stale container first
+        run = _run_container(container, image_tag, prov, db_url=container_db_url)  # clears any stale container first
         if run.returncode != 0:
             return _fail(dep, rollback, f"后端容器启动失败:{(run.stderr or run.stdout)[-600:]}", narrate=phase)
         rollback.append(lambda: _remove_container(container))
@@ -1099,7 +1159,7 @@ def deploy(
                     # Swap the container to the candidate image; if it won't start /
                     # go healthy, restore the last-known-good image so repair never
                     # leaves the app worse than before.
-                    swap = _run_container(container, new_tag, prov)
+                    swap = _run_container(container, new_tag, prov, db_url=container_db_url)
                     healthy = False
                     if swap.returncode == 0:
                         healthy, _ = _wait_healthy(container, BACKEND_PORT, HEALTH_TIMEOUT, cancelled)
@@ -1109,7 +1169,7 @@ def deploy(
                         # up"): _run_container removed the good container to swap, so if
                         # the revert can't bring a HEALTHY one back, roll the whole
                         # deploy back rather than register a dead container as RUNNING.
-                        rb = _run_container(container, running_image, prov)
+                        rb = _run_container(container, running_image, prov, db_url=container_db_url)
                         reverted = rb.returncode == 0 and _wait_healthy(
                             container, BACKEND_PORT, HEALTH_TIMEOUT, cancelled)[0]
                         if not reverted:
@@ -1150,7 +1210,7 @@ def deploy(
                             start_itest=itest, cand_itest=cand_itest)
                     if regressed:
                         phase("repair", f"⚠ 复检确认相比修复前出现回退({reason}),回滚到修复前镜像并停止修复(尽力放行)")
-                        rb = _run_container(container, running_image, prov)
+                        rb = _run_container(container, running_image, prov, db_url=container_db_url)
                         reverted = rb.returncode == 0 and _wait_healthy(
                             container, BACKEND_PORT, HEALTH_TIMEOUT, cancelled)[0]
                         if not reverted:

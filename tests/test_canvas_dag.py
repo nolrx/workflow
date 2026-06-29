@@ -70,11 +70,24 @@ def test_build_text_provider_claude(monkeypatch):
 
 
 def test_build_text_provider_image_provider_falls_back_to_gemini(monkeypatch):
-    # openai/panlaxy are image-only — a text request must fall back to gemini.
+    # panlaxy is image-only — a text request must fall back to gemini. (openai is
+    # NO LONGER image-only: it now has a chat-completions text provider, below.)
     monkeypatch.setenv("GEMINI_API_KEY", "g-test")
-    provider = build_text_provider(provider="openai")
+    provider = build_text_provider(provider="panlaxy")
     assert provider is not None
     assert provider.provider_name == "gemini"
+
+
+def test_build_text_provider_openai_is_a_text_provider(monkeypatch):
+    # "openai" now resolves to the OpenAI-compatible chat-completions TEXT provider
+    # (for gateways serving non-Anthropic models like deepseek-v4-* via /v1/chat/completions).
+    monkeypatch.setenv("AI_TEXT_API_KEY", "sk-openai-text")
+    provider = build_text_provider(
+        provider="openai", model="deepseek-v4-pro", base_url="https://zentao.panlaxy.io/v1"
+    )
+    assert provider is not None
+    assert provider.provider_name == "openai_text"
+    assert provider.model == "deepseek-v4-pro"
 
 
 def test_build_text_provider_no_key_returns_none(monkeypatch):
@@ -86,6 +99,10 @@ def test_build_text_provider_no_key_returns_none(monkeypatch):
         "AI_API_KEY",
         "GOOGLE_API_KEY",
         "GEMINI_API_KEY",
+        # Bearer auth tokens (gateway) are credentials too — clear them so a token
+        # in the real .env doesn't make the provider non-None.
+        "AI_TEXT_AUTH_TOKEN",
+        "ANTHROPIC_AUTH_TOKEN",
     ):
         monkeypatch.delenv(key, raising=False)
     assert build_text_provider(provider="claude") is None

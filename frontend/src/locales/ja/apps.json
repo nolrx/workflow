@@ -196,6 +196,7 @@
   "scope": {
     "label": "範囲",
     "personal": "個人",
+    "all": "すべて（管理者）",
     "createdBy": "作成者：{{name}}",
     "unknownMember": "メンバー"
   },

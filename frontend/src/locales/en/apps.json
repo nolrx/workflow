@@ -196,6 +196,7 @@
   "scope": {
     "label": "Scope",
     "personal": "Personal",
+    "all": "All (admin)",
     "createdBy": "By {{name}}",
     "unknownMember": "a member"
   },

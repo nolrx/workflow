@@ -33,6 +33,8 @@ interface SessionItem {
   label: string
   href: string
   isDeployed: boolean
+  /** Owner's display name — only populated in the admin "view all" scope. */
+  ownerName?: string | null
 }
 
 interface SidebarContentProps {
@@ -66,6 +68,8 @@ export function SidebarContent({ onNavigate }: SidebarContentProps) {
   const deleteCodeProject = useCodeStore((s) => s.deleteProject)
   const hasMoreProjects = useCodeStore((s) => s.hasMoreProjects)
   const isLoadingProjects = useCodeStore((s) => s.isLoadingProjects)
+  const projectScope = useCodeStore((s) => s.projectScope)
+  const setProjectScope = useCodeStore((s) => s.setProjectScope)
 
   const balance = useCreditStore((s) => s.balance)
   const fetchBalance = useCreditStore((s) => s.fetchBalance)
@@ -113,6 +117,7 @@ export function SidebarContent({ onNavigate }: SidebarContentProps) {
     label: p.title || p.requirement_input?.slice(0, 40) || untitled,
     href: `/code/${p.id}`,
     isDeployed: !!p.is_deployed,
+    ownerName: p.owner?.display_name ?? null,
   }))
 
   const setNewProjectDialogOpen = useCodeStore((state) => state.setNewProjectDialogOpen)
@@ -167,8 +172,37 @@ export function SidebarContent({ onNavigate }: SidebarContentProps) {
 
       {/* Recent sessions */}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-        <div className="px-3 py-2 text-xs font-medium uppercase text-muted-foreground">
-          {t("sidebar.recentSessions")}
+        <div className="flex items-center justify-between px-3 py-2">
+          <span className="text-xs font-medium uppercase text-muted-foreground">
+            {t("sidebar.recentSessions")}
+          </span>
+          {/* Admin-only: switch between own sessions and every user's (read-only). */}
+          {isAdmin && (
+            <div className="inline-flex overflow-hidden rounded-sm border text-[11px]">
+              <button
+                onClick={() => setProjectScope("mine")}
+                className={cn(
+                  "px-1.5 py-0.5 transition-colors",
+                  projectScope === "mine"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-accent"
+                )}
+              >
+                {t("sidebar.scopeMine")}
+              </button>
+              <button
+                onClick={() => setProjectScope("all")}
+                className={cn(
+                  "px-1.5 py-0.5 transition-colors",
+                  projectScope === "all"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-accent"
+                )}
+              >
+                {t("sidebar.scopeAll")}
+              </button>
+            </div>
+          )}
         </div>
         <nav className="space-y-0">
           {sessions.length === 0 ? (
@@ -196,13 +230,18 @@ export function SidebarContent({ onNavigate }: SidebarContentProps) {
                     })
                   }}
                   className={cn(
-                    "block truncate border-l-2 px-3 py-2 text-sm transition-colors",
+                    "block border-l-2 px-3 py-2 text-sm transition-colors",
                     isActive
                       ? "border-primary bg-accent font-medium text-accent-foreground"
                       : "border-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                   )}
                 >
-                  {session.label}
+                  <span className="block truncate">{session.label}</span>
+                  {projectScope === "all" && session.ownerName && (
+                    <span className="block truncate text-[11px] text-muted-foreground/70">
+                      {t("sidebar.ownedBy", { name: session.ownerName })}
+                    </span>
+                  )}
                 </Link>
               )
             })

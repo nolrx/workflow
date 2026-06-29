@@ -19,6 +19,7 @@ import {
   supportedLanguages,
   languageNames,
   languageFlags,
+  changeLanguage,
   type SupportedLanguage,
 } from "@/i18n"
 import { toast } from "sonner"
@@ -242,7 +243,7 @@ export function Profile() {
                 <Select
                   value={currentLanguage}
                   onValueChange={(value) =>
-                    i18n.changeLanguage(value as SupportedLanguage)
+                    void changeLanguage(value as SupportedLanguage)
                   }
                 >
                   <SelectTrigger id="language-select" className="w-full max-w-sm">

@@ -151,5 +151,9 @@ def test_missing_key_returns_none(monkeypatch):
     monkeypatch.delenv("CLAUDE_API_KEY", raising=False)
     monkeypatch.delenv("AI_TEXT_API_KEY", raising=False)
     monkeypatch.delenv("AI_API_KEY", raising=False)
+    # A Bearer auth token (gateway) is also a credential — clear it too, else a
+    # token in the real .env (loaded by config) would make the provider non-None.
+    monkeypatch.delenv("AI_TEXT_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
     reset_providers()
     assert get_text_provider() is None

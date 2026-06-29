@@ -29,6 +29,9 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from backend.services.code.docker_env import (
+    ANTHROPIC_RETRY_PROXY_BOOTSTRAP,
+    anthropic_agent_credentials,
+    anthropic_configured,
     container_user,
     host_workdir,
     mount_failure_hint,
@@ -66,6 +69,8 @@ export PATH="$HOME/bin:$PATH"
 mkdir -p "$HOME/bin" "$CODEX_HOME"
 
 CLAUDE_FLAGS="--output-format stream-json --verbose --permission-mode bypassPermissions --allowedTools Read Write Edit Bash"
+
+# __ANTHROPIC_PROXY_BOOTSTRAP__
 
 emit() { printf '%s\n' "{\"type\":\"be_phase\",\"phase\":\"$1\"}"; }
 
@@ -340,6 +345,7 @@ fi
 _REPAIR_SCRIPT = r"""
 export HOME="${HOME:-/home/node}"
 export PATH="$HOME/bin:$PATH"
+# __ANTHROPIC_PROXY_BOOTSTRAP__
 cd /out
 claude -p --output-format stream-json --verbose --permission-mode bypassPermissions --allowedTools Read Write Edit Bash || true
 """
@@ -379,6 +385,17 @@ printf '%s' "${OPENAI_API_KEY:-}" | codex login --with-api-key >/dev/null 2>&1 |
 # `exec` makes codex's exit the container's.
 exec timeout "${BE_CODEX_REPAIR_TIMEOUT:-900}" codex ${BE_CODEX_REPAIR_FLAGS} < /tmp/repair_prompt.txt 2>&1
 """
+
+# Splice the gateway retry-proxy bootstrap in before the claude calls of the
+# generation + deploy-time-repair scripts (both hit the gateway). The Codex repair
+# script uses OpenAI, not the Anthropic gateway, so it gets no marker / no-op. See
+# docker_env.py for why (flaky gateway random-403 that the claude CLI won't retry).
+_CONTAINER_SCRIPT = _CONTAINER_SCRIPT.replace(
+    "# __ANTHROPIC_PROXY_BOOTSTRAP__", ANTHROPIC_RETRY_PROXY_BOOTSTRAP
+)
+_REPAIR_SCRIPT = _REPAIR_SCRIPT.replace(
+    "# __ANTHROPIC_PROXY_BOOTSTRAP__", ANTHROPIC_RETRY_PROXY_BOOTSTRAP
+)
 
 
 class BackendProjectService:
@@ -526,7 +543,7 @@ class BackendProjectService:
             return None
 
     def is_configured(self) -> bool:
-        return bool(os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY"))
+        return anthropic_configured()
 
     @staticmethod
     def is_codex_configured() -> bool:
@@ -662,13 +679,16 @@ class BackendProjectService:
                 )
             except Exception:  # noqa: BLE001 — reinforce rung degrades to skip if absent
                 (workdir / "reinforce_prompt.txt").write_text("", encoding="utf-8")
-        api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
+        # Anthropic credential injection: ANTHROPIC_AUTH_TOKEN (+ ANTHROPIC_BASE_URL)
+        # for a gateway like zentao.panlaxy.io, else ANTHROPIC_API_KEY. Secrets are
+        # passed by NAME (value pulled from `env` below) so they never land in argv.
+        cred_flags, cred_env = anthropic_agent_credentials()
 
         user = container_user()
         cmd = [
             self.docker, "run", "--rm",
             "--user", user,
-            "-e", "ANTHROPIC_API_KEY",
+            *cred_flags,
             "-e", "OPENAI_API_KEY",
             "-e", f"BE_AGENT_TIMEOUT={self.gen_timeout}",
             "-e", f"BE_AGENT_INSTALL_TIMEOUT={self.install_timeout}",
@@ -685,7 +705,7 @@ class BackendProjectService:
             # When matching the host UID the image's /home/node is owned by uid
             # 1000 and is not writable. Use /tmp as HOME instead (always 1777).
             cmd += ["-e", "HOME=/tmp"]
-        env = dict(os.environ, ANTHROPIC_API_KEY=api_key or "")
+        env = dict(os.environ, **cred_env)
         openai_key = os.getenv("OPENAI_API_KEY")
         if openai_key:
             env["OPENAI_API_KEY"] = openai_key
@@ -907,17 +927,18 @@ class BackendProjectService:
         # The container runs as the non-root ``node`` uid; make the staged tree
         # writable so claude can edit the existing (backend-written) files.
         self._make_writable(wd)
-        api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
+        # Same Anthropic credential injection as the generation run (gateway-aware).
+        cred_flags, cred_env = anthropic_agent_credentials()
         user = container_user()
         cmd = [
             self.docker, "run", "--rm", "-i",
             "--user", user,
-            "-e", "ANTHROPIC_API_KEY", "-e", "OPENAI_API_KEY",
+            *cred_flags, "-e", "OPENAI_API_KEY",
             "-v", f"{host_workdir(wd)}:/out", self.image, "bash", "-c", _REPAIR_SCRIPT,
         ]
         if user != "node":
             cmd += ["-e", "HOME=/tmp"]
-        env = dict(os.environ, ANTHROPIC_API_KEY=api_key or "")
+        env = dict(os.environ, **cred_env)
         openai_key = os.getenv("OPENAI_API_KEY")
         if openai_key:
             env["OPENAI_API_KEY"] = openai_key

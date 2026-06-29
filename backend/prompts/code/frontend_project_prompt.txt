@@ -77,7 +77,10 @@
      3. **统一帧**:收发都按统一帧 `{ type, data, ts }`(JSON 文本)解析与构造;按 `type` 分发更新对应 UI 状态。
      4. **健壮性**:断线指数退避重连(带次数/间隔上限);组件卸载 / 登出 / 收到 `401` 时关闭连接并停止重连;未登录 / 无网络时优雅降级,不要崩。
 
-3. **vite.config.ts 必须设置 `base: './'`(相对路径)**,以便构建产物能在子路径下的 iframe 内预览。
+3. **构建产物必须能在「未知子路径」下独立运行**(平台会把它挂在 `/preview/<项目id>/` 这类带前缀的路径上服务,构建期并不知道该前缀)。为此有两条不可违反的约定:
+   - **静态资源相对化**:`vite.config.ts` 必须设置 `base: './'`(相对路径),让 JS/CSS/图片按相对路径加载,不要写死 `/assets/...` 这种根绝对路径。
+   - **路由必须用 hash 路由,严禁 history 路由(关键)**:若工程使用 react-router,**必须用 `HashRouter`**(`import { HashRouter } from 'react-router-dom'`,把它包在最外层),**禁止 `BrowserRouter` / `createBrowserRouter` / 任何 history 模式**。原因:产物挂在 `/preview/<项目id>/` 前缀下、构建期拿不到该前缀,history 路由会把 `/login`、`/dashboard` 之类**当作根绝对路径**推到主域名(`https://<主站>/login`),导致点击后**跳出预览、落回平台主站**,深链刷新也会 404;而 hash 路由把全部路由放进 URL 的 `#` 片段,既不会离开 `/preview/<项目id>/`、刷新也始终命中 `index.html`,与 `base: './'` 同样是"对挂载路径无感知"。`<Link to="/x">` 在 `HashRouter` 下会自动渲染成 `#/x`,正常写即可。
+   - **禁止任何逃出当前子路径的硬跳转**:不要用 `<a href="/...">`、`window.location.href = '/...'`、`location.assign('/...')`、`history.pushState(_, _, '/...')` 等**根绝对路径**导航(它们同样会跳到主域名);页面内导航一律走 hash 路由或相对路径。若不用路由库(纯 state 切换视图)则天然无此问题。
 
 4. **所有交互必须真实可用**:每个按钮/链接/菜单都有真实事件;每个输入/选择/表单都改变有意义的状态且有提交行为。**禁止死控件、禁止 `href="#"` 空链接、禁止空事件处理器。** 禁止 TODO / FIXME、占位、"未实现"、"coming soon"、仅 mock 的界面——一律用内存/localStorage 状态实现真实功能。
 
@@ -106,6 +109,7 @@
 # PRE-DELIVERY SELF-CHECK(交付前自检 — 全部满足才能交付)
 - [ ] **构建通过**:`npm install` 与 `npm run build` 都已亲自运行且成功,无报错;未启动任何长驻进程。
 - [ ] **技术栈合规**:React 19 + TS + Vite + 纯 CSS(每组件配套 .css),`vite.config.ts` 设了 `base: './'`;无 Tailwind/UI 库/CDN/远程字体/第三方外部资源请求(同源后端 API 请求允许且全栈模式必需,不算违规)。
+- [ ] **子路径可运行(路由)**:若用了路由库,确为 `HashRouter`(hash 模式),**无 `BrowserRouter`/`createBrowserRouter`/history 路由**;无 `<a href="/...">`、`window.location.href='/...'`、`history.pushState(...,'/...')` 等逃出 `/preview/<项目id>/` 子路径的根绝对跳转(它们会跳回主域名)。
 - [ ] **结构合规**:组件在 `src/components/`、类型在 `src/types.ts`、状态用 hooks、图片在 `src/assets/`。数据持久化按模式:全栈模式经 `window.__API_BASE__` 解析基址、严格按契约调用真实后端(含 loading/error/空态),独立模式用 localStorage 并首次播种示例。
 - [ ] **接口规范一致(全栈模式)**:API 客户端在一处统一拆信封——非 2xx 或 `success===false` 当失败抛出(带 `error`/`message`),成功只取 `resp.data`;分页从 `data.items`/`data.total` 读;未假设裸数组;字段名严格按契约(snake_case/id 字符串/时间 ISO-8601)未臆改。
 - [ ] **登录鉴权一致(全栈且契约含 `/auth/login` 时)**:登录调 `${base}/auth/login`、从 `resp.data.token` 读 token 存到 `auth_token`;每个请求带 `Authorization: Bearer <token>`;有路由守卫按本地 token 验证登录态;任意 `401` 清除 token 并回登录页;字段名/请求头/`/auth/*` 路径与契约逐字一致。

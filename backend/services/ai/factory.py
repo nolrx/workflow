@@ -57,9 +57,13 @@ DEFAULT_TEXT_MODEL = "claude-opus-4-8"
 DEFAULT_GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image"
 DEFAULT_CLAUDE_TEXT_MODEL = "claude-opus-4-8"
 DEFAULT_GEMINI_TEXT_MODEL = "gemini-3-flash-preview"
-# Only these providers can generate text — openai/panlaxy are image-only, so a
-# per-node text model selection must be restricted to this set.
-TEXT_PROVIDERS = ("claude", "gemini")
+# Providers that can generate text. "openai" here means an OpenAI-compatible
+# chat-completions endpoint (gateways serving non-Anthropic models, e.g.
+# deepseek-v4-* on zentao.panlaxy.io) — distinct from the "openai" IMAGE branch,
+# which is disambiguated by capability in _create_provider. panlaxy is image-only.
+TEXT_PROVIDERS = ("claude", "gemini", "openai")
+# Generic fallback for an OpenAI-compatible text gateway; real id from AI_TEXT_MODEL.
+DEFAULT_OPENAI_TEXT_MODEL = "gpt-4o-mini"
 # OpenAI (ChatGPT) image API — verified: gpt-image-2 works via images.generate.
 DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-2"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
@@ -75,6 +79,18 @@ def _first(*values: Optional[str]) -> Optional[str]:
     return None
 
 
+def _resolve_text_auth_token() -> Optional[str]:
+    """Bearer auth token for the Claude text provider (third-party gateways).
+
+    Used as ``Authorization: Bearer`` against an Anthropic-compatible gateway
+    such as ``https://zentao.panlaxy.io``; when set it takes precedence over the
+    api_key (x-api-key) at the client layer. Capability-specific override first,
+    then the standard ``ANTHROPIC_AUTH_TOKEN`` the anthropic SDK / Claude Code
+    CLI also read.
+    """
+    return _first(os.getenv("AI_TEXT_AUTH_TOKEN"), os.getenv("ANTHROPIC_AUTH_TOKEN"))
+
+
 @dataclass
 class ResolvedProviderConfig:
     """Fully resolved configuration for a single capability (text or image)."""
@@ -83,6 +99,10 @@ class ResolvedProviderConfig:
     api_key: Optional[str]
     model: str
     base_url: Optional[str] = None
+    # Bearer auth token (Authorization: Bearer) for third-party Claude gateways
+    # such as https://zentao.panlaxy.io. Mutually exclusive with api_key at the
+    # client layer — see ClaudeProvider._configure. Text/Claude only.
+    auth_token: Optional[str] = None
 
 
 @dataclass
@@ -98,6 +118,7 @@ def _resolve_text_config() -> ResolvedProviderConfig:
     default_provider = os.getenv("AI_PROVIDER", "gemini").lower()
     provider = os.getenv("AI_TEXT_PROVIDER", default_provider).lower()
 
+    auth_token: Optional[str] = None
     if provider == "claude":
         api_key = _first(
             os.getenv("AI_TEXT_API_KEY"),
@@ -105,8 +126,28 @@ def _resolve_text_config() -> ResolvedProviderConfig:
             os.getenv("CLAUDE_API_KEY"),
             os.getenv("AI_API_KEY"),
         )
+        # Bearer auth for third-party gateways (e.g. https://zentao.panlaxy.io).
+        # When set it takes precedence over api_key at the client layer.
+        auth_token = _resolve_text_auth_token()
         model = os.getenv("AI_TEXT_MODEL", DEFAULT_CLAUDE_TEXT_MODEL)
         base_url = _first(os.getenv("AI_TEXT_BASE_URL"), os.getenv("ANTHROPIC_BASE_URL"))
+    elif provider == "openai":
+        # OpenAI-compatible chat-completions gateway (e.g. deepseek-v4-* on
+        # zentao.panlaxy.io, which only serves /v1/chat/completions — not the
+        # Anthropic /v1/messages the claude path uses). The Bearer token is the
+        # openai SDK's api_key, so AI_TEXT_AUTH_TOKEN is accepted here too.
+        # base_url MUST include /v1 (the SDK appends /chat/completions).
+        api_key = _first(
+            os.getenv("AI_TEXT_API_KEY"),
+            os.getenv("AI_TEXT_AUTH_TOKEN"),
+            os.getenv("OPENAI_API_KEY"),
+            os.getenv("AI_API_KEY"),
+        )
+        model = os.getenv("AI_TEXT_MODEL", DEFAULT_OPENAI_TEXT_MODEL)
+        base_url = (
+            _first(os.getenv("AI_TEXT_BASE_URL"), os.getenv("OPENAI_BASE_URL"))
+            or DEFAULT_OPENAI_BASE_URL
+        )
     else:
         api_key = _first(
             os.getenv("AI_TEXT_API_KEY"),
@@ -118,7 +159,8 @@ def _resolve_text_config() -> ResolvedProviderConfig:
         base_url = _first(os.getenv("AI_TEXT_BASE_URL"), os.getenv("AI_BASE_URL"))
 
     return ResolvedProviderConfig(
-        provider_type=provider, api_key=api_key, model=model, base_url=base_url
+        provider_type=provider, api_key=api_key, model=model,
+        base_url=base_url, auth_token=auth_token,
     )
 
 
@@ -177,8 +219,12 @@ def get_provider_config() -> ProviderConfig:
     return ProviderConfig(text=_resolve_text_config(), image=_resolve_image_config())
 
 
-def _create_provider(cfg: ResolvedProviderConfig) -> Optional[AIProvider]:
-    """Create a provider instance from a resolved configuration."""
+def _create_provider(cfg: ResolvedProviderConfig, capability: str = "text") -> Optional[AIProvider]:
+    """Create a provider instance from a resolved configuration.
+
+    ``capability`` ("text" | "image") disambiguates the "openai" provider type,
+    which has both a text (chat-completions) and an image implementation.
+    """
     provider = cfg.provider_type
 
     if provider == "claude":
@@ -190,9 +236,21 @@ def _create_provider(cfg: ResolvedProviderConfig) -> Optional[AIProvider]:
             model=cfg.model,
             base_url=cfg.base_url,
             max_tokens=max_tokens,
+            auth_token=cfg.auth_token,
         )
 
     if provider == "openai":
+        if capability != "image":
+            # OpenAI-compatible chat-completions text provider (deepseek-v4-* etc.).
+            from backend.services.ai.openai_text import OpenAITextProvider
+
+            return OpenAITextProvider(
+                api_key=cfg.api_key,
+                model=cfg.model,
+                base_url=cfg.base_url,
+                max_tokens=int(os.getenv("AI_TEXT_MAX_TOKENS", "32000")),
+            )
+
         from backend.services.ai.openai_image import OpenAIImageProvider
         from backend.services.ai.panlaxy import (
             DEFAULT_IMAGE_QUALITY,
@@ -262,8 +320,8 @@ def get_text_provider(force_new: bool = False) -> Optional[AIProvider]:
             return _text_provider
 
         cfg = _resolve_text_config()
-        if not cfg.api_key:
-            logger.warning("No API key configured for text provider")
+        if not (cfg.api_key or cfg.auth_token):
+            logger.warning("No credential configured for text provider (API key or auth token)")
             return None
 
         provider = _create_provider(cfg)
@@ -298,7 +356,7 @@ def get_image_provider(force_new: bool = False) -> Optional[AIProvider]:
             logger.warning("No API key configured for image provider")
             return None
 
-        provider = _create_provider(cfg)
+        provider = _create_provider(cfg, capability="image")
         if not force_new:
             _image_provider = provider
         logger.info(f"Image provider initialized: {cfg.provider_type} with model {cfg.model}")
@@ -315,6 +373,14 @@ def _resolve_key_for(provider: str) -> Optional[str]:
             os.getenv("CLAUDE_API_KEY"),
             os.getenv("AI_API_KEY"),
         )
+    if (provider or "").lower() == "openai":
+        # OpenAI-compatible chat gateway: the Bearer token is the api_key.
+        return _first(
+            os.getenv("AI_TEXT_API_KEY"),
+            os.getenv("AI_TEXT_AUTH_TOKEN"),
+            os.getenv("OPENAI_API_KEY"),
+            os.getenv("AI_API_KEY"),
+        )
     # gemini (and any other non-claude text provider) shares the gemini/AI chain.
     return _first(
         os.getenv("AI_TEXT_API_KEY"),
@@ -325,7 +391,11 @@ def _resolve_key_for(provider: str) -> Optional[str]:
 
 
 def _default_text_model_for(provider: str) -> str:
-    return DEFAULT_CLAUDE_TEXT_MODEL if provider == "claude" else DEFAULT_GEMINI_TEXT_MODEL
+    if provider == "claude":
+        return DEFAULT_CLAUDE_TEXT_MODEL
+    if provider == "openai":
+        return DEFAULT_OPENAI_TEXT_MODEL
+    return DEFAULT_GEMINI_TEXT_MODEL
 
 
 def build_text_provider(
@@ -347,6 +417,10 @@ def build_text_provider(
     same_as_default = provider_type == base.provider_type
 
     api_key = base.api_key if same_as_default else (_resolve_key_for(provider_type) or base.api_key)
+    auth_token = (
+        base.auth_token if same_as_default
+        else (_resolve_text_auth_token() if provider_type == "claude" else None)
+    )
     resolved_model = model or (base.model if same_as_default else _default_text_model_for(provider_type))
     resolved_base = base_url or (base.base_url if same_as_default else None)
 
@@ -355,9 +429,10 @@ def build_text_provider(
         api_key=api_key,
         model=resolved_model,
         base_url=resolved_base,
+        auth_token=auth_token,
     )
-    if not cfg.api_key:
-        logger.warning("No API key for per-node text provider: %s", provider_type)
+    if not (cfg.api_key or cfg.auth_token):
+        logger.warning("No credential for per-node text provider: %s", provider_type)
         return None
     return _create_provider(cfg)
 

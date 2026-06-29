@@ -17,6 +17,7 @@ from backend.models.code import (
     CodeStageVersionSource,
     DeploymentStatus,
 )
+from backend.models.user import User
 from backend.services import pricing
 from backend.services.agent.context_ledger import ContextLedger
 from backend.services.code import get_code_generation_service, list_styles
@@ -38,6 +39,7 @@ from backend.services.prompt_library import (
     resolve_prefix_text,
     route_prefixes,
 )
+from backend.utils.auth import is_admin
 from backend.utils.response import error_response, success_response
 
 code_project_bp = Blueprint("code_project", __name__)
@@ -116,11 +118,21 @@ def compose_prompt_prefixes():
 @code_project_bp.route("/projects", methods=["GET"])
 @jwt_required()
 def list_projects():
-    """List current user's code creation projects."""
+    """List the caller's code creation projects.
+
+    Admins may pass ``?scope=all`` to list EVERY user's projects (read-only
+    platform oversight); each item then carries an ``owner`` block. The scope is
+    silently ignored for non-admins, so a forged param never widens access.
+    """
     user_id = get_jwt_identity()
     limit = min(int(request.args.get("limit", 50)), 100)
     offset = int(request.args.get("offset", 0))
-    query = CodeProject.query.filter_by(user_id=user_id).order_by(CodeProject.updated_at.desc())
+    admin_all = (request.args.get("scope") or "").strip().lower() == "all" and is_admin(user_id)
+
+    query = CodeProject.query
+    if not admin_all:
+        query = query.filter_by(user_id=user_id)
+    query = query.order_by(CodeProject.updated_at.desc())
     projects = query.limit(limit).offset(offset).all()
     project_ids = [project.id for project in projects]
     deployments = (
@@ -129,10 +141,20 @@ def list_projects():
         else []
     )
     deployment_status_map = {deployment.project_id: deployment.status for deployment in deployments}
+
+    # Resolve owners only for the cross-user admin view (batched to avoid N+1).
+    owner_map: dict[str, User] = {}
+    if admin_all and projects:
+        owner_ids = {project.user_id for project in projects}
+        owner_map = {user.id: user for user in User.query.filter(User.id.in_(owner_ids)).all()}
+
     return success_response(
         {
             "projects": [
-                project.to_list_dict(deployment_status=deployment_status_map.get(project.id))
+                project.to_list_dict(
+                    deployment_status=deployment_status_map.get(project.id),
+                    owner=owner_map.get(project.user_id) if admin_all else None,
+                )
                 for project in projects
             ],
             "has_more": query.count() > offset + len(projects),
@@ -173,7 +195,7 @@ def create_project():
 @jwt_required()
 def get_project(project_id: str):
     """Return a project."""
-    project = _get_owned_project(project_id)
+    project = _get_readable_project(project_id)
     if not project:
         return error_response("NOT_FOUND", "项目不存在", 404)
     return success_response({"project": project.to_dict()})
@@ -663,7 +685,7 @@ def revise_document_section(project_id: str, document_id: str):
 @jwt_required()
 def list_all_stage_versions(project_id: str):
     """Return every stage's version trail for the project (metadata only)."""
-    project = _get_owned_project(project_id)
+    project = _get_readable_project(project_id)
     if not project:
         return error_response("NOT_FOUND", "项目不存在", 404)
     versions = {
@@ -679,7 +701,7 @@ def list_one_stage_versions(project_id: str, stage: str):
     """List one stage's version trail (newest first, metadata only)."""
     if stage not in CodeStage.ALL:
         return error_response("VALIDATION_ERROR", "未知的环节", 400)
-    project = _get_owned_project(project_id)
+    project = _get_readable_project(project_id)
     if not project:
         return error_response("NOT_FOUND", "项目不存在", 404)
     versions = list_stage_versions(project, stage)
@@ -694,7 +716,7 @@ def get_one_stage_version(project_id: str, stage: str, version_id: str):
     """Return a single version including its full content (for preview/diff)."""
     if stage not in CodeStage.ALL:
         return error_response("VALIDATION_ERROR", "未知的环节", 400)
-    project = _get_owned_project(project_id)
+    project = _get_readable_project(project_id)
     if not project:
         return error_response("NOT_FOUND", "项目不存在", 404)
     version = get_stage_version(project, stage, version_id)
@@ -772,7 +794,7 @@ def freeze_canvas(project_id: str, canvas_id: str):
 @jwt_required()
 def list_canvases(project_id: str):
     """List the project's remix canvases (metadata only)."""
-    project = _get_owned_project(project_id)
+    project = _get_readable_project(project_id)
     if not project:
         return error_response("NOT_FOUND", "项目不存在", 404)
     canvases = project.canvases.order_by(CodeCanvas.created_at.desc()).all()
@@ -807,7 +829,13 @@ def create_canvas(project_id: str):
 @jwt_required()
 def get_canvas(project_id: str, canvas_id: str):
     """Return a canvas's full node/edge graph."""
-    canvas = _get_owned_canvas(project_id, canvas_id)
+    # Read path: owner or admin may view; writes still go through _get_owned_canvas.
+    project = _get_readable_project(project_id)
+    canvas = (
+        CodeCanvas.query.filter_by(id=canvas_id, project_id=project.id).first()
+        if project
+        else None
+    )
     if not canvas:
         return error_response("NOT_FOUND", "画布不存在", 404)
     return success_response({"canvas": canvas.to_dict()})
@@ -855,6 +883,22 @@ def _get_owned_canvas(project_id: str, canvas_id: str) -> CodeCanvas | None:
 def _get_owned_project(project_id: str) -> CodeProject | None:
     user_id = get_jwt_identity()
     return CodeProject.query.filter_by(id=project_id, user_id=user_id).first()
+
+
+def _get_readable_project(project_id: str) -> CodeProject | None:
+    """Read-access lookup: the owner, OR an admin (read-only oversight).
+
+    Used by the GET/read endpoints so an admin can open and inspect any user's
+    project. Mutating endpoints keep ``_get_owned_project`` so write access never
+    crosses users.
+    """
+    user_id = get_jwt_identity()
+    project = db.session.get(CodeProject, project_id)
+    if not project:
+        return None
+    if project.user_id == user_id or is_admin(user_id):
+        return project
+    return None
 
 
 def _load_ledger_for_project(project: CodeProject) -> str:

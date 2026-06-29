@@ -86,18 +86,33 @@ class StepHandle:
             if model:
                 self.step.model_name = str(model)
             db.session.commit()
+            # The full prompt / response are already persisted on the step
+            # (prompt_snapshot / model_response) and fetched on demand by the debug
+            # panel. Do NOT duplicate them into the event payload: events are
+            # replayed in full on every snapshot and SSE reconnect, the client never
+            # reads these payload bodies, and on the text steps they are tens~hundreds
+            # of KB each — shipping them was the bulk of the conversation wire cost.
+            # Keep only the small metadata (+ a char count for the timeline).
             self._recorder.emit(
                 AgentEventType.MODEL_REQUEST,
                 step_id=self.step.id,
                 message=f"调用模型 {provider or ''} {model or ''}".strip(),
-                payload={"prompt": prompt, "provider": provider, "model": model},
+                payload={
+                    "provider": provider,
+                    "model": model,
+                    "prompt_chars": len(prompt) if prompt else 0,
+                },
             )
             self._recorder.emit(
                 AgentEventType.MODEL_RESPONSE,
                 level=AgentEventLevel.INFO if success else AgentEventLevel.WARNING,
                 step_id=self.step.id,
                 message="模型返回成功" if success else f"模型返回失败: {error}",
-                payload={"response": text, "success": success, "error": error},
+                payload={
+                    "success": success,
+                    "error": error,
+                    "response_chars": len(text) if text else 0,
+                },
             )
 
         return _trace

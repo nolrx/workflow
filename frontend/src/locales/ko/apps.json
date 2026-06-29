@@ -196,6 +196,7 @@
   "scope": {
     "label": "범위",
     "personal": "개인",
+    "all": "전체(관리자)",
     "createdBy": "작성자: {{name}}",
     "unknownMember": "멤버"
   },

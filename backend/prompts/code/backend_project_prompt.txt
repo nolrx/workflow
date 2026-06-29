@@ -147,6 +147,7 @@
 2. **健康检查(硬性)**:实现 `GET /health`,在依赖就绪时返回 HTTP 200(可返回 `{"status":"ok"}`)。部署阶段据此判活,未通过即判部署失败。
 
 3. **从环境读取配置(硬性)**:监听端口取自环境变量 `PORT`(默认 8080),绑定 `0.0.0.0`;数据库连接取自 `DATABASE_URL`;若用缓存则从 `REDIS_URL`(可配合 `REDIS_PREFIX`)读取。**禁止硬编码端口/连接串/密钥。**
+   - **异步 DB 驱动须自规整连接串 scheme(硬性)**:平台注入的 `DATABASE_URL` 是**同步 libpq 形式**(`postgresql://…`)。若你用**异步数据库驱动/ORM**(如 SQLAlchemy `create_async_engine` / `AsyncSession`、`databases`、Tortoise、SQLModel async 等),**必须在代码里先把 scheme 规整成该异步驱动所需形式再连接**(如把 `postgresql://` / `postgresql+psycopg2://` 改写为 `postgresql+asyncpg://`),并在依赖中声明该异步驱动(如 `asyncpg`)。否则进程会在**导入/启动期直接崩溃**——`The asyncio extension requires an async driver to be used. The loaded 'psycopg2' is not async`——健康检查不过、整次部署回滚。规整时去掉 libpq 专用、asyncpg 不识别的查询参数(如 `sslmode`,asyncpg 在内网默认即可明文连接)。直连 `asyncpg.connect(dsn)`(不经 SQLAlchemy)则相反:它要的是**原始** `postgresql://` DSN,不要加 `+asyncpg`。
 
 4. **Dockerfile(硬性)**:工程根目录必须有一个 `Dockerfile`,能完成:安装依赖 → (如需)编译 → 设定 `EXPOSE 8080` → 以读取 `PORT` 的方式启动服务。确保 `docker build .` 后 `docker run -e PORT=8080 -e DATABASE_URL=...` 即可对外服务。务必满足:
    - **用明确版本的官方基础镜像**,编译型语言用**多阶段构建**(build 阶段编译、runtime 阶段精简):Java 用 `maven:3.9-eclipse-temurin-21` 编译 + `eclipse-temurin:21-jre` 运行;Go 用 `golang:1.22` 编译 + `gcr.io/distroless/base-debian12` 运行;Python 用 `python:3.12-slim`;Node 用 `node:22-slim`。
@@ -185,7 +186,7 @@
 - [ ] **接口规范统一**:所有 handler 经统一 `success_response`/`error_response` 出参——成功 `{success:true,data,message}`、失败 `ApiError`(固定错误码 + 对应状态码,有全局异常兜底,不抛 HTML/堆栈);列表用 `{items,total,page,page_size}` 分页;字段严格对齐契约 schema(id 字符串 / 时间 ISO-8601 / snake_case key / 金额整数);无裸顶层数组、无各端点自创外壳。
 - [ ] **登录鉴权一致**:契约含鉴权时,已实现 `POST /auth/login`(成功信封 `data` 含固定 `token` 字段 = JWT,即 `data.token`)与 `GET /auth/me`;受保护端点统一从 `Authorization: Bearer <token>` 校验 JWT、失败返回 `401`;demo 账号能走通这条真实登录拿到 token 并访问受保护数据(部署环境无外部依赖)。
 - [ ] **实时通道(若契约 `realtime.enabled=true`)**:已在同一 `PORT` 实现契约 `realtime.channels` 的每个 WebSocket 通道(挂在契约 `channels[].path` 的根路径,经 `/app/<项目>/api/<path>` + `Upgrade` 直达),握手用 `?token=<JWT>` 查询参数(与登录同一 JWT、同密钥/算法校验)鉴权,消息为统一帧 `{type,data,ts}`,跨副本广播经 Redis、进程无状态,有心跳;`enabled=false` 时无任何 WS,保持纯 HTTP。
-- [ ] **环境配置**:端口读 `PORT`(绑 0.0.0.0)、数据库读 `DATABASE_URL`、缓存读 `REDIS_URL`;无任何硬编码端口/连接串/密钥。
+- [ ] **环境配置**:端口读 `PORT`(绑 0.0.0.0)、数据库读 `DATABASE_URL`、缓存读 `REDIS_URL`;无任何硬编码端口/连接串/密钥。**用异步 DB 驱动时已把注入的 `postgresql://` scheme 规整为异步驱动形式(如 `postgresql+asyncpg://`)并声明该驱动依赖**,不会因 `psycopg2 is not async` 在启动期崩溃。
 - [ ] **Dockerfile**:根目录有可构建可启动的 `Dockerfile`,`EXPOSE 8080`,启动命令读取 `PORT`;编译型语言用多阶段+官方定版基础镜像,安装了全部依赖,构建命令**未用 `-q`/`--quiet`** 抑制日志。
 - [ ] **数据层**:有建表/迁移机制,启动后能对空库正常工作;读写落到真实数据库,无内存 mock。
 - [ ] **首屏可见 / demo self-seed**:已实现幂等 demo 自播种(可登录 demo 账号 + 归属其名下的业务数据,**仅空库触发**、账号与归属数据作为整体、`SEED_DEMO_DATA` 默认开、seed 失败不阻断启动、测试环境不触发);**demo 账号能在部署环境用本工程真实登录流程登进去(无外部依赖:密码登录用 `demo@example.com`/`Demo1234!`;短信/OTP 登录用固定开发验证码 `000000`;OAuth 唯一登录有本地兜底)**,登录后**首屏非空**;`README.md` 已按实际登录方式写明确切凭据/步骤。

@@ -41,6 +41,9 @@ from typing import Callable, Optional
 from werkzeug.utils import secure_filename
 
 from backend.services.code.docker_env import (
+    ANTHROPIC_RETRY_PROXY_BOOTSTRAP,
+    anthropic_agent_credentials,
+    anthropic_configured,
     container_user,
     host_workdir,
     mount_failure_hint,
@@ -104,6 +107,8 @@ mkdir -p "$HOME/bin" "$HOME/.fe-assets" "$HOME/.claude/skills/image-assets" "$CO
 # `Skill` is added so Claude can trigger the bundled image-assets skill; Bash lets
 # that skill (and Claude itself) shell out to the Codex CLI for asset generation.
 CLAUDE_FLAGS="--output-format stream-json --verbose --permission-mode bypassPermissions --allowedTools Read Write Edit Bash Skill"
+
+# __ANTHROPIC_PROXY_BOOTSTRAP__
 
 # ===========================================================================
 # Asset-generation lane: Claude (code) -> image-assets skill -> Codex -> image
@@ -565,6 +570,13 @@ if [ -d "$PROJECT_ROOT" ]; then
 fi
 """
 
+# Splice the gateway retry-proxy bootstrap in BEFORE the first claude call so every
+# claude pass (generate + repair) routes through the localhost retry shim when a
+# flaky gateway is configured. No-op for the official API. See docker_env.py.
+_CONTAINER_SCRIPT = _CONTAINER_SCRIPT.replace(
+    "# __ANTHROPIC_PROXY_BOOTSTRAP__", ANTHROPIC_RETRY_PROXY_BOOTSTRAP
+)
+
 
 class FrontendProjectService:
     """Generate a runnable multi-file frontend project via a sandboxed agent."""
@@ -724,7 +736,7 @@ class FrontendProjectService:
         return self._extract_json(result.text)
 
     def is_configured(self) -> bool:
-        return bool(os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY"))
+        return anthropic_configured()
 
     def assets_enabled(self) -> bool:
         """Whether the image-assets skill (Codex -> OpenAI image model) can run.
@@ -873,15 +885,18 @@ class FrontendProjectService:
                     os.chmod(design_dir / dest, 0o644)
                 except OSError:
                     logger.warning("failed to stage figma render %s", src)
-        api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
+        # Anthropic credential injection: ANTHROPIC_AUTH_TOKEN (+ ANTHROPIC_BASE_URL)
+        # for a gateway like zentao.panlaxy.io, else ANTHROPIC_API_KEY. Secrets are
+        # passed by NAME (value pulled from `env` below) so they never land in argv.
+        cred_flags, cred_env = anthropic_agent_credentials()
 
         user = container_user()
         cmd = [
             self.docker, "run", "--rm",
             "--user", user,
-            # Secrets passed by NAME (value pulled from `env` below) so they don't
-            # show up in the `docker run` argv / process list.
-            "-e", "ANTHROPIC_API_KEY",
+            *cred_flags,
+            # OPENAI_API_KEY passed by NAME (value pulled from `env` below) so it
+            # doesn't show up in the `docker run` argv / process list.
             "-e", "OPENAI_API_KEY",
             "-e", f"FE_AGENT_TIMEOUT={self.gen_timeout}",
             "-e", f"FE_AGENT_REPAIR_TIMEOUT={self.repair_timeout}",
@@ -902,7 +917,7 @@ class FrontendProjectService:
                 cmd += ["-e", f"{key}={value}"]
         cmd += ["-v", f"{host_workdir(workdir)}:/out", self.image, "bash", "-c", _CONTAINER_SCRIPT]
 
-        env = dict(os.environ, ANTHROPIC_API_KEY=api_key or "")
+        env = dict(os.environ, **cred_env)
         # OPENAI_API_KEY drives the image-assets skill (Codex). Optional: when
         # unset the build still runs, just with no generated raster assets.
         openai_key = os.getenv("OPENAI_API_KEY")

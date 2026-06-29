@@ -30,6 +30,11 @@ class AgentRunStatus:
     # Active = occupies a run slot / may still progress. Paused counts as active
     # (the session is in-flight, just waiting on the user).
     ACTIVE = {QUEUED, RUNNING, PAUSED}
+    # In-flight = ACTUALLY executing (holds a worker thread). EXCLUDES paused: a run
+    # waiting on a human-in-the-loop review holds no worker, so it must NOT count
+    # against the per-user concurrency cap — otherwise an abandoned paused run (e.g. a
+    # canvas blueprint left at a review gate) blocks the user from starting new work.
+    IN_FLIGHT = {QUEUED, RUNNING}
     TERMINAL = {COMPLETED, PARTIAL, FAILED, CANCELLED}
 
 
@@ -130,7 +135,12 @@ class AgentRun(db.Model):
         self.context_ledger_raw = json.dumps(data or {}, ensure_ascii=False)
 
     # ---- Serialization -------------------------------------------------------
-    def to_dict(self, include_children: bool = False) -> dict:
+    def to_dict(
+        self,
+        include_children: bool = False,
+        include_step_debug: bool = True,
+        slim_events: bool = False,
+    ) -> dict:
         data = {
             "id": self.id,
             "user_id": self.user_id,
@@ -153,7 +163,9 @@ class AgentRun(db.Model):
             "completed_at": self.completed_at.isoformat() + "Z" if self.completed_at else None,
         }
         if include_children:
-            data["steps"] = [step.to_dict() for step in self.steps.all()]
-            data["events"] = [event.to_dict() for event in self.events.all()]
+            data["steps"] = [
+                step.to_dict(include_debug=include_step_debug) for step in self.steps.all()
+            ]
+            data["events"] = [event.to_dict(slim=slim_events) for event in self.events.all()]
             data["artifacts"] = [artifact.to_dict() for artifact in self.artifacts.all()]
         return data

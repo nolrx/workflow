@@ -11,6 +11,7 @@ import {
   supportedLanguages,
   languageNames,
   languageFlags,
+  changeLanguage,
   type SupportedLanguage,
 } from '@/i18n'
 
@@ -18,7 +19,8 @@ export function LanguageSwitcher() {
   const { i18n } = useTranslation()
 
   const handleLanguageChange = (lang: SupportedLanguage) => {
-    i18n.changeLanguage(lang)
+    // Loads the target language's bundle (lazy chunk) before switching.
+    void changeLanguage(lang)
   }
 
   const currentLanguage = (i18n.language || 'en') as SupportedLanguage

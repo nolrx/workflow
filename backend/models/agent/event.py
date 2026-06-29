@@ -70,6 +70,14 @@ class AgentEvent(db.Model):
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+    # Heavy free-text keys that some emit sites historically stored in the event
+    # payload (full prompt / model response / summary / injected context block).
+    # The client never reads them — the authoritative copy lives on the step — so a
+    # ``slim`` snapshot drops them to cut wire size. Matters for runs persisted
+    # before the recorder stopped writing the prompt/response (new runs omit them
+    # at write time); harmless for new runs that never had them.
+    _HEAVY_PAYLOAD_KEYS = ("prompt", "response", "summary", "injected_text")
+
     def get_payload(self) -> dict:
         if not self.payload_raw:
             return {}
@@ -81,7 +89,10 @@ class AgentEvent(db.Model):
     def set_payload(self, data: dict | None) -> None:
         self.payload_raw = json.dumps(data or {}, ensure_ascii=False)
 
-    def to_dict(self) -> dict:
+    def to_dict(self, slim: bool = False) -> dict:
+        payload = self.get_payload()
+        if slim and payload:
+            payload = {k: v for k, v in payload.items() if k not in self._HEAVY_PAYLOAD_KEYS}
         return {
             "id": self.id,
             "run_id": self.run_id,
@@ -90,6 +101,6 @@ class AgentEvent(db.Model):
             "event_type": self.event_type,
             "level": self.level,
             "message": self.message,
-            "payload": self.get_payload(),
+            "payload": payload,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
         }

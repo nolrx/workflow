@@ -21,6 +21,21 @@ def current_user() -> User | None:
     return User.query.get(user_id)
 
 
+def is_admin(user_id: str | None = None) -> bool:
+    """True when the user (default: current JWT identity) has the admin role.
+
+    Shared by read-only "platform oversight" paths that let an admin VIEW any
+    user's projects/apps/runs. Write paths must keep their owner-only checks —
+    admins can look, not mutate other users' resources.
+    """
+    if user_id is None:
+        user_id = get_jwt_identity()
+    if not user_id:
+        return False
+    user = User.query.get(user_id)
+    return user is not None and user.role == "admin"
+
+
 def admin_required(fn):
     """Require a valid JWT belonging to a user with role == "admin".
 

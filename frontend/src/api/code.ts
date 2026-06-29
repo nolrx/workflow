@@ -98,6 +98,8 @@ export interface CodeProject {
   /** Present in list responses; indicates an active deployment blocks deletion. */
   is_deployed?: boolean
   deployment_status?: string | null
+  /** Present only in the admin "view all" session list — who owns the project. */
+  owner?: { id: string; display_name: string; avatar_url: string | null } | null
 }
 
 export type StageVersionSource =
@@ -182,9 +184,13 @@ export const codeApi = {
     )
     return response.data.system_prompt
   },
-  listProjects: async (limit = 50, offset = 0) => {
+  // scope="all" is honored only for admins (read-only platform oversight); the
+  // backend silently ignores it otherwise.
+  listProjects: async (limit = 50, offset = 0, scope?: "mine" | "all") => {
+    const q = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+    if (scope === "all") q.set("scope", "all")
     const response = await api.get<Envelope<{ projects: CodeProject[]; has_more: boolean }>>(
-      `/code/projects?limit=${limit}&offset=${offset}`
+      `/code/projects?${q.toString()}`
     )
     return response.data
   },

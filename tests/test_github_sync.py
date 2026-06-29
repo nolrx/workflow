@@ -214,6 +214,10 @@ class _FakeClient:
         self.calls.append(("get_ref", ref))
         return self._existing
 
+    def init_empty_repo(self, owner, repo, branch="main"):
+        self.calls.append(("init_empty_repo", branch))
+        return "seed-sha"
+
     def create_blob(self, owner, repo, content):
         self.blobs += 1
         return f"blob{self.blobs}"
@@ -239,7 +243,7 @@ def _link():
     return SimpleNamespace(repo_owner="acme", repo_name="app", default_branch="main")
 
 
-def test_push_snapshot_empty_repo_creates_ref():
+def test_push_snapshot_empty_repo_seeds_then_updates_ref():
     client = _FakeClient(existing_ref=None)
     files = {"README.md": b"hi", "frontend/src/a.ts": b"x"}
     sha = sync_service.push_snapshot(client, _link(), files, "msg")
@@ -249,11 +253,14 @@ def test_push_snapshot_empty_repo_creates_ref():
     # Full snapshot: tree built WITHOUT a base_tree.
     create_tree = next(c for c in client.calls if c[0] == "create_tree")
     assert create_tree[2] is None
-    # First commit has no parents; ref is created (not updated).
+    # An empty repo (no ref) is seeded via the Contents API first; the snapshot
+    # commit is then parented on that seed and the existing ref is fast-forwarded
+    # (NOT create_ref — the seed already created heads/main).
+    assert ("init_empty_repo", "main") in client.calls
     commit = next(c for c in client.calls if c[0] == "create_commit")
-    assert commit[2] == []
-    assert any(c[0] == "create_ref" and c[1] == "refs/heads/main" for c in client.calls)
-    assert not any(c[0] == "update_ref" for c in client.calls)
+    assert commit[2] == ["seed-sha"]
+    assert any(c[0] == "update_ref" and c[1] == "heads/main" for c in client.calls)
+    assert not any(c[0] == "create_ref" for c in client.calls)
 
 
 def test_push_snapshot_existing_repo_updates_ref():
@@ -271,7 +278,9 @@ def test_push_snapshot_custom_branch():
     client = _FakeClient(existing_ref=None)
     sync_service.push_snapshot(client, _link(), {"a": b"x"}, "msg", branch="release")
     assert any(c == ("get_ref", "heads/release") for c in client.calls)
-    assert any(c[0] == "create_ref" and c[1] == "refs/heads/release" for c in client.calls)
+    # Empty repo: seeded on the requested branch, then fast-forwarded.
+    assert ("init_empty_repo", "release") in client.calls
+    assert any(c[0] == "update_ref" and c[1] == "heads/release" for c in client.calls)
 
 
 # --- secondary-dev branch ----------------------------------------------------

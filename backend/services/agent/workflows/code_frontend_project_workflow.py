@@ -26,6 +26,7 @@ deliverable (source zip + previewable dist).
 import io
 import json
 import logging
+import os
 import zipfile
 
 from backend.extensions import db
@@ -41,6 +42,8 @@ from backend.services import pricing
 from backend.services.agent.context_ledger import ContextLedger, seed_from_inputs
 from backend.services.agent.context_verifier import gate_available
 from backend.services.agent.files import agent_run_dir
+from backend.services.agent.workflows import _verify_support
+from backend.services.code import house_rules, scaffold
 from backend.services.code.figma import storage as figma_storage
 from backend.services.code.frontend_project_service import get_frontend_project_service
 from backend.services.credit_service import charge
@@ -279,6 +282,7 @@ def run_code_frontend_project_workflow(ctx, recorder) -> dict:
                     "stub": "构建仍未通过，确定性补桩缺失模块",
                     "vite-only": "跳过类型检查，直接用 Vite 构建",
                     "fallback": "构建仍未通过，合成降级预览页以保证有产物",
+                    "runtime-check": "运行时冒烟：加载构建产物检查 console/page error",
                 }
                 is_recovery = phase in ("ai-repair", "stub", "vite-only", "fallback")
                 recorder.emit(
@@ -359,6 +363,109 @@ def run_code_frontend_project_workflow(ctx, recorder) -> dict:
         if not result.get("success"):
             raise RuntimeError(f"前端工程生成失败：{result.get('error') or '未知错误'}")
 
+        # --- Verify -> repair loop (P0-A house rules / P0-B rubric review /
+        # P1-C runtime smoke / P1-D features) -----------------------------------
+        # Block ONLY on objective defects: deterministic house-rule errors, the
+        # in-container runtime browser-smoke console errors, or the skeptical
+        # evaluator's explicit blocking_issues. Subjective quality is advisory.
+        # A blocking round triggers an edit-mode rebuild seeded with the current
+        # source + a targeted brief, bounded by CODE_VERIFY_MAX_ROUNDS (default 2).
+        max_verify_rounds = max(0, int(os.getenv("CODE_VERIFY_MAX_ROUNDS", "2") or 0))
+        ledger_dict = ledger.to_dict()
+        features = _verify_support.features_from_ledger(ledger_dict)
+        _features_block = _verify_support.render_features_block(features)
+        _reqs = [
+            r for r in (ledger_dict.get("requirements") or [])
+            if isinstance(r, dict) and r.get("id") and r.get("statement")
+        ]
+        _registry = "\n".join(f"- [{r['id']}] {r['statement']}" for r in _reqs)
+
+        def _review(files: dict, house_report: str, runtime_report: str):
+            """Charge + run the skeptical evaluator on the reliable text lane."""
+            if not (_reqs and files and gate_available()):
+                return None
+            if not charge(
+                user_id=ctx.user_id, amount=pricing.CODE_PROJECT_REVIEW,
+                operation="code_project_review", resource_type="agent_run",
+                resource_id=ctx.run_id, description="frontend project review",
+                team_id=ctx.team_id,
+            ):
+                return None
+            return service.review_project(
+                source_digest=_source_digest(files),
+                requirements_registry=_registry,
+                style_prompt=project.style_prompt or "",
+                features_block=_features_block,
+                house_rules_report=house_report,
+                runtime_report=runtime_report,
+            )
+
+        verification = None
+        for _round in range(max_verify_rounds + 1):
+            _files = result.get("files") or {}
+            _violations = house_rules.check_frontend(_files)
+            _rt_errs = _verify_support.runtime_errors(result.get("runtime_check"))
+            _house_report = house_rules.render_report(_violations)
+            _runtime_report = _verify_support.render_runtime_report(_rt_errs)
+            _rev = _review(_files, _house_report, _runtime_report)
+            _feats, _feat_stats = _verify_support.apply_feature_results(
+                features, (_rev or {}).get("feature_results")
+            )
+            verification = _verify_support.Verification(
+                house_rule_errors=house_rules.errors(_violations),
+                house_rule_warnings=house_rules.warnings(_violations),
+                runtime_errors=_rt_errs,
+                review=_rev,
+                features=_feats,
+                feature_stats=_feat_stats,
+            )
+            _blocking = verification.blocking
+            recorder.emit(
+                AgentEventType.WARNING if _blocking else AgentEventType.PROGRESS,
+                level=AgentEventLevel.WARNING if _blocking else AgentEventLevel.INFO,
+                step_id=step.id,
+                message=f"质量验证(第 {_round} 轮):{verification.summary_line()}"
+                        + ("，启动定向修复重建" if _blocking and _round < max_verify_rounds else ""),
+                payload={
+                    "round": _round, "blocking": _blocking,
+                    "house_rules": house_rules.summarize(_violations),
+                    "runtime_errors": len(_rt_errs),
+                    "feature_stats": _feat_stats,
+                    "verdict": (_rev or {}).get("verdict"),
+                },
+            )
+            if not _blocking or _round >= max_verify_rounds:
+                break
+            if ctx.is_cancelled():
+                return cancel_result(project_id)
+            _repaired = service.build_project(
+                requirement=project.requirement_input,
+                requirements_doc=project.requirements_doc,
+                development_flow=project.development_flow or "",
+                documents_digest=_documents_digest(project),
+                style_prompt=project.style_prompt or "",
+                ui_baseline_prompt=project.ui_baseline_prompt or "",
+                context_ledger=injected,
+                contract_block=contract_block,
+                figma_frames=figma_frames,
+                base_files=_files,
+                change_instruction=verification.repair_instruction(),
+                change_plan="仅修复上述硬性问题(房规违规 / 运行时报错 / 缺失的核心功能),"
+                            "保持其余文件不变,不要重写整个工程。",
+                on_event=on_event,
+                is_cancelled=ctx.is_cancelled,
+            )
+            if _repaired.get("error") == "cancelled":
+                return cancel_result(project_id)
+            if _repaired.get("success"):
+                result = _repaired
+            else:
+                recorder.emit(
+                    AgentEventType.WARNING, level=AgentEventLevel.WARNING, step_id=step.id,
+                    message="修复重建未产出有效结果,沿用上一轮产物。",
+                )
+                break
+
         degraded_reason = result.get("degraded_reason")
         _DEGRADED_LABELS = {
             "ai-repair": "首轮构建未通过，经 AI 定向修复后构建成功",
@@ -413,60 +520,27 @@ def run_code_frontend_project_workflow(ctx, recorder) -> dict:
                 payload={"asset_lane": lane},
             )
 
-        # --- Acceptance review: FR/NFR coverage vs the generated source --------
-        # Advisory gate (never blocks publish): one text-model call rates the
-        # project against the ledger's FR/NFR registry + style and emits a
-        # PASS/CONCERNS/FAIL verdict with per-FR coverage. Charged per call;
-        # skipped when no text provider is configured or no requirements are
-        # registered (e.g. a run not preceded by a full-generation pass).
-        reqs = ledger.to_dict().get("requirements") or []
-        if reqs and src_files and gate_available() and charge(
-            user_id=ctx.user_id,
-            amount=pricing.CODE_CONTEXT_VERIFY,
-            operation="code_context_verify",
-            resource_type="agent_run",
-            resource_id=ctx.run_id,
-            description="project acceptance review",
-            team_id=ctx.team_id,
-        ):
-            registry = "\n".join(f"- [{r['id']}] {r['statement']}" for r in reqs)
-            review = service.review_project(
-                source_digest=_source_digest(src_files),
-                requirements_registry=registry,
-                style_prompt=project.style_prompt or "",
+        # --- Verification artifact (P0-B): the final round's combined verdict --
+        # rubric scores + per-feature results + house-rule / runtime findings.
+        # Distinct ref type so it never collides with the publish step's
+        # project-meta artifact (the frontend preview picker .find()s by ref type).
+        if verification is not None:
+            step.add_artifact(
+                AgentArtifactType.JSON, "前端工程验收与质量验证",
+                content_json=verification.to_record(),
+                filename="frontend_project_verification.json",
+                domain_ref_type="code_frontend_project_review", domain_ref_id=project_id,
             )
-            if review:
-                verdict = str(review.get("verdict") or "").upper()
-                cov = review.get("fr_coverage") or []
-                missing = [
-                    c.get("id") for c in cov
-                    if isinstance(c, dict) and not c.get("covered") and c.get("id")
-                ]
-                concern = verdict in ("CONCERNS", "FAIL")
-                recorder.emit(
-                    AgentEventType.WARNING if concern else AgentEventType.PROGRESS,
-                    level=AgentEventLevel.WARNING if concern else AgentEventLevel.INFO,
-                    step_id=step.id,
-                    message=(
-                        f"验收评审：{verdict or '—'}"
-                        + (f"；未覆盖 {', '.join(missing)}" if missing else "；FR 覆盖完整")
-                    ),
-                    payload={
-                        "verdict": verdict,
-                        "missing_fr": missing,
-                        "issues": (review.get("issues") or [])[:20],
-                        "summary": review.get("summary"),
-                    },
-                )
-                step.add_artifact(
-                    AgentArtifactType.JSON, "前端工程验收评审",
-                    content_json=review, filename="frontend_project_review.json",
-                    # Distinct ref type: the acceptance review must NOT collide with
-                    # the publish step's project-meta artifact (also JSON), or the
-                    # frontend preview picker (.find by domain_ref_type) grabs this
-                    # review (no preview_url) and renders no preview.
-                    domain_ref_type="code_frontend_project_review", domain_ref_id=project_id,
-                )
+        # Runtime-smoke screenshot (P1-C): a real picture of the built app, so a
+        # human (and a future iteration run) can SEE the result, not just read code.
+        _shot_bytes = result.get("runtime_screenshot")
+        if _shot_bytes:
+            step.add_artifact(
+                AgentArtifactType.IMAGE, "运行时冒烟截图",
+                filename="runtime_screenshot.png", mime_type="image/png",
+                write_file=True, content_bytes=_shot_bytes,
+                domain_ref_type="code_frontend_runtime_shot", domain_ref_id=project_id,
+            )
 
         step.model_response = (result.get("summary") or "")[:8000]
         db.session.commit()
@@ -481,7 +555,7 @@ def run_code_frontend_project_workflow(ctx, recorder) -> dict:
         step.set_output(
             output_summary=f"已生成完整前端工程：{n_src} 个源码文件{_asset_note}，{n_dist} 个构建产物{_degraded_note}。{result.get('summary', '')}".strip(),
             reasoning_summary="沙箱容器内 Claude Code 自主创建多文件 React/Vite/TS 工程（需要真实图片时经 image-assets 技能触发 Codex 生成位图资源），并经自愈构建梯队（AI 修复 → 确定性补桩 → Vite 兜底 → 合成降级页）确保产出可预览 dist。",
-            self_check=f"源码 {n_src} 文件（图片资源 {n_assets} 张）；dist {n_dist} 文件；cost≈${result.get('cost_usd')}；降级={degraded_reason or '无'}",
+            self_check=f"源码 {n_src} 文件（图片资源 {n_assets} 张）；dist {n_dist} 文件；cost≈${result.get('cost_usd')}；降级={degraded_reason or '无'}；验证：{verification.summary_line() if verification else '—'}",
             next_action="发布并提供预览。",
         )
     completed += 1
@@ -493,6 +567,11 @@ def run_code_frontend_project_workflow(ctx, recorder) -> dict:
     ) as step:
         files = result.get("files") or {}
         dist_files = result.get("dist_files") or {}
+        # P2-E: guarantee a navigable docs/ + AGENTS.md scaffold in the published
+        # source (adds only what the agent didn't write), so iteration / repair
+        # runs (re-seeded from this source) get a knowledge base + golden
+        # principles in-repo. Source-only (not served), so dist is untouched.
+        files = {**files, **scaffold.ensure_scaffold(files, kind="frontend", contract_block=contract_block)}
 
         # Source -> downloadable zip artifact. Values are bytes (binary-safe), so
         # generated raster assets survive into the zip / GitHub commit intact.

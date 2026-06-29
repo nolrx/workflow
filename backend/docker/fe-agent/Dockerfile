@@ -28,6 +28,22 @@ RUN npm install -g @anthropic-ai/claude-code @openai/codex \
     && claude --version \
     && codex --version
 
+# Runtime browser-smoke (P1-C): a dedicated Playwright + Chromium install so the
+# in-container runtime check (frontend_project_service.py -> runtimecheck.mjs) can
+# load the built dist headless and capture console/page errors + a screenshot.
+# Installed in an ISOLATED dir (resolved via createRequire) so it never collides
+# with the generated project's own node_modules; browsers live in a world-readable
+# path so the non-root `node` user can launch them. This layer is OPTIONAL — if it
+# is removed the runtime check degrades fail-soft to ran:false (the build still
+# ships); keep it to activate the verify->repair loop's runtime gate.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN mkdir -p /opt/runtime-smoke \
+    && cd /opt/runtime-smoke \
+    && npm init -y >/dev/null 2>&1 \
+    && npm install playwright \
+    && npx playwright install --with-deps chromium \
+    && chmod -R a+rx /ms-playwright
+
 # Default to the non-root user; the workflow also passes --user node explicitly.
 # A writable HOME is required for Claude's ~/.claude (config + skills) and Codex's
 # ~/.codex (auth.json + sessions); the container script writes both there.

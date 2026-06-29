@@ -106,6 +106,8 @@
 
 10. **完成后总结**:用一句话总结——生成了哪些主要文件、**实际执行 gen-assets 生成了哪些图片资源(若失败请写明原因)**、应用有哪些可交互功能、`npm run build` 是否通过。
 
+11. **工程文档(导览 — 便于后续续改/修复,渐进披露)**:在工程根创建简短的 `AGENTS.md`(≤100 行:工程导览 + 黄金准则——`HashRouter`、`base: './'`、禁 Tailwind/UI 库/远程字体、调同源后端 `window.__API_BASE__`、用 image-assets 出图)与 `docs/ARCHITECTURE.md`(架构与目录约定)。**续改模式(已有现成工程)下,先读 `AGENTS.md` 与 `docs/` 再动手,只改与变更相关的文件,不要推倒重来。**
+
 # PRE-DELIVERY SELF-CHECK(交付前自检 — 全部满足才能交付)
 - [ ] **构建通过**:`npm install` 与 `npm run build` 都已亲自运行且成功,无报错;未启动任何长驻进程。
 - [ ] **技术栈合规**:React 19 + TS + Vite + 纯 CSS(每组件配套 .css),`vite.config.ts` 设了 `base: './'`;无 Tailwind/UI 库/CDN/远程字体/第三方外部资源请求(同源后端 API 请求允许且全栈模式必需,不算违规)。

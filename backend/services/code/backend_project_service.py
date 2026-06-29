@@ -554,16 +554,18 @@ class BackendProjectService:
 
     def review_project(
         self, *, source_digest: str, contract_summary: str,
-        requirements_doc: str = "", development_flow: str = "", on_model_call=None
+        requirements_doc: str = "", development_flow: str = "",
+        features_block: str = "", house_rules_report: str = "", on_model_call=None
     ) -> Optional[dict]:
-        """Acceptance review of the generated backend against the shared contract.
+        """Skeptical, rubric-graded acceptance review of the generated backend.
 
-        One text-model call -> ``{verdict, endpoint_coverage, issues, summary}``.
-        ``requirements_doc`` / ``development_flow`` inject the canonical FR/NFR/M
-        anchor lists so the critic can do real traceability (the contract alone
-        may not preserve anchor numbering). Advisory: returns ``None`` when no
-        provider is configured or on any failure (never raises, never blocks
-        publish)."""
+        One text-model call (reliable text lane) -> ``{verdict, scores,
+        endpoint_coverage, fr_coverage, feature_results, blocking_issues,
+        advisory_issues, issues, summary}``. ``requirements_doc`` /
+        ``development_flow`` inject the canonical FR/NFR/M anchors for real
+        traceability; ``features_block`` / ``house_rules_report`` ground the
+        verdict so its ``blocking_issues`` drive the verify->repair loop.
+        Returns ``None`` when no provider is configured or on any failure."""
         from backend.services.ai import get_text_provider
 
         provider = get_text_provider()
@@ -579,6 +581,8 @@ class BackendProjectService:
             CONTRACT=contract_summary or "",
             REQUIREMENTS_DOC=(requirements_doc or "")[:_cap],
             DEVELOPMENT_FLOW=(development_flow or "")[:_cap],
+            FEATURES=features_block or "(本次未提供功能清单)",
+            HOUSE_RULES=house_rules_report or "(确定性房规检查未发现问题)",
             SOURCE=source_digest or "",
         )
         provider_name = getattr(provider, "provider_name", None)

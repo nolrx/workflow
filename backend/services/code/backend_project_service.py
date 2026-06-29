@@ -555,7 +555,8 @@ class BackendProjectService:
     def review_project(
         self, *, source_digest: str, contract_summary: str,
         requirements_doc: str = "", development_flow: str = "",
-        features_block: str = "", house_rules_report: str = "", on_model_call=None
+        features_block: str = "", house_rules_report: str = "",
+        extra_directive: str = "", on_model_call=None
     ) -> Optional[dict]:
         """Skeptical, rubric-graded acceptance review of the generated backend.
 
@@ -585,6 +586,11 @@ class BackendProjectService:
             HOUSE_RULES=house_rules_report or "(确定性房规检查未发现问题)",
             SOURCE=source_digest or "",
         )
+        if extra_directive:
+            prompt += (
+                "\n\n# 本次审查侧重(在完成完整 rubric 的同时,尤其严格审查以下方面)\n"
+                + extra_directive
+            )
         provider_name = getattr(provider, "provider_name", None)
         model_name = getattr(provider, "model", None)
         try:

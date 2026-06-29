@@ -572,11 +572,55 @@ try {
   const page = await browser.newPage();
   page.on('console', (m) => { try { if (m.type() === 'error') consoleErrors.push(String(m.text()).slice(0, 300)); } catch {} });
   page.on('pageerror', (e) => { try { pageErrors.push(String((e && e.message) || e).slice(0, 300)); } catch {} });
+  page.on('dialog', (d) => { try { d.dismiss().catch(() => {}); } catch {} });
+  page.on('popup', (p) => { try { p.close().catch(() => {}); } catch {} });
   await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load', timeout: timeoutMs });
-  await new Promise((r) => setTimeout(r, 2000));
+  await new Promise((r) => setTimeout(r, 1500));
+
+  // --- Interactive crawl: drive the app like a user (fill inputs, click every
+  // control) and capture interaction-triggered console/page errors + dead controls
+  // (a click that changes nothing: no DOM mutation, no nav, no network, no error).
+  // This is the "test by driving the app, not reading code" gate. Bounded + fail-soft.
+  const interactions = { total: 0, clicked: 0, filled: 0, dead_controls: [] };
+  const MAXI = Number(process.env.FE_RUNTIME_MAX_INTERACTIONS || 25);
+  const deadline = Date.now() + Math.min(timeoutMs, 75000);
+  const HOME = `http://127.0.0.1:${port}`;
+  try {
+    const fields = await page.$$('input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=checkbox]):not([type=radio]):not([type=file]), textarea');
+    for (const el of fields.slice(0, 15)) {
+      try {
+        const t = (await el.getAttribute('type')) || 'text';
+        const v = t === 'email' ? 'demo@example.com' : t === 'password' ? 'Demo1234!' : t === 'number' ? '1' : t === 'tel' ? '13800000000' : 'test';
+        await el.fill(v, { timeout: 1500 });
+        interactions.filled++;
+      } catch {}
+    }
+    const controls = await page.$$('button:not([disabled]), [role="button"], a[href]:not([href=""]):not([href="#"]), input[type="submit"], [onclick]');
+    interactions.total = controls.length;
+    for (let i = 0; i < Math.min(controls.length, MAXI); i++) {
+      if (Date.now() > deadline) break;
+      const el = controls[i];
+      let label = '';
+      try { label = ((await el.innerText().catch(() => '')) || (await el.getAttribute('aria-label').catch(() => '')) || (await el.getAttribute('title').catch(() => '')) || '').replace(/\s+/g, ' ').trim().slice(0, 40); } catch {}
+      let beforeLen = 0; try { beforeLen = await page.evaluate(() => (document.body ? document.body.innerHTML.length : 0)); } catch {}
+      const beforeUrl = page.url();
+      const errBefore = consoleErrors.length + pageErrors.length;
+      let net = false; const onReq = () => { net = true; };
+      try { page.on('request', onReq); } catch {}
+      try { await el.click({ timeout: 2000 }); interactions.clicked++; await new Promise((r) => setTimeout(r, 300)); } catch {}
+      try { page.off('request', onReq); } catch {}
+      try { if (!page.url().startsWith(HOME)) { await page.goto(HOME, { waitUntil: 'load', timeout: timeoutMs }); await new Promise((r) => setTimeout(r, 250)); continue; } } catch {}
+      let afterLen = beforeLen; try { afterLen = await page.evaluate(() => (document.body ? document.body.innerHTML.length : 0)); } catch {}
+      const errAfter = consoleErrors.length + pageErrors.length;
+      const changed = afterLen !== beforeLen || page.url() !== beforeUrl || net || errAfter !== errBefore;
+      if (!changed && label) interactions.dead_controls.push(label);
+    }
+  } catch (e) { interactions.error = String((e && e.message) || e).slice(0, 200); }
+  interactions.dead_controls = [...new Set(interactions.dead_controls)].slice(0, 20);
+
   try { fs.mkdirSync(path.dirname(shotPath), { recursive: true }); await page.screenshot({ path: shotPath }); } catch {}
   const ce = uniq(consoleErrors), pe = uniq(pageErrors);
-  writeResult({ ran: true, ok: ce.length === 0 && pe.length === 0, console_errors: ce, page_errors: pe, screenshot: fs.existsSync(shotPath) ? path.basename(shotPath) : null });
+  writeResult({ ran: true, ok: ce.length === 0 && pe.length === 0, console_errors: ce, page_errors: pe, interactions, screenshot: fs.existsSync(shotPath) ? path.basename(shotPath) : null });
 } catch (e) {
   writeResult({ ran: true, ok: false, console_errors: uniq(consoleErrors), page_errors: uniq([...pageErrors, 'smoke harness: ' + ((e && e.message) || e)]) });
 } finally {
@@ -832,6 +876,7 @@ class FrontendProjectService:
         features_block: str = "",
         house_rules_report: str = "",
         runtime_report: str = "",
+        extra_directive: str = "",
         on_model_call=None,
     ) -> Optional[dict]:
         """Skeptical, rubric-graded acceptance review of the generated project.
@@ -858,6 +903,11 @@ class FrontendProjectService:
             HOUSE_RULES=house_rules_report or "(确定性房规检查未发现问题)",
             RUNTIME=runtime_report or "(本次未运行运行时冒烟)",
         )
+        if extra_directive:
+            prompt += (
+                "\n\n# 本次审查侧重(在完成完整 rubric 的同时,尤其严格审查以下方面)\n"
+                + extra_directive
+            )
         provider_name = getattr(provider, "provider_name", None)
         model_name = getattr(provider, "model", None)
         try:

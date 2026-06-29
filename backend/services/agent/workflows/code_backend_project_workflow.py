@@ -329,7 +329,7 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
         features = _verify_support.features_from_ledger(ledger_dict)
         _features_block = _verify_support.render_features_block(features)
 
-        def _review(files: dict, house_report: str):
+        def _review(files: dict, house_report: str, lens: str = ""):
             if not (files and gate_available()):
                 return None
             if not charge(
@@ -346,7 +346,19 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
                 development_flow=project.development_flow or "",
                 features_block=_features_block,
                 house_rules_report=house_report,
+                extra_directive=lens,
             )
+
+        def _review_panel(files, house_report):
+            """N independent reviews (rotating lenses) -> majority consensus (②a)."""
+            n = max(1, int(os.getenv("CODE_REVIEW_PANEL", "1") or 1))
+            lenses = _verify_support.REVIEW_LENSES_BACKEND
+            out = []
+            for i in range(n):
+                r = _review(files, house_report, lens=(lenses[i % len(lenses)] if n > 1 else ""))
+                if r:
+                    out.append(r)
+            return _verify_support.aggregate_reviews(out)
 
         review = None
         verification = None
@@ -354,7 +366,7 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
             _files = result.get("files") or {}
             _violations = house_rules.check_backend(_files)
             _house_report = house_rules.render_report(_violations)
-            review = _review(_files, _house_report)
+            review = _review_panel(_files, _house_report)
             _feats, _feat_stats = _verify_support.apply_feature_results(
                 features, (review or {}).get("feature_results")
             )

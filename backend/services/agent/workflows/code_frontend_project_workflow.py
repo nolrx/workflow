@@ -380,7 +380,7 @@ def run_code_frontend_project_workflow(ctx, recorder) -> dict:
         ]
         _registry = "\n".join(f"- [{r['id']}] {r['statement']}" for r in _reqs)
 
-        def _review(files: dict, house_report: str, runtime_report: str):
+        def _review(files: dict, house_report: str, runtime_report: str, lens: str = ""):
             """Charge + run the skeptical evaluator on the reliable text lane."""
             if not (_reqs and files and gate_available()):
                 return None
@@ -398,16 +398,30 @@ def run_code_frontend_project_workflow(ctx, recorder) -> dict:
                 features_block=_features_block,
                 house_rules_report=house_report,
                 runtime_report=runtime_report,
+                extra_directive=lens,
             )
+
+        def _review_panel(files, house_report, runtime_report):
+            """N independent reviews (rotating lenses) -> majority consensus (②a)."""
+            n = max(1, int(os.getenv("CODE_REVIEW_PANEL", "1") or 1))
+            lenses = _verify_support.REVIEW_LENSES_FRONTEND
+            out = []
+            for i in range(n):
+                r = _review(files, house_report, runtime_report,
+                            lens=(lenses[i % len(lenses)] if n > 1 else ""))
+                if r:
+                    out.append(r)
+            return _verify_support.aggregate_reviews(out)
 
         verification = None
         for _round in range(max_verify_rounds + 1):
             _files = result.get("files") or {}
             _violations = house_rules.check_frontend(_files)
-            _rt_errs = _verify_support.runtime_errors(result.get("runtime_check"))
+            _rt_check = result.get("runtime_check")
+            _rt_errs = _verify_support.runtime_errors(_rt_check)
             _house_report = house_rules.render_report(_violations)
-            _runtime_report = _verify_support.render_runtime_report(_rt_errs)
-            _rev = _review(_files, _house_report, _runtime_report)
+            _runtime_report = _verify_support.render_runtime_report(_rt_check)
+            _rev = _review_panel(_files, _house_report, _runtime_report)
             _feats, _feat_stats = _verify_support.apply_feature_results(
                 features, (_rev or {}).get("feature_results")
             )
@@ -415,6 +429,7 @@ def run_code_frontend_project_workflow(ctx, recorder) -> dict:
                 house_rule_errors=house_rules.errors(_violations),
                 house_rule_warnings=house_rules.warnings(_violations),
                 runtime_errors=_rt_errs,
+                runtime_check=_rt_check,
                 review=_rev,
                 features=_feats,
                 feature_stats=_feat_stats,

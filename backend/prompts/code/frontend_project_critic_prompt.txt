@@ -23,8 +23,9 @@
 - **确定性房规检查结果(House Rules — 机器检测的硬性规范违规;非空则其中的"必须修复"项一律计入 blocking_issues)**:
 [[HOUSE_RULES]]
 
-- **运行时冒烟结果(浏览器加载构建产物时实际捕获的 console / page error;非空一律计入 blocking_issues)**:
+- **运行时冒烟结果(无头浏览器加载并**像用户一样点击控件 / 填表提交**后捕获的真实证据:console/page error、交互覆盖、疑似无效控件)**:
 [[RUNTIME]]
+  说明:其中 console/page error 一律计入 blocking_issues;**疑似无效控件**(点击后页面/路由/状态无任何变化)与**未被交互覆盖的核心功能**应据此判 feature_results(对应 FR 判 passes=false 并在 note 写明依据);若核心动作点击无反应,计入 blocking_issues。
 
 - **待评审的工程源码(多文件,已按 `// ===== 路径 =====` 分隔;可能被截断)**:
 [[SOURCE]]

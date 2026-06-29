@@ -100,10 +100,11 @@ def failed_functional_features(features: list[dict]) -> list[dict]:
 
 # --- runtime browser-smoke findings (P1-C) ----------------------------------
 def runtime_errors(runtime_check: dict | None) -> list[str]:
-    """Console + page errors captured by the in-container headless browser.
+    """Console + page errors captured by the in-container interactive smoke.
 
     Empty when the smoke didn't run (no browser in the image — fail-soft) or the
-    page loaded clean, so it only ever gates when there is a REAL runtime error.
+    page loaded + was driven clean, so it only ever gates on a REAL runtime error
+    (incl. errors thrown WHILE clicking controls / submitting forms).
     """
     rc = runtime_check or {}
     if not rc.get("ran"):
@@ -112,11 +113,41 @@ def runtime_errors(runtime_check: dict | None) -> list[str]:
     return [str(e)[:300] for e in errs][:_MAX_RUNTIME_ERRORS]
 
 
-def render_runtime_report(errors: list[str]) -> str:
-    if not errors:
+def dead_controls(runtime_check: dict | None) -> list[str]:
+    """Controls the interactive crawl clicked that changed nothing (suspect dead).
+
+    A SOFT signal (never blocks by itself) — fed to the evaluator + repair brief so
+    a likely-non-functional button/link gets verified/fixed, but a legitimate no-op
+    (e.g. an already-active tab) doesn't hard-fail the run.
+    """
+    inter = (runtime_check or {}).get("interactions") or {}
+    return [str(d)[:60] for d in (inter.get("dead_controls") or [])][:20]
+
+
+def render_runtime_report(runtime_check: dict | None) -> str:
+    """Full interactive-smoke report for the evaluator + repair brief: hard errors,
+    interaction coverage, and suspect dead controls."""
+    rc = runtime_check or {}
+    if not rc.get("ran"):
         return ""
-    lines = ["# 运行时冒烟发现以下错误(浏览器加载构建产物时实际抛出,必须修复):"]
-    lines.extend(f"- {e}" for e in errors)
+    errs = runtime_errors(rc)
+    inter = rc.get("interactions") or {}
+    dead = dead_controls(rc)
+    lines: list[str] = []
+    if errs:
+        lines.append("# 运行时冒烟发现以下错误(浏览器加载/交互构建产物时实际抛出,必须修复):")
+        lines.extend(f"- {e}" for e in errs)
+    cov = (
+        f"交互覆盖:点击 {inter.get('clicked', 0)}/{inter.get('total', 0)} 个控件,"
+        f"填写 {inter.get('filled', 0)} 个输入。"
+    )
+    if dead:
+        lines.append("# 疑似无效控件(点击后 DOM/路由/网络/状态均无变化 — 请核实是否漏接事件,逐项确认或修复):")
+        lines.extend(f"- {d}" for d in dead)
+    if not errs and not dead:
+        lines.append(f"运行时冒烟:已加载并交互,未捕获 console/page error。{cov}")
+    elif not errs:
+        lines.append(cov)
     return "\n".join(lines)
 
 
@@ -128,6 +159,7 @@ class Verification:
     house_rule_errors: list = field(default_factory=list)     # [Violation]
     house_rule_warnings: list = field(default_factory=list)   # [Violation]
     runtime_errors: list[str] = field(default_factory=list)
+    runtime_check: dict | None = None                          # full interactive-smoke result
     review: dict | None = None
     features: list[dict] = field(default_factory=list)
     feature_stats: dict = field(default_factory=dict)
@@ -143,13 +175,30 @@ class Verification:
         return bool(self.house_rule_errors or self.runtime_errors or self.review_blocking)
 
     def repair_instruction(self) -> str:
-        """The change brief fed to the edit-mode rebuild (one repair round)."""
+        """The change brief fed to the edit-mode rebuild (one repair round).
+
+        Leads with a HANDOFF (Article 1 reset+handoff / Article 2 progress file):
+        the repair runs as a fresh agent seeded with the current source, so it is
+        told which features already pass (don't touch / rewrite) and to only fix the
+        listed problems — incremental repair, not regeneration.
+        """
         parts: list[str] = []
+        passed = [f for f in self.features if f.get("category") == "functional" and f.get("passes")]
+        if passed:
+            parts.append(
+                "# 续修交接(增量修复:只修下述问题,已通过的功能请勿改动 / 重写)\n"
+                "## 已通过(保持不变):" + "、".join(f"[{f['id']}]" for f in passed[:30])
+            )
         hr = list(self.house_rule_errors) + list(self.house_rule_warnings)
         if hr:
             parts.append(house_rules.render_report(hr))
-        if self.runtime_errors:
-            parts.append(render_runtime_report(self.runtime_errors))
+        rt = (
+            render_runtime_report(self.runtime_check) if self.runtime_check
+            else render_runtime_report({"ran": True, "console_errors": self.runtime_errors})
+            if self.runtime_errors else ""
+        )
+        if rt:
+            parts.append(rt)
         if self.review_blocking:
             parts.append(
                 "# 验收评审判定的必须修复项:\n"
@@ -171,6 +220,9 @@ class Verification:
             bits.append(f"房规建议 {len(self.house_rule_warnings)}")
         if self.runtime_errors:
             bits.append(f"运行时错误 {len(self.runtime_errors)}")
+        _dc = dead_controls(self.runtime_check)
+        if _dc:
+            bits.append(f"疑似无效控件 {len(_dc)}")
         if self.review:
             bits.append(f"评审 {str(self.review.get('verdict') or '—')}")
         if self.feature_stats:
@@ -184,7 +236,98 @@ class Verification:
             "house_rules": house_rules.to_dicts(hr),
             "house_rule_summary": house_rules.summarize(hr),
             "runtime_errors": self.runtime_errors,
+            "interactions": (self.runtime_check or {}).get("interactions"),
+            "dead_controls": dead_controls(self.runtime_check),
             "review": self.review,
             "features": self.features,
             "feature_stats": self.feature_stats,
         }
+
+
+# --- reviewer panel / consensus (②a) ----------------------------------------
+# Distinct审查视角 so an N-reviewer panel sees the build through different lenses
+# (diversity catches failure modes a single framing misses), then majority-votes.
+REVIEW_LENSES_FRONTEND = [
+    "正确性:每个核心动作(按钮/表单/导航)点下去是否真的产生预期结果,有无死控件 / 空事件处理。",
+    "用户任务:以终端用户视角,核心场景能否端到端走通完成(而非只是页面好看)。",
+    "契约一致:全栈模式下是否真的调 window.__API_BASE__ 的真实后端、按统一信封拆 resp.data、登录走 data.token。",
+]
+REVIEW_LENSES_BACKEND = [
+    "契约一致:逐端点的路径 / 方法 / 字段是否与契约逐字一致、统一信封、登录 token 落在 data.token。",
+    "安全:鉴权是否正确、有无越权 / 缺失校验 / 跨租户串读 / 敏感信息泄露。",
+    "健壮与可部署:错误处理 / 边界 / 校验是否完备,Dockerfile / /health / env 读取 / 空库自播种是否到位。",
+]
+
+
+def _dedup(items: list) -> list:
+    seen, out = set(), []
+    for x in items:
+        s = str(x)
+        if s not in seen:
+            seen.add(s)
+            out.append(x)
+    return out
+
+
+def aggregate_reviews(reviews) -> dict | None:
+    """Majority consensus over N independent reviewer outputs (adversarial panel).
+
+    Single review (or N=1) is returned unchanged. With N>1: a build is blocking
+    only when **≥ half** the reviewers flag it (verdict FAIL or non-empty
+    blocking_issues) — so one harsh reviewer can't trigger needless repair churn,
+    while a minority's concerns are demoted to advisory. Per-feature pass requires
+    a strict majority; scores are averaged.
+    """
+    revs = [r for r in (reviews or []) if isinstance(r, dict)]
+    if not revs:
+        return None
+    if len(revs) == 1:
+        return revs[0]
+    n = len(revs)
+    flagging = sum(
+        1 for r in revs
+        if str(r.get("verdict", "")).upper() == "FAIL" or (r.get("blocking_issues") or [])
+    )
+    panel_blocking = flagging * 2 >= n  # ≥ half flag → block (skeptical-leaning)
+
+    by_id: dict[str, list] = {}
+    for r in revs:
+        for fr in (r.get("feature_results") or []):
+            if isinstance(fr, dict) and fr.get("id"):
+                by_id.setdefault(str(fr["id"]), []).append(fr)
+    feature_results = []
+    for fid, frs in by_id.items():
+        pass_votes = sum(1 for f in frs if f.get("passes"))
+        passes = pass_votes * 2 > len(frs)  # strict majority to count as passing
+        note = next((f.get("note") for f in frs if not f.get("passes") and f.get("note")),
+                    (frs[0].get("note") if frs else ""))
+        feature_results.append({"id": fid, "passes": passes, "note": (note or "")[:400]})
+
+    all_blocking = _dedup([x for r in revs for x in (r.get("blocking_issues") or [])])
+    all_advisory = _dedup([x for r in revs for x in (r.get("advisory_issues") or [])])
+    verdicts = [str(r.get("verdict", "")).upper() for r in revs]
+    if panel_blocking:
+        verdict, blocking, advisory = "FAIL", all_blocking, all_advisory
+    else:
+        verdict = "CONCERNS" if any(v in ("CONCERNS", "FAIL") for v in verdicts) else "PASS"
+        blocking, advisory = [], _dedup(all_advisory + all_blocking)  # minority blocking → advisory
+
+    score_keys = {k for r in revs if isinstance(r.get("scores"), dict) for k in r["scores"]}
+    scores = {}
+    for k in score_keys:
+        vals = [r["scores"][k] for r in revs
+                if isinstance(r.get("scores"), dict) and isinstance(r["scores"].get(k), (int, float))]
+        if vals:
+            scores[k] = round(sum(vals) / len(vals), 1)
+    summaries = [r.get("summary") for r in revs if r.get("summary")]
+    return {
+        "verdict": verdict,
+        "scores": scores or None,
+        "feature_results": feature_results,
+        "fr_coverage": revs[0].get("fr_coverage"),
+        "blocking_issues": blocking,
+        "advisory_issues": advisory[:30],
+        "issues": [i for r in revs for i in (r.get("issues") or [])][:30],
+        "summary": (f"[{n}-评审共识:{flagging}/{n} 判阻断] " + (summaries[0] if summaries else "")).strip(),
+        "panel": {"n": n, "flagging_blocking": flagging, "panel_blocking": panel_blocking},
+    }

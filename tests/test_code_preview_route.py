@@ -145,8 +145,24 @@ def test_serves_index_and_assets_via_cookie(ctx):
     resp = client.get(f"/preview/{pid}/?token={token}", follow_redirects=True)
     assert resp.status_code == 200
     assert b"doctype html" in resp.data
-    assert resp.headers.get("Content-Security-Policy", "").startswith("default-src 'self'")
+    # CSP is intentionally disabled for previews (an empty policy → no header): a
+    # `default-src 'self'` once blocked cross-path JS chunks / module workers from
+    # loading. See preview_routes._PREVIEW_CSP.
+    assert "Content-Security-Policy" not in resp.headers
     # Relative asset request (no query token) authenticates via the cookie.
     asset = client.get(f"/preview/{pid}/assets/app.js")
     assert asset.status_code == 200
     assert b"console.log(1)" in asset.data
+
+
+def test_spa_fallback_for_deep_links(ctx):
+    # A history-mode deep link (extension-less path with no matching file) falls
+    # back to index.html so the build can route client-side on refresh; a missing
+    # asset (has a file extension) must still 404 rather than serve HTML-as-script.
+    client, pid, token = ctx["client"], ctx["pid"], ctx["token"]
+    client.get(f"/preview/{pid}/?token={token}", follow_redirects=True)  # plant cookie
+    route = client.get(f"/preview/{pid}/dashboard/settings")
+    assert route.status_code == 200
+    assert b"doctype html" in route.data
+    missing_asset = client.get(f"/preview/{pid}/assets/nope.js")
+    assert missing_asset.status_code == 404

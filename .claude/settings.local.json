@@ -64,7 +64,11 @@
       "Bash(grep -E \"\\\\\\\\.py$\")",
       "Bash(grep -E \"\\\\.txt$\")",
       "Bash(curl -sS -L -i --max-time 30 \"https://worksflow.xyz/preview/33693a52-7609-4b93-a5ef-453604a0b314/\")",
-      "Bash(curl -sSL -D - -o /tmp/preview.html \"https://worksflow.xyz/preview/33693a52-7609-4b93-a5ef-453604a0b314/\")"
+      "Bash(curl -sSL -D - -o /tmp/preview.html \"https://worksflow.xyz/preview/33693a52-7609-4b93-a5ef-453604a0b314/\")",
+      "Bash(grep -nE '^#{1,3} ' docs/agent-context-ledger.md)",
+      "Bash(git fetch *)",
+      "Bash(git rev-list *)",
+      "Bash(grep -rn \"openLatestRunForResource\\\\|fetchProjects\\\\|projects\\\\[0\\\\]\\\\|latestRun\\\\|useEffect\\\\|navigate\\(\\\\`/code\\\\|auto-switch\\\\|autoSwitch\\\\|resource_id\\\\|scopeTeamId\" /data/workflow/frontend/src/pages/code/CodeStudio.tsx)"
     ]
   }
 }

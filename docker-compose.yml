@@ -14,6 +14,11 @@ services:
         image: postgres:16-alpine
         container_name: worksflow-postgres
         restart: unless-stopped
+        # Raise max_connections above the default 100: this single PG is SHARED by
+        # the platform backend (pool now bursts to ~60 — see config.py) AND every
+        # deployed app container (each opens its own pool). 200 keeps headroom so a
+        # burst can't hit "FATAL: too many clients". ~9MB extra shared mem; fine.
+        command: ["postgres", "-c", "max_connections=200"]
         environment:
             POSTGRES_USER: ${POSTGRES_USER}
             POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -86,6 +91,13 @@ services:
         env_file:
             - .env
         environment:
+            # Gunicorn gthread pool size (single worker — see backend/gunicorn.conf.py).
+            # Each long-lived SSE stream (per-tab notification stream + each live agent
+            # run watch + full-stack lanes) holds one thread for its lifetime, blocked
+            # on a queue with the GIL released, so a normal request (e.g. /api/auth/me)
+            # can starve behind them at the default 16. Raised to 64 to keep headroom;
+            # idle SSE threads are cheap. Pair with DB_POOL_SIZE/DB_MAX_OVERFLOW (config.py).
+            GUNICORN_THREADS: "64"
             # Reach Postgres by its compose service name. The .env DATABASE_URL points
             # at localhost (correct for bare-metal), which is wrong inside the container;
             # this override stays in sync with the POSTGRES_* vars the postgres service uses.

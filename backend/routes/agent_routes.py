@@ -40,6 +40,7 @@ from backend.services.agent.files import artifact_abs_path
 from backend.services.agent.runtime import agent_runtime, get_workflow
 from backend.services.credit_service import InsufficientCreditsError, deduct_credits
 from backend.services.lifecycle import drain_guard
+from backend.utils.auth import is_admin
 from backend.utils.preview_token import PREVIEW_TOKEN_TTL, mint_preview_token, preview_identity
 from backend.utils.response import error_response, success_response
 
@@ -72,6 +73,22 @@ MAX_CONCURRENT_RUNS = int(os.getenv("AGENT_MAX_CONCURRENT_RUNS", "12"))
 def _get_owned_run(run_id: str) -> AgentRun | None:
     user_id = get_jwt_identity()
     return AgentRun.query.filter_by(id=run_id, user_id=user_id).first()
+
+
+def _get_readable_run(run_id: str) -> AgentRun | None:
+    """Read-access lookup: the run's owner, OR an admin (read-only oversight).
+
+    Backs run snapshot / step debug / SSE replay so an admin can replay any
+    user's project timeline. Write actions (cancel / resume / retry) keep using
+    ``_get_owned_run`` so they never cross users.
+    """
+    user_id = get_jwt_identity()
+    run = db.session.get(AgentRun, run_id)
+    if not run:
+        return None
+    if run.user_id == user_id or is_admin(user_id):
+        return run
+    return None
 
 
 @agent_bp.route("/runs", methods=["POST"])
@@ -134,10 +151,11 @@ def create_run():
         if not (config.get("canvas_id") or "").strip():
             return error_response("VALIDATION_ERROR", "请提供要执行的画布（canvas_id）", 400)
 
-    # Per-user concurrency cap on active runs.
+    # Per-user concurrency cap — only runs actually executing count (paused/awaiting
+    # review hold no worker, so they must not block the user from starting new work).
     active = AgentRun.query.filter(
         AgentRun.user_id == user_id,
-        AgentRun.status.in_(list(AgentRunStatus.ACTIVE)),
+        AgentRun.status.in_(list(AgentRunStatus.IN_FLIGHT)),
     ).count()
     if active >= MAX_CONCURRENT_RUNS:
         return error_response("CONCURRENCY_LIMIT", f"已有 {active} 个进行中的任务，请稍后再试", 429)
@@ -210,23 +228,65 @@ def create_run():
 @agent_bp.route("/runs/<run_id>", methods=["GET"])
 @jwt_required()
 def get_run(run_id: str):
-    """Return the full run snapshot — used for initial load and reconnect."""
-    run = _get_owned_run(run_id)
+    """Return the run snapshot — used for initial load and reconnect.
+
+    ``?lite=1`` omits each step's heavy debug trace (full prompt / model response /
+    context-ledger snapshot) and strips heavy free-text keys from event payloads.
+    The frontend uses the lite form for its high-frequency refresh — those bodies
+    are re-shipped on every refresh but only ever shown in the debug panel, which
+    fetches them on demand for the single selected step (see the per-step route
+    below). This is the bulk of the conversation bandwidth saving.
+    """
+    run = _get_readable_run(run_id)
     if not run:
         return error_response("NOT_FOUND", "任务不存在", 404)
-    return success_response({"run": run.to_dict(include_children=True)})
+    lite = (request.args.get("lite") or "").lower() in ("1", "true", "yes")
+    return success_response(
+        {
+            "run": run.to_dict(
+                include_children=True,
+                include_step_debug=not lite,
+                slim_events=lite,
+            )
+        }
+    )
+
+
+@agent_bp.route("/runs/<run_id>/steps/<step_id>", methods=["GET"])
+@jwt_required()
+def get_run_step(run_id: str, step_id: str):
+    """Return one step's full debug trace (prompt / response / context snapshot).
+
+    The default snapshot is served lite (no step debug bodies) to keep the
+    high-frequency refresh small; the debug panel fetches the heavy trace for the
+    single selected step through here, on demand.
+    """
+    run = _get_readable_run(run_id)
+    if not run:
+        return error_response("NOT_FOUND", "任务不存在", 404)
+    step = run.steps.filter_by(id=step_id).first()
+    if not step:
+        return error_response("NOT_FOUND", "步骤不存在", 404)
+    return success_response({"step": step.to_dict(include_debug=True)})
 
 
 @agent_bp.route("/runs", methods=["GET"])
 @jwt_required()
 def list_runs():
-    """List the current user's recent runs (compact)."""
+    """List the caller's recent runs (compact).
+
+    Admins additionally get cross-user visibility when scoping to a specific
+    ``resource_id`` (so they can replay any project's timeline from the App Space
+    / session list); the unscoped list stays the admin's own runs.
+    """
     user_id = get_jwt_identity()
     limit = min(int(request.args.get("limit", 20)), 100)
     domain = request.args.get("domain")
     resource_id = request.args.get("resource_id")
     workflow = request.args.get("workflow")
-    query = AgentRun.query.filter_by(user_id=user_id)
+    query = AgentRun.query
+    if not (resource_id and is_admin(user_id)):
+        query = query.filter_by(user_id=user_id)
     if domain:
         query = query.filter_by(domain=domain)
     if resource_id:
@@ -360,10 +420,11 @@ def retry_run(run_id: str):
     if run.status not in _RETRYABLE_STATUSES:
         return error_response("INVALID_STATE", "仅失败或部分完成的任务可以重试当前阶段", 400)
 
-    # Per-user concurrency cap (the run is terminal, so it is not counted as active).
+    # Per-user concurrency cap (the run is terminal, so it is not counted). Only
+    # actually-executing runs count — a paused run awaiting review holds no worker.
     active = AgentRun.query.filter(
         AgentRun.user_id == user_id,
-        AgentRun.status.in_(list(AgentRunStatus.ACTIVE)),
+        AgentRun.status.in_(list(AgentRunStatus.IN_FLIGHT)),
     ).count()
     if active >= MAX_CONCURRENT_RUNS:
         return error_response("CONCURRENCY_LIMIT", f"已有 {active} 个进行中的任务，请稍后再试", 429)
@@ -510,7 +571,7 @@ def _event_stream(app, run_id: str, last_sequence: int):
 @jwt_required()
 def stream_run(run_id: str):
     """Stream run events as text/event-stream (consumed via fetch + ReadableStream)."""
-    run = _get_owned_run(run_id)
+    run = _get_readable_run(run_id)
     if not run:
         return error_response("NOT_FOUND", "任务不存在", 404)
     try:
@@ -531,13 +592,16 @@ def stream_run(run_id: str):
 @agent_bp.route("/artifacts/<artifact_id>/file", methods=["GET"])
 @jwt_required()
 def get_artifact_file(artifact_id: str):
-    """Serve a produced artifact (on-disk file or inline text), owner-only."""
+    """Serve a produced artifact (on-disk file or inline text).
+
+    Readable by the run's owner or an admin (read-only oversight).
+    """
     user_id = get_jwt_identity()
     artifact = db.session.get(AgentArtifact, artifact_id)
     if not artifact:
         return error_response("NOT_FOUND", "产物不存在", 404)
     run = db.session.get(AgentRun, artifact.run_id)
-    if not run or run.user_id != user_id:
+    if not run or (run.user_id != user_id and not is_admin(user_id)):
         return error_response("NOT_FOUND", "产物不存在", 404)
 
     as_attachment = bool(request.args.get("download"))
@@ -596,7 +660,9 @@ def serve_run_site(run_id: str, filename: str):
         return error_response("NOT_FOUND", "预览不存在或尚未生成", 404)
 
     response = send_from_directory(site_dir, filename)
-    response.headers["Content-Security-Policy"] = _PREVIEW_CSP
+    # 停用安全策略:仅在 _PREVIEW_CSP 非空时下发,置空则不拦截 js/资源加载。
+    if _PREVIEW_CSP:
+        response.headers["Content-Security-Policy"] = _PREVIEW_CSP
     # On the entry request (token in the query), exchange the one-shot access token
     # for a longer-lived run-scoped preview token and pin it to this run's site path,
     # so subsequent relative asset fetches authenticate via the cookie — and keep

@@ -196,6 +196,40 @@ def _project_database_url(admin_url: str, db_name: str) -> str:
     return url.render_as_string(hide_password=False)
 
 
+def container_database_url(database_url: Optional[str], async_driver: Optional[str]) -> str:
+    """Adapt the injected ``DATABASE_URL`` to the driver the GENERATED backend loads.
+
+    The provisioned URL is a sync libpq/psycopg2 URL (bare ``postgresql://``) — correct
+    for Go ``lib/pq``/``pgx``, Node ``pg``, Python ``psycopg2`` AND the platform's OWN
+    psycopg2 admin ops (init.sql / reset / count_tables / reconcile), so the provisioned
+    value MUST stay sync. But a backend that uses SQLAlchemy's ASYNC engine
+    (``create_async_engine``) needs an async driver IN THE SCHEME or it crash-loops on
+    import:  ``The asyncio extension requires an async driver ... 'psycopg2' is not async``.
+
+    When ``async_driver`` is set (e.g. ``"asyncpg"``) this rewrites the scheme to
+    ``postgresql+<driver>`` for the CONTAINER env ONLY (the caller injects the result and
+    keeps the sync URL for its own ops). ``None`` / sqlite / non-postgres → unchanged.
+    """
+    if not async_driver or not database_url or database_url.startswith("sqlite"):
+        return database_url
+    try:
+        url = make_url(database_url)
+    except Exception:  # noqa: BLE001 — never let URL parsing sink a deploy
+        return database_url
+    if url.get_backend_name() not in ("postgresql", "postgres"):
+        return database_url
+    if url.get_driver_name() == async_driver:
+        return database_url
+    query = dict(url.query)
+    if async_driver == "asyncpg":
+        # asyncpg does NOT accept libpq's ``sslmode`` as a connect kwarg, and whether
+        # SQLAlchemy translates it varies by version → drop it. asyncpg negotiates a
+        # plaintext connection on the internal app network without it.
+        query.pop("sslmode", None)
+    url = url.set(drivername=f"postgresql+{async_driver}", query=query)
+    return url.render_as_string(hide_password=False)
+
+
 def provision_namespace(project_id: str) -> ProvisionResult:
     """Create the per-project database + redis prefix in the SHARED infra.
 

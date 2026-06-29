@@ -46,6 +46,8 @@ interface CodeState {
   projects: CodeProject[]
   hasMoreProjects: boolean
   isLoadingProjects: boolean
+  /** Session-list scope: "mine" (default) or "all" (admin-only platform view). */
+  projectScope: "mine" | "all"
   styles: UIStyle[]
   selectedStyleIds: string[]
   isLoading: boolean
@@ -57,6 +59,8 @@ interface CodeState {
   createProject: (requirement: string) => Promise<void>
   loadProject: (projectId: string) => Promise<void>
   fetchProjects: (limit?: number, offset?: number) => Promise<void>
+  /** Switch the session-list scope and reload from the first page. */
+  setProjectScope: (scope: "mine" | "all") => void
   setCurrentProject: (project: CodeProject | null) => void
   updateProject: (data: Partial<CodeProject>) => Promise<void>
   deleteProject: (projectId: string) => Promise<boolean>
@@ -96,6 +100,7 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
   projects: [],
   hasMoreProjects: false,
   isLoadingProjects: false,
+  projectScope: "mine",
   styles: [],
   selectedStyleIds: [],
   isLoading: false,
@@ -173,7 +178,8 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
     if (get().isLoadingProjects) return
     set({ isLoadingProjects: true })
     try {
-      const { projects, has_more } = await codeApi.listProjects(limit, offset)
+      // The current scope drives both the first page and infinite-scroll pages.
+      const { projects, has_more } = await codeApi.listProjects(limit, offset, get().projectScope)
       set((state) => ({
         projects: offset === 0 ? projects : [...state.projects, ...projects],
         hasMoreProjects: has_more,
@@ -183,6 +189,13 @@ export const useCodeStore = create<CodeState>()((set, get) => ({
     } finally {
       set({ isLoadingProjects: false })
     }
+  },
+
+  // Switch scope (e.g. admin "全部"): reset the list and reload the first page.
+  setProjectScope: (scope) => {
+    if (get().projectScope === scope) return
+    set({ projectScope: scope, projects: [], hasMoreProjects: false })
+    void get().fetchProjects(50, 0)
   },
 
   // Switch (or clear, for a new session) the current project. Bumps the load

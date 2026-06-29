@@ -69,6 +69,13 @@ class BaseConfig:
     )
     # Claude (text) API key
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
+    # Optional Claude gateway (e.g. https://zentao.panlaxy.io). AUTH_TOKEN is sent
+    # as Authorization: Bearer and takes precedence over the api_key; BASE_URL is
+    # the gateway root (the SDK/CLI append /v1/...). The factory + agent services
+    # read these from os.getenv directly (works in background threads); mirrored
+    # here for visibility.
+    ANTHROPIC_AUTH_TOKEN = os.getenv("ANTHROPIC_AUTH_TOKEN")
+    ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL")
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     # Panlaxy (image) API — OpenAI-compatible
     PANLAXY_BASE_URL = os.getenv("PANLAXY_BASE_URL", "https://api.panlaxy.io/v1")
@@ -145,11 +152,20 @@ class ProductionConfig(BaseConfig):
         if not self.SQLALCHEMY_DATABASE_URI:
             raise ValueError("DATABASE_URL environment variable is required in production")
 
-    # Override with production-specific settings
+    # Connection pool sized to clear the gunicorn thread budget (GUNICORN_THREADS,
+    # default 64) with headroom. Most of those threads sit idle holding a
+    # long-lived SSE stream and check out NO connection (the stream releases its
+    # session between events), so the pool only has to cover the threads doing real
+    # queries at once — not every thread. Defaults 20 + 40 = 60 total; steady-state
+    # footprint stays near pool_size (20), bursting to 60 under concurrent load.
+    # Env-tunable for ops (mind the Postgres server's own max_connections). Bumped
+    # from 10 + 20 so raising the thread count doesn't just move the wall to pool
+    # checkout. See backend/gunicorn.conf.py for the thread model.
     SQLALCHEMY_ENGINE_OPTIONS = {
         **BaseConfig.SQLALCHEMY_ENGINE_OPTIONS,
-        "pool_size": 10,
-        "max_overflow": 20,
+        "pool_size": int(os.getenv("DB_POOL_SIZE", "20")),
+        "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "40")),
+        "pool_timeout": int(os.getenv("DB_POOL_TIMEOUT", "30")),
     }
 
 

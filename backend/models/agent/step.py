@@ -103,8 +103,8 @@ class AgentStep(db.Model):
     def set_port_bindings(self, data: dict | None) -> None:
         self.port_bindings_raw = json.dumps(data or {}, ensure_ascii=False)
 
-    def to_dict(self) -> dict:
-        return {
+    def to_dict(self, include_debug: bool = True) -> dict:
+        data = {
             "id": self.id,
             "run_id": self.run_id,
             "parent_step_id": self.parent_step_id,
@@ -122,13 +122,20 @@ class AgentStep(db.Model):
             "next_action": self.next_action,
             "model_provider": self.model_provider,
             "model_name": self.model_name,
-            "prompt_snapshot": self.prompt_snapshot,
-            "model_response": self.model_response,
-            "context_snapshot": self.get_context_snapshot(),
-            "context_check": self.get_context_check(),
             "port_bindings": self.get_port_bindings(),
             "error_message": self.error_message,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "started_at": self.started_at.isoformat() + "Z" if self.started_at else None,
             "completed_at": self.completed_at.isoformat() + "Z" if self.completed_at else None,
         }
+        # Debug-only heavy trace (full prompt + model response + context-ledger
+        # snapshot). Shown only in the AgentRunPanel debug tabs, so it is omitted
+        # from the default lite snapshot and fetched on demand per step — these
+        # fields, re-shipped on every snapshot refresh, were the other half of the
+        # conversation wire cost. See GET /api/agent/runs/<id>/steps/<step_id>.
+        if include_debug:
+            data["prompt_snapshot"] = self.prompt_snapshot
+            data["model_response"] = self.model_response
+            data["context_snapshot"] = self.get_context_snapshot()
+            data["context_check"] = self.get_context_check()
+        return data

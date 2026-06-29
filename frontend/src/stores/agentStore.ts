@@ -58,6 +58,10 @@ interface AgentState {
   events: AgentEvent[]
   /** Live-accumulated token text per step id (from transient agent_delta events). */
   streamingByStep: Record<string, string>
+  /** On-demand cache of per-step debug traces (prompt / response / context). The
+   *  run snapshot is fetched lite (without these heavy bodies); the debug panel
+   *  pulls them one step at a time via loadStepDebug. */
+  stepDebugById: Record<string, AgentStep>
   selectedStepId: string | null
   isStreaming: boolean
   debugMode: boolean
@@ -73,6 +77,8 @@ interface AgentState {
     limit?: number
   }) => Promise<AgentRun[]>
   openLatestRunForResource: (resourceId: string, workflow?: string) => Promise<boolean>
+  /** Lazily fetch + cache a step's heavy debug trace (used by the debug panel). */
+  loadStepDebug: (stepId: string) => Promise<void>
   cancelRun: () => Promise<void>
   /** Relaunch the bound run (failed / partial) to retry its failed stage. */
   retryRun: (stage?: string | null) => Promise<void>
@@ -264,6 +270,7 @@ export const useAgentStore = create<AgentState>()((set, get) => {
     run: null,
     events: [],
     streamingByStep: {},
+    stepDebugById: {},
     selectedStepId: null,
     isStreaming: false,
     debugMode: false,
@@ -273,7 +280,14 @@ export const useAgentStore = create<AgentState>()((set, get) => {
       activeRunId = null
       clearRefreshTimer()
       streamAbort?.abort()
-      set({ run: null, events: [], streamingByStep: {}, selectedStepId: null, panelOpen: false })
+      set({
+        run: null,
+        events: [],
+        streamingByStep: {},
+        stepDebugById: {},
+        selectedStepId: null,
+        panelOpen: false,
+      })
       const result = await agentApi.createRun(body)
       activeRunId = result.run_id
       await refresh(result.run_id)
@@ -285,7 +299,7 @@ export const useAgentStore = create<AgentState>()((set, get) => {
       activeRunId = runId
       clearRefreshTimer()
       streamAbort?.abort()
-      set({ run: null, events: [], streamingByStep: {}, selectedStepId: null })
+      set({ run: null, events: [], streamingByStep: {}, stepDebugById: {}, selectedStepId: null })
       await refresh(runId)
       const run = get().run
       if (run && (run.status === "queued" || run.status === "running")) {
@@ -312,6 +326,26 @@ export const useAgentStore = create<AgentState>()((set, get) => {
       if (!runs.length) return false
       await get().openRun(runs[0].id)
       return true
+    },
+
+    // Lazily fetch a single step's heavy debug trace (full prompt / model response
+    // / context snapshot) — the run snapshot is fetched lite without these bodies.
+    // Cache completed steps (their trace is final); a still-running step is always
+    // re-fetched so the debug view follows it. A stale resolve for a step on a
+    // since-rebound run is dropped.
+    loadStepDebug: async (stepId) => {
+      const runId = activeRunId
+      if (!runId) return
+      const step = get().run?.steps?.find((s) => s.id === stepId)
+      const terminal = step ? ["completed", "failed", "skipped"].includes(step.status) : false
+      if (terminal && get().stepDebugById[stepId]) return
+      try {
+        const detail = await agentApi.fetchStepDebug(runId, stepId)
+        if (runId !== activeRunId) return
+        set((state) => ({ stepDebugById: { ...state.stepDebugById, [stepId]: detail } }))
+      } catch {
+        // Debug trace is best-effort; the panel falls back to whatever the step holds.
+      }
     },
 
     cancelRun: async () => {
@@ -390,6 +424,7 @@ export const useAgentStore = create<AgentState>()((set, get) => {
         run: null,
         events: [],
         streamingByStep: {},
+        stepDebugById: {},
         selectedStepId: null,
         isStreaming: false,
         panelOpen: false,

@@ -482,21 +482,40 @@ def proxy_to_backend(project_id: str, subpath: str):
         return error_response("NOT_FOUND", "后端尚未部署或未在运行", 404)
     container, port = target
 
-    upstream = f"http://{container}:{port}/{subpath}"
+    base = f"http://{container}:{port}"
     fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_HEADERS}
-    try:
-        resp = requests.request(
+    body = request.get_data()
+    params = request.args.to_dict(flat=False)
+
+    def _forward(path: str):
+        return requests.request(
             method=request.method,
-            url=upstream,
-            params=request.args.to_dict(flat=False),
+            url=f"{base}/{path}",
+            params=params,
             headers=fwd_headers,
-            data=request.get_data(),
+            data=body,
             stream=True,
             timeout=(5, 120),
             allow_redirects=False,
         )
+
+    try:
+        resp = _forward(subpath)
+        # Tolerate a generated backend that mounts its routes UNDER an ``/api`` prefix
+        # (a near-universal framework default — e.g. FastAPI ``include_router(prefix=
+        # "/api/v1")`` — and what the synthesized contract paths often look like) even
+        # though the platform convention is root-mount. The proxy already stripped
+        # ``/app/<pid>/api``, so such a backend 404s EVERY call from the served frontend
+        # (which calls ``/app/<pid>/api`` + ``/v1/...``). On a 404 for a path that isn't
+        # already ``api/``-prefixed, retry ONCE with the ``/api/`` prefix restored. A 404
+        # means routing never matched → the handler never ran → safe to replay even a
+        # POST/PUT body. Root-mounted apps never reach this branch (a valid route doesn't
+        # 404), so they pay nothing.
+        if resp.status_code == 404 and not subpath.startswith("api/"):
+            resp.close()
+            resp = _forward(f"api/{subpath}")
     except requests.RequestException as error:
-        logger.warning("proxy to %s failed: %s", upstream, error)
+        logger.warning("proxy to %s/%s failed: %s", base, subpath, error)
         return error_response("SERVER_ERROR", f"后端不可达：{error}", 502)
 
     excluded = _HOP_HEADERS | {"content-encoding", "content-length"}

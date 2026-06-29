@@ -50,8 +50,10 @@ export interface AgentStep {
   next_action: string | null
   model_provider: string | null
   model_name: string | null
-  prompt_snapshot: string | null
-  model_response: string | null
+  /** Debug-only heavy fields. Absent from the default (lite) run snapshot; fetched
+   *  on demand per step via fetchStepDebug when the debug panel needs them. */
+  prompt_snapshot?: string | null
+  model_response?: string | null
   /** Internal / debug-only: context-ledger snapshot + verification recorded for this step. */
   context_snapshot?: { injected_text?: string; ledger?: Record<string, unknown> } | null
   context_check?: {
@@ -145,9 +147,26 @@ export const agentApi = {
     const response = await api.post<Envelope<CreateRunResult>>("/agent/runs", body)
     return response.data
   },
-  fetchRun: async (runId: string): Promise<AgentRun> => {
-    const response = await api.get<Envelope<{ run: AgentRun }>>(`/agent/runs/${runId}`)
+  /**
+   * Fetch a run snapshot. Defaults to the LITE form (no per-step debug trace, slim
+   * event payloads) — this is what the high-frequency refresh uses, and the only
+   * shape any non-debug view needs. Pass ``{ lite: false }`` to include the heavy
+   * debug bodies inline (rarely needed; the debug panel uses fetchStepDebug).
+   */
+  fetchRun: async (runId: string, opts?: { lite?: boolean }): Promise<AgentRun> => {
+    const lite = opts?.lite ?? true
+    const response = await api.get<Envelope<{ run: AgentRun }>>(
+      `/agent/runs/${runId}${lite ? "?lite=1" : ""}`
+    )
     return response.data.run
+  },
+  /** Fetch one step's full debug trace (prompt / response / context snapshot) on
+   *  demand — the default run snapshot omits these heavy bodies. */
+  fetchStepDebug: async (runId: string, stepId: string): Promise<AgentStep> => {
+    const response = await api.get<Envelope<{ step: AgentStep }>>(
+      `/agent/runs/${runId}/steps/${stepId}`
+    )
+    return response.data.step
   },
   /** List the current user's runs, optionally scoped to a domain, a resource, or a workflow (for replay). */
   listRuns: async (params?: {

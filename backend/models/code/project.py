@@ -125,12 +125,16 @@ class CodeProject(db.Model):
             data["documents"] = [document.to_dict() for document in self.documents.all()]
         return data
 
-    def to_list_dict(self, deployment_status: str | None = None) -> dict:
-        """Convert the project to a compact list dictionary."""
+    def to_list_dict(self, deployment_status: str | None = None, owner=None) -> dict:
+        """Convert the project to a compact list dictionary.
+
+        ``owner`` (a ``User`` or None) is attached only for the admin "view all"
+        listing so the session list can label whose project each one is.
+        """
         from backend.models.code.fullstack import DeploymentStatus
 
         is_deployed = deployment_status in DeploymentStatus.ACTIVE
-        return {
+        data = {
             "id": self.id,
             "title": self.title,
             "status": self.status,
@@ -139,6 +143,13 @@ class CodeProject(db.Model):
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
         }
+        if owner is not None:
+            data["owner"] = {
+                "id": owner.id,
+                "display_name": owner.display_name,
+                "avatar_url": owner.avatar_url,
+            }
+        return data
 
 
 class CodeDocument(db.Model):

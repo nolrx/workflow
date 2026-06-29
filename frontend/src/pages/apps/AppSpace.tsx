@@ -37,6 +37,7 @@ import { AgentRunPanel } from "@/components/agent/AgentRunPanel"
 import { DeployStatusBadge, HealthBadge } from "@/components/apps/badges"
 import { useAppStore } from "@/stores/appStore"
 import { useAgentStore } from "@/stores/agentStore"
+import { useAuthStore } from "@/stores/authStore"
 import { useTeamStore } from "@/stores/teamStore"
 import { fullstackApi } from "@/api/fullstack"
 import { openDeployedApp } from "@/lib/appPreview"
@@ -64,6 +65,12 @@ export function AppSpace() {
   const scopeTeamId = useTeamStore((s) => s.scopeTeamId)
   const setScopeTeamId = useTeamStore((s) => s.setScopeTeamId)
   const fetchTeams = useTeamStore((s) => s.fetchTeams)
+  const isAdmin = useAuthStore((s) => s.user?.role === "admin")
+
+  // Admin-only platform-wide view. Kept as local (non-persisted) state so it
+  // resets on reload and never leaks into the sticky personal/team scope.
+  const ALL_SCOPE = "__all__"
+  const [adminAll, setAdminAll] = useState(false)
 
   const [search, setSearch] = useState("")
   const [status, setStatus] = useState("all")
@@ -88,13 +95,15 @@ export function AppSpace() {
     status: status === "all" ? undefined : status,
     health: health === "all" ? undefined : health,
     q: search.trim() || undefined,
-    team_id: scopeTeamId,
+    // Admin "全部" overrides the team scope; the backend ignores scope for non-admins.
+    scope: adminAll ? "all" : undefined,
+    team_id: adminAll ? null : scopeTeamId,
   })
 
   useEffect(() => {
     void fetchApps(buildFilters())
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, health, scopeTeamId])
+  }, [status, health, scopeTeamId, adminAll])
 
   const applySearch = () => {
     void fetchApps(buildFilters())
@@ -149,8 +158,15 @@ export function AppSpace() {
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm text-muted-foreground">{t("scope.label")}</span>
           <Select
-            value={scopeTeamId ?? "personal"}
-            onValueChange={(v) => setScopeTeamId(v === "personal" ? null : v)}
+            value={adminAll ? ALL_SCOPE : (scopeTeamId ?? "personal")}
+            onValueChange={(v) => {
+              if (v === ALL_SCOPE) {
+                setAdminAll(true)
+                return
+              }
+              setAdminAll(false)
+              setScopeTeamId(v === "personal" ? null : v)
+            }}
           >
             <SelectTrigger className="w-[200px]">
               <SelectValue />
@@ -170,6 +186,15 @@ export function AppSpace() {
                   </span>
                 </SelectItem>
               ))}
+              {/* Admin-only: every deployed app across the platform (read-only). */}
+              {isAdmin && (
+                <SelectItem value={ALL_SCOPE}>
+                  <span className="flex items-center gap-2">
+                    <Boxes className="h-3.5 w-3.5" />
+                    {t("scope.all")}
+                  </span>
+                </SelectItem>
+              )}
             </SelectContent>
           </Select>
         </div>
@@ -267,6 +292,7 @@ export function AppSpace() {
               <AppCard
                 key={app.project_id}
                 app={app}
+                showOwner={adminAll || !!scopeTeamId}
                 redeploying={redeployingId === app.project_id}
                 stopping={stoppingId === app.project_id}
                 onOpen={() => openDeployedApp(app.project_id)}
@@ -298,6 +324,7 @@ export function AppSpace() {
 
 function AppCard({
   app,
+  showOwner,
   redeploying,
   stopping,
   onOpen,
@@ -308,6 +335,7 @@ function AppCard({
   onStop,
 }: {
   app: AppListItem
+  showOwner: boolean
   redeploying: boolean
   stopping: boolean
   onOpen: () => void
@@ -334,7 +362,7 @@ function AppCard({
         <HealthBadge health={app.health} />
       </div>
       <div className="space-y-0.5 text-xs text-muted-foreground">
-        {app.team_id && app.owner && (
+        {showOwner && app.owner && (
           <div className="flex items-center gap-1">
             <UserIcon className="h-3 w-3" />
             {t("scope.createdBy", {

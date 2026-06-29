@@ -45,11 +45,23 @@ _PREVIEW_COOKIE = "fe_preview_token"
 # Cookie/token lifetime: a minted preview token outlives the 30-min access token so
 # a left-open preview tab keeps working (see backend/utils/preview_token.py).
 _COOKIE_MAX_AGE = PREVIEW_TOKEN_TTL
-# Static-only preview (no deployed backend): block all network egress.
-_PREVIEW_CSP = "default-src 'self' 'unsafe-inline' data: blob:; connect-src 'none'"
-# Deployed preview (a live backend exists): allow same-origin XHR/fetch so the
-# served frontend can reach the backend via /app/<pid>/api (same origin).
-_DEPLOYED_CSP = "default-src 'self' 'unsafe-inline' data: blob:; connect-src 'self'"
+# 停用预览页的 Content-Security-Policy:此前的 default-src 'self' 会在某些构建产物
+# (跨路径加载的 JS chunk / module、内联 worker、blob 等)上拦截脚本加载,导致浏览器
+# 无法正常加载 js 文件而报错。置空即不下发 CSP 头(见下方 _apply_csp 守卫),与
+# agent_routes.serve_run_site 的处理保持一致。
+# 历史值(静态预览拦截全部网络出口):
+#   "default-src 'self' 'unsafe-inline' data: blob:; connect-src 'none'"
+_PREVIEW_CSP = ""
+# 历史值(已部署预览允许同源 XHR/fetch 访问 /app/<pid>/api):
+#   "default-src 'self' 'unsafe-inline' data: blob:; connect-src 'self'"
+_DEPLOYED_CSP = ""
+
+
+def _apply_csp(response, csp: str):
+    """仅在策略非空时下发 CSP 头;置空表示停用安全策略、不拦截资源加载。"""
+    if csp:
+        response.headers["Content-Security-Policy"] = csp
+    return response
 
 
 def _running_deployment(project_id: str, user_id: str) -> CodeDeployment | None:
@@ -94,6 +106,19 @@ def _latest_built_run(project_id: str, user_id: str) -> AgentRun | None:
         .order_by(AgentRun.created_at.desc())
         .first()
     )
+
+
+def _serve_index(site_dir: str, deployment, project_id: str, csp: str):
+    """Serve the dist's ``index.html`` — injecting the live API base when the
+    project is deployed, plain otherwise. Used both for the explicit entry request
+    and for the SPA fallback (an unknown navigation path resolves to index.html so
+    the build can route client-side)."""
+    index_path = os.path.join(site_dir, "index.html")
+    if deployment and os.path.isfile(index_path):
+        with open(index_path, encoding="utf-8", errors="replace") as fh:
+            html = _inject_api_base(fh.read(), deployment.api_base_path or f"/app/{project_id}/api")
+        return _apply_csp(Response(html, mimetype="text/html; charset=utf-8"), csp)
+    return _apply_csp(send_from_directory(site_dir, "index.html"), csp)
 
 
 @code_preview_bp.route("/<project_id>/", methods=["GET"])
@@ -166,18 +191,23 @@ def serve_project_preview(project_id: str, filename: str = "index.html"):
 
     csp = _DEPLOYED_CSP if deployment else _PREVIEW_CSP
 
-    # Inject the runtime API base into the entry HTML so the static build talks to
-    # the live backend (no rebuild). Other assets are served as-is.
+    # The entry / any …/index.html request serves the index (with the runtime API
+    # base injected when deployed, so the static build talks to the live backend
+    # without a rebuild).
     is_index = filename in ("", "index.html") or filename.endswith("/index.html")
-    if deployment and is_index:
-        index_path = os.path.join(site_dir, "index.html")
-        if os.path.isfile(index_path):
-            with open(index_path, encoding="utf-8", errors="replace") as fh:
-                html = _inject_api_base(fh.read(), deployment.api_base_path or f"/app/{project_id}/api")
-            response = Response(html, mimetype="text/html; charset=utf-8")
-            response.headers["Content-Security-Policy"] = csp
-            return response
+    if is_index:
+        return _serve_index(site_dir, deployment, project_id, csp)
 
-    response = send_from_directory(site_dir, filename)
-    response.headers["Content-Security-Policy"] = csp
-    return response
+    # SPA fallback: a path that maps to no file on disk is treated as a client-side
+    # route (e.g. a refreshed/shared deep link) and served index.html so the build
+    # can route in the browser — but ONLY for extension-less navigation paths. A
+    # request that looks like a static asset (foo.js / .css / .png) must still 404,
+    # so a genuinely missing asset surfaces as an error instead of HTML masquerading
+    # as a script. Hash-routed builds never hit this; it just keeps any stray
+    # history-mode build from 404-ing on refresh.
+    if not os.path.isfile(os.path.join(site_dir, filename)):
+        if not os.path.splitext(filename)[1]:
+            return _serve_index(site_dir, deployment, project_id, csp)
+        return error_response("NOT_FOUND", "资源不存在", 404)
+
+    return _apply_csp(send_from_directory(site_dir, filename), csp)

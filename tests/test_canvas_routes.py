@@ -176,3 +176,45 @@ def test_run_creation_rejects_missing_canvas_id(auth):
         headers=headers,
     )
     assert resp.status_code == 400
+
+
+def test_paused_runs_dont_block_new_runs(auth, monkeypatch):
+    """A paused (awaiting-review) run holds no worker, so it must NOT count against
+    the per-user concurrency cap — otherwise an abandoned paused blueprint blocks the
+    account from starting new work (the run-cap regression that review gates caused)."""
+    import backend.routes.agent_routes as ar
+    from backend.models.agent import AgentRun, AgentRunStatus
+    from backend.routes.agent_routes import MAX_CONCURRENT_RUNS
+
+    client, headers, pid = auth["client"], auth["headers"], auth["project_id"]
+    monkeypatch.setattr(ar.agent_runtime, "start", lambda *a, **k: None)  # don't actually execute
+
+    def _seed(status, n):
+        for _ in range(n):
+            db.session.add(
+                AgentRun(
+                    user_id="u-canvas-test",
+                    domain="code",
+                    workflow="code_canvas_generation",
+                    resource_type="code_project",
+                    resource_id=pid,
+                    status=status,
+                )
+            )
+        db.session.commit()
+
+    body = {
+        "domain": "code",
+        "workflow": "code_full_generation",
+        "resource_type": "code_project",
+        "resource_id": pid,
+        "config": {"requirement": "做个待办"},
+    }
+
+    # Way past the cap in PAUSED runs → still allowed (they don't count).
+    _seed(AgentRunStatus.PAUSED, MAX_CONCURRENT_RUNS + 2)
+    assert client.post("/api/agent/runs", json=body, headers=headers).status_code != 429
+
+    # But actually-executing (running) runs DO count → cap kicks in.
+    _seed(AgentRunStatus.RUNNING, MAX_CONCURRENT_RUNS)
+    assert client.post("/api/agent/runs", json=body, headers=headers).status_code == 429

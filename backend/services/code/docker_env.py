@@ -66,6 +66,227 @@ def container_user() -> str:
     return "node"
 
 
+def _agent_anthropic_auth() -> tuple[str | None, str | None]:
+    """Resolve ``(auth_token, api_key)`` for the docker code-gen agent lane.
+
+    Agent-specific overrides (``AGENT_ANTHROPIC_*``) win over the shared
+    ``ANTHROPIC_*`` vars, so the docker agents (fe/be ``claude`` CLI, "code
+    generation") can use a DIFFERENT gateway key/model from the backend text
+    provider (services/ai/factory.py, "requirements docs etc."). When no agent
+    override is set this falls back to the shared vars, so a single-gateway or
+    official-API setup keeps working unchanged.
+    """
+    auth_token = os.getenv("AGENT_ANTHROPIC_AUTH_TOKEN") or os.getenv("ANTHROPIC_AUTH_TOKEN")
+    api_key = (
+        os.getenv("AGENT_ANTHROPIC_API_KEY")
+        or os.getenv("ANTHROPIC_API_KEY")
+        or os.getenv("CLAUDE_API_KEY")
+    )
+    return auth_token, api_key
+
+
+def anthropic_configured() -> bool:
+    """True when the agent containers have an Anthropic credential to use —
+    a Bearer auth token (gateway) or an API key (official API). See
+    :func:`_agent_anthropic_auth`. The agent services gate on this before
+    spawning a ``claude`` container."""
+    auth_token, api_key = _agent_anthropic_auth()
+    return bool(auth_token or api_key)
+
+
+# ===========================================================================
+# Gateway retry shim (injected into the agent container script).
+# ===========================================================================
+# Flaky Anthropic-format gateways (e.g. zentao.panlaxy.io) load-balance each
+# ``/v1/messages`` call across MIXED upstream nodes; ~half are OpenAI-only and
+# reject with ``403 "HTTP node only allows access to inference API paths"``. The
+# in-container ``claude`` CLI does NOT retry 403 (only 5xx/408/409/429/timeouts),
+# so a multi-call agent run almost always dies mid-way → degraded placeholder.
+#
+# We can't make the CLI retry, but we CAN front the gateway with a tiny localhost
+# proxy (pure Node, built-in http/https, no deps) that retries ONLY that random
+# channel-routing 403 (and 429/5xx) PER REQUEST — making each individual API call
+# reliable. A DETERMINISTIC 403 like "This token has no access to model X" does
+# NOT match the signature and passes straight through (no pointless retries).
+#
+# ``ANTHROPIC_RETRY_PROXY_BOOTSTRAP`` is a self-contained bash block the agent
+# container scripts splice in (via the ``# __ANTHROPIC_PROXY_BOOTSTRAP__`` marker)
+# BEFORE the first ``claude`` call: it writes the proxy, starts it, waits for it to
+# listen, then re-points ``ANTHROPIC_BASE_URL`` at the localhost proxy. Skipped for
+# the official API (no ``ANTHROPIC_BASE_URL``) and disablable with
+# ``AGENT_GATEWAY_RETRY_403=0``. If the proxy fails to come up the script keeps the
+# original gateway URL (degrade to today's direct-but-flaky behaviour, never worse).
+ANTHROPIC_RETRY_PROXY_BOOTSTRAP = r"""
+if [ -n "${ANTHROPIC_BASE_URL:-}" ] && [ "${AGENT_GATEWAY_RETRY_403:-1}" != "0" ]; then
+  cat > "$HOME/anthropic-proxy.mjs" <<'ANTHROPIC_PROXY_EOF'
+import http from 'node:http';
+import https from 'node:https';
+import { URL } from 'node:url';
+
+const PORT = Number(process.env.ANTHROPIC_PROXY_PORT || 8788);
+const UPSTREAM = (process.env.ANTHROPIC_PROXY_UPSTREAM || '').replace(/\/+$/, '');
+const MAX_RETRIES = Number(process.env.ANTHROPIC_PROXY_MAX_RETRIES || 12);
+const RETRY_BASE_MS = Number(process.env.ANTHROPIC_PROXY_RETRY_MS || 250);
+
+if (!UPSTREAM) {
+  console.error('[anthropic-proxy] ANTHROPIC_PROXY_UPSTREAM not set');
+  process.exit(1);
+}
+const up = new URL(UPSTREAM);
+const client = up.protocol === 'http:' ? http : https;
+const RETRYABLE_403 = /only allows access to inference API paths|HTTP node/i;
+
+function retryable(status, snippet) {
+  if (status === 429 || (status >= 500 && status <= 599)) return true;
+  if (status === 403 && RETRYABLE_403.test(snippet)) return true;
+  return false;
+}
+
+function attempt(n, req, res, body) {
+  const headers = { ...req.headers };
+  delete headers['host'];
+  delete headers['content-length'];
+  delete headers['connection'];
+  headers['host'] = up.host;
+  if (body.length) headers['content-length'] = String(body.length);
+
+  const options = {
+    protocol: up.protocol,
+    hostname: up.hostname,
+    port: up.port || (up.protocol === 'https:' ? 443 : 80),
+    method: req.method,
+    path: up.pathname.replace(/\/$/, '') + req.url,
+    headers,
+  };
+
+  const ureq = client.request(options, (ures) => {
+    const status = ures.statusCode || 0;
+    const mayRetry = n < MAX_RETRIES && (status === 429 || status >= 500 || status === 403);
+    if (!mayRetry) {
+      res.writeHead(status, ures.headers);
+      ures.pipe(res);
+      return;
+    }
+    const buf = [];
+    ures.on('data', (c) => buf.push(c));
+    ures.on('end', () => {
+      const bodyBuf = Buffer.concat(buf);
+      const snippet = bodyBuf.toString('utf8').slice(0, 2000);
+      if (retryable(status, snippet)) {
+        const delay = RETRY_BASE_MS * Math.min(n + 1, 6);
+        console.error(`[anthropic-proxy] retry ${n + 1}/${MAX_RETRIES} after ${status}`);
+        setTimeout(() => attempt(n + 1, req, res, body), delay);
+      } else {
+        res.writeHead(status, ures.headers);
+        res.end(bodyBuf);
+      }
+    });
+  });
+  ureq.on('error', (err) => {
+    if (n < MAX_RETRIES) {
+      setTimeout(() => attempt(n + 1, req, res, body), RETRY_BASE_MS * Math.min(n + 1, 6));
+    } else {
+      try { res.writeHead(502); res.end('proxy upstream error: ' + err.message); } catch {}
+    }
+  });
+  if (body.length) ureq.write(body);
+  ureq.end();
+}
+
+const server = http.createServer((req, res) => {
+  if (req.url === '/healthz') { res.writeHead(200); res.end('ok'); return; }
+  const chunks = [];
+  req.on('data', (c) => chunks.push(c));
+  req.on('end', () => attempt(0, req, res, Buffer.concat(chunks)));
+  req.on('error', () => { try { res.writeHead(502); res.end('proxy req error'); } catch {} });
+});
+server.listen(PORT, '127.0.0.1', () =>
+  console.error(`[anthropic-proxy] 127.0.0.1:${PORT} -> ${UPSTREAM} (retry x${MAX_RETRIES})`));
+ANTHROPIC_PROXY_EOF
+  export ANTHROPIC_PROXY_UPSTREAM="$ANTHROPIC_BASE_URL"
+  export ANTHROPIC_PROXY_PORT="${ANTHROPIC_PROXY_PORT:-8788}"
+  node "$HOME/anthropic-proxy.mjs" >/tmp/anthropic_proxy.log 2>&1 &
+  _proxy_ready=0
+  for _ in $(seq 1 50); do
+    if (exec 3<>/dev/tcp/127.0.0.1/$ANTHROPIC_PROXY_PORT) 2>/dev/null; then exec 3>&- 3<&-; _proxy_ready=1; break; fi
+    sleep 0.1
+  done
+  if [ "$_proxy_ready" = "1" ]; then
+    export ANTHROPIC_BASE_URL="http://127.0.0.1:$ANTHROPIC_PROXY_PORT"
+    echo "[agent] anthropic retry-proxy ready on :$ANTHROPIC_PROXY_PORT -> $ANTHROPIC_PROXY_UPSTREAM" >&2
+  else
+    echo "[agent] anthropic retry-proxy failed to start; using gateway directly" >&2
+  fi
+fi
+"""
+
+
+def anthropic_agent_credentials() -> tuple[list[str], dict[str, str]]:
+    """Build the Anthropic credential + model injection for an agent ``docker run``.
+
+    Returns ``(flags, env)`` where ``flags`` are the ``-e`` arguments to append
+    to the ``docker run`` argv and ``env`` are the matching values to merge into
+    the subprocess environment (``env = dict(os.environ, **env)``). Secrets (the
+    API key / auth token) are passed by NAME so their value never lands in the
+    argv / host process list; the (non-secret) base URL and model ids are inline.
+
+    Auth model — mirrors the anthropic SDK + the Claude Code CLI (and the
+    backend's own ``services/ai/claude.py``):
+
+    * ``AGENT_ANTHROPIC_AUTH_TOKEN`` / ``ANTHROPIC_AUTH_TOKEN`` ->
+      ``Authorization: Bearer`` (third-party gateways, e.g.
+      ``https://zentao.panlaxy.io``). Takes precedence; when set we deliberately
+      DO NOT also forward an API key, because the SDK/CLI would then send BOTH an
+      ``x-api-key`` and a ``Bearer`` header and the gateway rejects it (401).
+    * ``AGENT_ANTHROPIC_API_KEY`` / ``ANTHROPIC_API_KEY`` / ``CLAUDE_API_KEY``
+      -> ``x-api-key`` (official API). The in-container ``claude`` CLI only reads
+      ``ANTHROPIC_API_KEY``, so the resolved key is forwarded under that name.
+    * ``AGENT_ANTHROPIC_BASE_URL`` / ``ANTHROPIC_BASE_URL`` -> gateway base URL
+      (root, e.g. ``https://zentao.panlaxy.io`` — the CLI appends ``/v1/...``).
+
+    Model selection (only injected when configured, so the official-API path is
+    unchanged): ``AGENT_ANTHROPIC_MODEL`` / ``ANTHROPIC_MODEL`` sets the main
+    model by name (e.g. ``deepseek-v4-pro``) via the ``ANTHROPIC_MODEL`` env the
+    CLI reads. A single-model gateway has no built-in ``haiku``, so the CLI's
+    background/fast calls (summaries, titles) would 404 — we therefore also pin
+    ``ANTHROPIC_DEFAULT_HAIKU_MODEL`` to an available model
+    (``AGENT_ANTHROPIC_SMALL_MODEL`` if set, else the main model).
+    """
+    flags: list[str] = []
+    env: dict[str, str] = {}
+
+    base_url = os.getenv("AGENT_ANTHROPIC_BASE_URL") or os.getenv("ANTHROPIC_BASE_URL")
+    if base_url:
+        flags += ["-e", f"ANTHROPIC_BASE_URL={base_url}"]
+        # Gateway retry-shim knobs (see ANTHROPIC_RETRY_PROXY_BOOTSTRAP). Non-secret,
+        # so forwarded inline; only when explicitly set, otherwise the in-container
+        # defaults (proxy on, 12 retries) apply. AGENT_GATEWAY_RETRY_403=0 disables it.
+        for key in ("AGENT_GATEWAY_RETRY_403", "ANTHROPIC_PROXY_MAX_RETRIES", "ANTHROPIC_PROXY_RETRY_MS"):
+            value = os.getenv(key)
+            if value:
+                flags += ["-e", f"{key}={value}"]
+
+    model = os.getenv("AGENT_ANTHROPIC_MODEL") or os.getenv("ANTHROPIC_MODEL")
+    if model:
+        flags += ["-e", f"ANTHROPIC_MODEL={model}"]
+        small = (
+            os.getenv("AGENT_ANTHROPIC_SMALL_MODEL")
+            or os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+            or model
+        )
+        flags += ["-e", f"ANTHROPIC_DEFAULT_HAIKU_MODEL={small}"]
+
+    auth_token, api_key = _agent_anthropic_auth()
+    if auth_token:
+        flags += ["-e", "ANTHROPIC_AUTH_TOKEN"]
+        env["ANTHROPIC_AUTH_TOKEN"] = auth_token
+        return flags, env
+
+    flags += ["-e", "ANTHROPIC_API_KEY"]
+    env["ANTHROPIC_API_KEY"] = api_key or ""
+    return flags, env
+
+
 def _decode_mountinfo(value: str) -> str:
     """Decode octal escapes (\\040 -> space, \\134 -> backslash, etc.)."""
     def repl(match: re.Match) -> str:

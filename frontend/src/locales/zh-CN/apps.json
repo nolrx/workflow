@@ -196,6 +196,7 @@
   "scope": {
     "label": "作用域",
     "personal": "个人",
+    "all": "全部(管理员)",
     "createdBy": "创建者：{{name}}",
     "unknownMember": "某成员"
   },

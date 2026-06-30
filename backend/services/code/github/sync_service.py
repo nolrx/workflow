@@ -342,7 +342,13 @@ def push_snapshot(
     branch = branch or link.default_branch
     ref = f"heads/{branch}"
     existing = client.get_ref(owner, repo, ref)
-    parent_sha = existing["object"]["sha"] if existing else None
+    if existing:
+        parent_sha = existing["object"]["sha"]
+    else:
+        # Empty repo (no commits): the Git Data API rejects blobs/trees with 409.
+        # Seed an initial commit via the Contents API and use it as the parent so
+        # the snapshot below lands as a normal fast-forward update of the branch.
+        parent_sha = client.init_empty_repo(owner, repo, branch)
 
     tree = []
     for path, content in sorted(files.items()):
@@ -354,7 +360,10 @@ def push_snapshot(
         owner, repo, message, tree_obj["sha"], parents=[parent_sha] if parent_sha else []
     )
     commit_sha = commit["sha"]
-    if existing:
+    # The branch ref exists whenever we have a parent — either it was already there
+    # (existing) or init_empty_repo just seeded it. Only a non-empty repo missing
+    # this specific branch needs a fresh ref.
+    if parent_sha:
         client.update_ref(owner, repo, ref, commit_sha, force=False)
     else:
         client.create_ref(owner, repo, f"refs/heads/{branch}", commit_sha)

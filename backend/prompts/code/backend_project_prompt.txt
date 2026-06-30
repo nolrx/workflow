@@ -102,6 +102,7 @@
 
 - `README.md`:技术栈、`PORT`/`DATABASE_URL`/`REDIS_URL` 配置说明、本地与容器启动命令、契约端点清单、如何跑测试。
 - `ARCHITECTURE.md`:分层图、模块/目录职责表(每个目录一句话)、数据演进小节(对每个核心实体写一句未来最可能的扩展点)、「要改 X 功能去哪个文件」对照表、以及第 7 条的「6 问决策表」。
+- `AGENTS.md`(≤100 行工程导览,渐进披露):后续续改/修复的入口——文档地图(指向 `ARCHITECTURE.md` 与 `docs/`)+ 黄金准则(根路径挂载、禁 `/api` 前缀、统一信封、`/health`、`postgresql+asyncpg`、空库自播种 demo)。**续改模式先读 `AGENTS.md` 与 `docs/` 再动手。** 实现时**逐功能锚点推进**(每个 FR/M 做到端到端真实可用再做下一个),有 `git` 时每完成一个功能就 commit,并维护工程根 `progress.json`(已完成 / 待办),便于长流程不漂移、修复时增量续接而非重写。
 - **分层目录**:`routes/handler` ·`services` ·`repositories/dao` ·`common/internal` ·`models` 清晰分离,一资源一模块目录。
 - **统一构建入口 `Makefile`(首选)或 `ci.sh`**:封装本栈真实命令,暴露 `make install`(装依赖)·`make build`(原生编译)·`make test`(单元+契约测试)·`make package`(产出可运行制品)四个目标,可选 `make migrate`/`make run`。**禁止在脚手架里调用 `docker` / `docker build`**——本阶段容器内无 docker,真正的镜像打包在部署阶段由平台执行;本阶段的「可打包」= 原生 `make build`/`make package` 通过。
 - **测试(放语言习惯目录,如 `tests/`)**:① 单元测试覆盖核心 service 的业务规则(纯逻辑、不连库);② 契约/集成测试至少覆盖 `GET /health` 与每个核心端点的 happy-path(断言状态码与响应 schema 对齐契约),关键校验/边界各一条。测试要能离线跑:需要 DB 时用 sqlite/内存库或可跳过标记,**不打真实外网/第三方**,且 `make test` 一键可跑。

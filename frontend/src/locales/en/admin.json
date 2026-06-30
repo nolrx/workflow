@@ -1,6 +1,34 @@
 {
   "nav": {
-    "prompts": "Prompts"
+    "prompts": "Prompts",
+    "quality": "Quality"
+  },
+  "quality": {
+    "title": "Generation quality trends",
+    "subtitle": "Aggregated acceptance-quality samples from every generation (pass rate / score / repair rounds / degraded rate), by lane and over time.",
+    "filters": {
+      "allLanes": "All lanes",
+      "frontend": "Frontend project",
+      "backend": "Backend project",
+      "full_generation": "Doc pipeline",
+      "days": "Last {{n}} days",
+      "allTime": "All time",
+      "scopeAll": "Platform-wide",
+      "scopeOwn": "My runs"
+    },
+    "metrics": {
+      "count": "Samples",
+      "passRate": "Pass rate",
+      "meanScore": "Avg quality score",
+      "meanRounds": "Avg repair rounds",
+      "degradedRate": "Degraded rate",
+      "featurePassRate": "Feature pass rate"
+    },
+    "byDay": "Daily trend (bar = pass rate)",
+    "byLane": "By lane",
+    "verdicts": "Verdict distribution",
+    "empty": "No quality samples in this range yet (they accrue as generations run).",
+    "loadError": "Failed to load quality trends"
   },
   "title": "Prompt Management",
   "subtitle": "View and tune the built-in system prompts online. Changes take effect on the next generation.",

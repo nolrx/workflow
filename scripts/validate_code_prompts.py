@@ -99,6 +99,9 @@ MANIFEST: dict[str, dict] = {
         "mode": "fill",
         "placeholders": ["CONTEXT_LEDGER", "REQUIREMENT", "REQUIREMENTS_DOC", "DEVELOPMENT_FLOW", "DOCUMENTS", "STYLE_PROMPT", "UI_BASELINE", "FIGMA_DESIGN", "CONTRACT"],
         "must_contain": ["gen-assets", "base: './'", "npm run build", "npm install", "src/assets", "src/components", "src/types.ts", "React", "Vite", "localStorage", "window.__API_BASE__",
+            # Progressive-disclosure scaffold (P2-E): a navigable AGENTS.md + docs/
+            # so iteration/repair runs read the repo instead of re-stuffing the prompt.
+            "AGENTS.md",
             # Sub-path routing: the dist is served under /preview/<pid>/, so routing
             # MUST be hash-based (HashRouter) — history routing escapes to the main
             # domain. Keep the rule and its counter-example in the prompt.
@@ -122,8 +125,18 @@ MANIFEST: dict[str, dict] = {
     },
     "frontend_project_critic_prompt.txt": {
         "mode": "fill",
-        "placeholders": ["REQUIREMENTS", "STYLE_PROMPT", "SOURCE"],
-        "must_contain": ['"verdict"', '"fr_coverage"', '"issues"', '"summary"', "PASS", "CONCERNS", "FAIL"],
+        # Skeptical rubric evaluator (P0-B): fed the deterministic house-rules +
+        # runtime findings + the acceptance features list so its judgment is
+        # grounded; its blocking_issues drive the verify->repair loop.
+        "placeholders": ["REQUIREMENTS", "FEATURES", "STYLE_PROMPT", "HOUSE_RULES", "RUNTIME", "SOURCE"],
+        "must_contain": [
+            '"verdict"', '"scores"', '"feature_results"', '"fr_coverage"',
+            '"blocking_issues"', '"advisory_issues"', '"issues"', '"summary"',
+            "PASS", "CONCERNS", "FAIL",
+            # rubric dimensions (Anthropic harness article) — turn subjective
+            # "is it good?" into gradable terms.
+            "design_quality", "originality", "craft", "functionality",
+        ],
     },
     "consistency_gate_prompt.txt": {
         "mode": "fill",
@@ -183,7 +196,7 @@ MANIFEST: dict[str, dict] = {
             # Architecture-discipline anchors: guard that the prompt keeps the
             # 6-question doctrine + delivered scaffolding (else a future trim /
             # a stale Mongo override could silently ship a doctrine-less prompt).
-            "ARCHITECTURE.md", "Makefile", "make test",
+            "ARCHITECTURE.md", "AGENTS.md", "Makefile", "make test",
             # First-screen visibility: guard the empty-DB demo self-seed mandate
             # (the fix for "进入系统后什么都没有"). A future trim must not drop the
             # loginnable demo account, the env switch, or the 首屏 anchor.
@@ -239,9 +252,13 @@ MANIFEST: dict[str, dict] = {
         "mode": "fill",
         # Anchor sources injected so the critic can do real FR/NFR/M traceability
         # (the contract alone may not preserve anchor numbering).
-        "placeholders": ["CONTRACT", "REQUIREMENTS_DOC", "DEVELOPMENT_FLOW", "SOURCE"],
+        "placeholders": ["CONTRACT", "REQUIREMENTS_DOC", "DEVELOPMENT_FLOW", "FEATURES", "HOUSE_RULES", "SOURCE"],
         "must_contain": [
             '"verdict"', '"endpoint_coverage"', '"fr_coverage"', '"issues"', '"summary"', "PASS", "CONCERNS", "FAIL",
+            # Skeptical rubric evaluator (P0-B): rubric scores + per-feature
+            # results + blocking_issues fed the deterministic house-rules report.
+            '"scores"', '"feature_results"', '"blocking_issues"', '"advisory_issues"',
+            "contract_conformance", "functional_completeness", "robustness", "security",
             # Acceptance must check first-screen visibility (demo self-seed).
             "首屏", "demo 账号",
             # ...and that the demo login is usable in the deployed env (SMS/OTP

@@ -29,6 +29,14 @@ def _credits(env_var: str, default: int) -> int:
 # so set the PRICE_CODE_* env vars to re-enable metering without code changes.
 CODE_FULL_GENERATION = _credits("PRICE_CODE_FULL", 0)       # base workflow cost
 CODE_CONTEXT_VERIFY = _credits("PRICE_CODE_CONTEXT_VERIFY", 0)  # per AI context-consistency gate
+# Acceptance/quality review of a generated project (frontend or backend): one
+# skeptical, rubric-graded text-model call that rates the project against its
+# FR/NFR registry + features checklist + the deterministic house-rules / runtime
+# findings, and whose blocking verdict drives the verify->repair loop. Charged
+# per call as the gate fires (folded in like CODE_CONTEXT_VERIFY, not the up-front
+# reservation), so a run with no provider configured isn't over-charged. Defaults
+# 0 (free) like the rest of the Code domain — set PRICE_CODE_PROJECT_REVIEW to meter.
+CODE_PROJECT_REVIEW = _credits("PRICE_CODE_PROJECT_REVIEW", 0)
 
 # Up-front reservation for the full code workflow (requirements -> flow ->
 # document split -> style -> previews -> publish). Context-verify gates are
@@ -113,6 +121,7 @@ CODE_APP_ITERATION_ANALYSIS = _credits("PRICE_CODE_ITERATION_ANALYSIS", 0)
 OPERATION = {
     "agent_run": ("agent_run", CODE_FULL_GENERATION_TOTAL),
     "code_context_verify": ("agent_run", CODE_CONTEXT_VERIFY),
+    "code_project_review": ("agent_run", CODE_PROJECT_REVIEW),
     "code_frontend_project": ("agent_run", CODE_FRONTEND_PROJECT_GENERATION),
     "code_section_revise": ("code_project", CODE_SECTION_REVISION),
     "code_figma_export": ("code_project", CODE_FIGMA_EXPORT),

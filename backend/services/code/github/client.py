@@ -95,8 +95,11 @@ class GitHubClient:
     def create_org_repo(
         self, org: str, name: str, *, private: bool = True, description: str = ""
     ) -> dict:
-        """Create a repo under an org (``POST /orgs/{org}/repos``). ``auto_init=False``
-        leaves it empty so the first push can author the initial commit."""
+        """Create a repo under an org (``POST /orgs/{org}/repos``). ``auto_init=True``
+        seeds an initial commit on the default branch: a brand-new *empty* repo (zero
+        commits) rejects the Git Data API with 409 ``Git Repository is empty``, so the
+        first ``push_snapshot`` would fail at ``create_blob``. The auto README is
+        replaced by the first snapshot (its tree is built without a base_tree)."""
         return self._ok(
             self._request(
                 "POST",
@@ -105,12 +108,34 @@ class GitHubClient:
                     "name": name,
                     "private": private,
                     "description": description[:350],
-                    "auto_init": False,
+                    "auto_init": True,
                     "has_issues": True,
                 },
             ),
             expected=(201,),
         )
+
+    def init_empty_repo(self, owner: str, repo: str, branch: str = "main") -> str:
+        """Seed an *empty* repo with an initial commit via the Contents API and
+        return its sha. The Git Data API (blobs/trees) returns 409 on a zero-commit
+        repo, but ``PUT /contents`` can author the first commit. The seed file is
+        dropped by the next ``push_snapshot`` (its tree carries no base_tree). The
+        returned sha is used directly as the parent — no ref re-read (avoids the
+        brief post-seed propagation lag on ``GET /git/ref``)."""
+        encoded = base64.b64encode(b"placeholder - replaced by the first sync\n").decode("ascii")
+        data = self._ok(
+            self._request(
+                "PUT",
+                f"/repos/{owner}/{repo}/contents/.platform-init",
+                json={
+                    "message": "chore: initialize repository",
+                    "content": encoded,
+                    "branch": branch,
+                },
+            ),
+            expected=(200, 201),
+        )
+        return (data.get("commit") or {}).get("sha")
 
     # --- git data ------------------------------------------------------------
     def get_ref(self, owner: str, repo: str, ref: str) -> Optional[dict]:

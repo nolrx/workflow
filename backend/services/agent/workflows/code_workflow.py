@@ -1021,6 +1021,23 @@ def run_code_workflow(ctx, recorder) -> dict:
             if stage in REVIEW_STAGES:
                 return pause_at(stage)
         status = AgentRunStatus.COMPLETED if preview_ok else AgentRunStatus.PARTIAL
+        # Record ONE doc-pipeline quality sample (eval framework, P0-B). The quality
+        # signal here is context-consistency conflicts + completion (no rubric score).
+        # Events persist across resumes, so the CONTEXT_CONFLICT count is the run total.
+        # Fail-soft — a metrics write must never affect the run outcome.
+        try:
+            from backend.models.agent.event import AgentEvent
+            from backend.services.code.quality_metrics import record_doc_quality_sample
+
+            _conflicts = AgentEvent.query.filter_by(
+                run_id=ctx.run_id, event_type=AgentEventType.CONTEXT_CONFLICT
+            ).count()
+            record_doc_quality_sample(
+                run_id=ctx.run_id, project_id=project_id, user_id=ctx.user_id,
+                team_id=ctx.team_id, completed=preview_ok, conflicts=_conflicts,
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return {"status": status, "resource_id": project_id, "extra_credits": extra_credits}
 
     # --- scheduler -----------------------------------------------------------

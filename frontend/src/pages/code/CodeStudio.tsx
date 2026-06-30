@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Info, Workflow } from "lucide-react";
+import { Info } from "lucide-react";
 import { toast } from "sonner";
 import { AgentRunPanel } from "@/components/agent/AgentRunPanel";
 import { CodeStepper } from "@/components/code/CodeStepper";
 import { ConversationRail } from "@/components/code/ConversationRail";
 import { deriveStageNav, type DisplayStage } from "@/components/code/stages";
-import { FigmaExportDialog } from "@/components/code/FigmaExportDialog";
-import { FigmaImportDialog } from "@/components/code/FigmaImportDialog";
+// Figma「关联设计 / HTML 导出到 Figma」暂时下线(先停止显示),保留 import 以便后续恢复
+// import { FigmaExportDialog } from "@/components/code/FigmaExportDialog";
+// import { FigmaImportDialog } from "@/components/code/FigmaImportDialog";
 import { GitHubRepoCard } from "@/components/code/GitHubRepoCard";
 import { PreviewThumbnailPanel } from "@/components/code/PreviewThumbnailPanel";
 import { AppLayout } from "@/components/layout/AppLayout";
@@ -30,7 +31,7 @@ import { useCodeStore } from "@/stores/codeStore";
 export function CodeStudio() {
     const { t } = useTranslation("code");
     const { t: ta } = useTranslation("agent");
-    const { t: tc } = useTranslation("canvas");
+    // const { t: tc } = useTranslation("canvas");  // 画布模式入口已下线(随之停用)
 
     const project = useCodeStore((state) => state.project);
     const selectedStyleIds = useCodeStore((state) => state.selectedStyleIds);
@@ -237,8 +238,10 @@ export function CodeStudio() {
     // Figma belongs to the UI-generation stage: only surface it once the project
     // has reached the preview / UI-baseline stage, so it never clutters or
     // interrupts the document stages (requirements / flow / documents / style).
-    const inUiStage =
-        !!project && ["preview_ready", "ui_confirmed"].includes(project.status);
+    // 注:Figma「关联设计 / HTML 导出到 Figma」暂时停止显示,下方 header 中相关
+    // 渲染已注释,故此处的 inUiStage 暂时不再被使用,后续恢复时一并取消注释。
+    // const inUiStage =
+    //     !!project && ["preview_ready", "ui_confirmed"].includes(project.status);
 
     return (
         <AppLayout title={t("title")}>
@@ -257,35 +260,29 @@ export function CodeStudio() {
                         />
                     </div>
                     <div className="flex shrink-0 items-center justify-end gap-2">
-                        {/* Blueprint / canvas mode: compose this project's stages into a
-                custom node graph (the composable-workflow canvas). */}
+                        {/* Blueprint / canvas mode entry —— 暂时停止显示(先下线),保留代码以便后续恢复:
                         {project && (
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                className="h-8 sm:h-9"
-                                onClick={() => navigate(`/code/${project.id}/canvas`)}
-                            >
+                            <Button variant="outline" size="sm" className="h-8 sm:h-9"
+                                onClick={() => navigate(`/code/${project.id}/canvas`)}>
                                 <Workflow className="h-4 w-4 sm:mr-1.5" />
                                 <span className="hidden sm:inline">{tc("entry")}</span>
                             </Button>
-                        )}
+                        )} */}
                         {/* GitHub auto-sync status (read-only): repo link + latest push. Renders
                 nothing until the session has a repo or a sync event. */}
                         {project && <GitHubRepoCard projectId={project.id} />}
-                        {/* Figma belongs to the UI stage: attach a whole design to drive the
-                multi-file project generation. Hidden during the document stages. */}
-                        {inUiStage && (
-                            <FigmaImportDialog projectId={project!.id} />
-                        )}
-                        {/* Figma export: push the generated HTML into Figma as editable layers. */}
-                        {inUiStage && (
-                            <FigmaExportDialog
-                                projectId={project!.id}
-                                source="html"
-                                triggerLabel={t("figma.exportHtml")}
-                            />
-                        )}
+                        {/* Figma 关联设计 / HTML 导出到 Figma —— 暂时停止显示(先下线),
+                保留代码以便后续恢复:
+                {inUiStage && (
+                    <FigmaImportDialog projectId={project!.id} />
+                )}
+                {inUiStage && (
+                    <FigmaExportDialog
+                        projectId={project!.id}
+                        source="html"
+                        triggerLabel={t("figma.exportHtml")}
+                    />
+                )} */}
                         {agentRun && (
                             <>
                                 <Badge

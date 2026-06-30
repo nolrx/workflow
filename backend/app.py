@@ -58,6 +58,7 @@ def create_app(config_name: str = None, *, reconcile_on_boot: bool = False) -> F
         figma_bp,
         fullstack_bp,
         github_bp,
+        quality_bp,
     )
     from backend.routes.credit_routes import credit_bp
     from backend.routes.notification_routes import notification_bp
@@ -78,6 +79,8 @@ def create_app(config_name: str = None, *, reconcile_on_boot: bool = False) -> F
     app.register_blueprint(fullstack_bp, url_prefix="/api/code")
     # App Space (应用空间) + secondary development (二次开发) over deployed apps.
     app.register_blueprint(apps_bp, url_prefix="/api/code")
+    # Generation-quality trend endpoint (eval framework read side): /api/code/quality/*
+    app.register_blueprint(quality_bp, url_prefix="/api/code")
     # Session-bound deployed preview of generated frontend projects. Mounted at the
     # top level (not under /api) so it reads like a real deployment; nginx proxies
     # the /preview prefix to the backend (see frontend/nginx/default.conf).

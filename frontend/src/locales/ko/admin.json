@@ -1,6 +1,34 @@
 {
   "nav": {
-    "prompts": "프롬프트 관리"
+    "prompts": "프롬프트 관리",
+    "quality": "품질 추세"
+  },
+  "quality": {
+    "title": "생성 품질 추세",
+    "subtitle": "각 생성의 인수 품질 샘플(통과율 / 점수 / 수리 라운드 / 저하율)을 레인·기간별로 집계합니다.",
+    "filters": {
+      "allLanes": "전체 레인",
+      "frontend": "프론트엔드",
+      "backend": "백엔드",
+      "full_generation": "문서 파이프라인",
+      "days": "최근 {{n}}일",
+      "allTime": "전체 기간",
+      "scopeAll": "전체",
+      "scopeOwn": "내 작업만"
+    },
+    "metrics": {
+      "count": "샘플 수",
+      "passRate": "통과율",
+      "meanScore": "평균 품질 점수",
+      "meanRounds": "평균 수리 라운드",
+      "degradedRate": "저하율",
+      "featurePassRate": "기능 달성률"
+    },
+    "byDay": "일별 추세(막대 = 통과율)",
+    "byLane": "레인별",
+    "verdicts": "평가 결과 분포",
+    "empty": "이 범위에 품질 샘플이 아직 없습니다(생성 실행에 따라 누적됩니다).",
+    "loadError": "품질 추세를 불러오지 못했습니다"
   },
   "title": "프롬프트 관리",
   "subtitle": "내장 시스템 프롬프트를 온라인으로 확인하고 조정합니다. 저장하면 다음 생성부터 적용됩니다.",

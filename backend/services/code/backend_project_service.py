@@ -164,7 +164,7 @@ echo "$SCAFFOLD" > /out/scaffold
 # heuristic would self-pollute (e.g. the word "skipping" in the skip branch).
 case "$STACK" in
   node)
-    NI='npm ci || npm install --no-audit --no-fund'
+    NI='npm ci --prefer-offline || npm install --no-audit --no-fund --prefer-offline'
     NC='if [ -f tsconfig.json ]; then npx --no-install tsc --noEmit; else npm run build --if-present; fi'
     NT='if grep -q "no test specified" package.json 2>/dev/null; then echo 0 > /out/tests_ran_marker; echo "default npm test placeholder; not run"; exit 0; else echo 1 > /out/tests_ran_marker; npm test --if-present; fi'
     ;;
@@ -554,16 +554,19 @@ class BackendProjectService:
 
     def review_project(
         self, *, source_digest: str, contract_summary: str,
-        requirements_doc: str = "", development_flow: str = "", on_model_call=None
+        requirements_doc: str = "", development_flow: str = "",
+        features_block: str = "", house_rules_report: str = "",
+        extra_directive: str = "", on_model_call=None
     ) -> Optional[dict]:
-        """Acceptance review of the generated backend against the shared contract.
+        """Skeptical, rubric-graded acceptance review of the generated backend.
 
-        One text-model call -> ``{verdict, endpoint_coverage, issues, summary}``.
-        ``requirements_doc`` / ``development_flow`` inject the canonical FR/NFR/M
-        anchor lists so the critic can do real traceability (the contract alone
-        may not preserve anchor numbering). Advisory: returns ``None`` when no
-        provider is configured or on any failure (never raises, never blocks
-        publish)."""
+        One text-model call (reliable text lane) -> ``{verdict, scores,
+        endpoint_coverage, fr_coverage, feature_results, blocking_issues,
+        advisory_issues, issues, summary}``. ``requirements_doc`` /
+        ``development_flow`` inject the canonical FR/NFR/M anchors for real
+        traceability; ``features_block`` / ``house_rules_report`` ground the
+        verdict so its ``blocking_issues`` drive the verify->repair loop.
+        Returns ``None`` when no provider is configured or on any failure."""
         from backend.services.ai import get_text_provider
 
         provider = get_text_provider()
@@ -579,8 +582,15 @@ class BackendProjectService:
             CONTRACT=contract_summary or "",
             REQUIREMENTS_DOC=(requirements_doc or "")[:_cap],
             DEVELOPMENT_FLOW=(development_flow or "")[:_cap],
+            FEATURES=features_block or "(本次未提供功能清单)",
+            HOUSE_RULES=house_rules_report or "(确定性房规检查未发现问题)",
             SOURCE=source_digest or "",
         )
+        if extra_directive:
+            prompt += (
+                "\n\n# 本次审查侧重(在完成完整 rubric 的同时,尤其严格审查以下方面)\n"
+                + extra_directive
+            )
         provider_name = getattr(provider, "provider_name", None)
         model_name = getattr(provider, "model", None)
         try:

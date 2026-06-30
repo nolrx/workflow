@@ -100,6 +100,15 @@ if [ -d /out/_base ] && [ -n "$(ls -A /out/_base 2>/dev/null)" ]; then
   rm -rf /out/_base
   echo seeded > /out/seeded
 fi
+# P2-F: git checkpoint baseline (fail-soft; no git in image -> skipped). Gives the
+# coding agent + repair rungs a known-good state to revert to and makes progress
+# legible. node_modules/dist are ignored so commits stay small.
+if command -v git >/dev/null 2>&1; then
+  printf 'node_modules/\ndist/\n.cache/\n.npm/\n*.log\n' > "$WORK/.gitignore"
+  ( cd "$WORK" && git init -q && git config user.email agent@worksflow.local \
+    && git config user.name worksflow-agent && git add -A \
+    && git commit -q -m "baseline" --allow-empty ) >/dev/null 2>&1 || true
+fi
 export CODEX_HOME="$HOME/.codex"
 export PATH="$HOME/bin:$PATH"
 mkdir -p "$HOME/bin" "$HOME/.fe-assets" "$HOME/.claude/skills/image-assets" "$CODEX_HOME"
@@ -495,6 +504,169 @@ fs.writeFileSync(path.join(distDir, 'index.html'), html);
 console.log('fallback dist written');
 FALLBACK_EOF
 
+# runtimecheck.mjs (P1-C) — serve the built dist and load it in a headless browser,
+# capturing console/page errors + a screenshot. The browser is OPTIONAL: when the
+# image hasn't baked Playwright/Puppeteer the smoke is skipped (ran:false), so it
+# never sinks the build (same fail-soft contract as the Codex asset lane).
+cat > /tmp/runtimecheck.mjs <<'RUNTIMECHK_EOF'
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+
+const distDir = process.argv[2];
+const outPath = process.argv[3];
+const shotPath = process.argv[4];
+
+function writeResult(obj) {
+  try { fs.mkdirSync(path.dirname(outPath), { recursive: true }); } catch {}
+  try { fs.writeFileSync(outPath, JSON.stringify(obj)); } catch {}
+}
+
+if (!distDir || !fs.existsSync(path.join(distDir, 'index.html'))) {
+  writeResult({ ran: false, reason: 'no dist/index.html' });
+  process.exit(0);
+}
+
+// Resolve a headless browser from the dedicated /opt/runtime-smoke install
+// (a bare ESM import won't find it from the project cwd) with graceful fallbacks.
+const requireSmoke = createRequire('/opt/runtime-smoke/');
+let launcher = null;
+try { launcher = (await import('playwright')).chromium; } catch {}
+if (!launcher) { try { launcher = requireSmoke('playwright').chromium; } catch {} }
+if (!launcher) { try { launcher = requireSmoke('playwright-core').chromium; } catch {} }
+if (!launcher) { try { const pp = await import('puppeteer'); launcher = pp.default || pp; } catch {} }
+if (!launcher) { writeResult({ ran: false, reason: 'no headless browser module' }); process.exit(0); }
+
+const MIME = {
+  '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
+  '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp', '.gif': 'image/gif', '.ico': 'image/x-icon',
+  '.wasm': 'application/wasm', '.map': 'application/json',
+  '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf',
+};
+const distAbs = path.resolve(distDir);
+const server = http.createServer((req, res) => {
+  try {
+    let p = decodeURIComponent((req.url || '/').split('?')[0]);
+    if (p === '/' || p === '') p = '/index.html';
+    let fp = path.join(distAbs, p);
+    if (!fp.startsWith(distAbs)) { res.writeHead(403); res.end(); return; }
+    if (!fs.existsSync(fp) || fs.statSync(fp).isDirectory()) fp = path.join(distAbs, 'index.html');
+    const buf = fs.readFileSync(fp);
+    res.writeHead(200, { 'Content-Type': MIME[path.extname(fp).toLowerCase()] || 'application/octet-stream' });
+    res.end(buf);
+  } catch { res.writeHead(500); res.end(); }
+});
+await new Promise((r) => server.listen(0, '127.0.0.1', r));
+const port = server.address().port;
+
+const consoleErrors = [];
+const pageErrors = [];
+const timeoutMs = Number(process.env.FE_RUNTIME_TIMEOUT || 60) * 1000;
+const uniq = (a) => [...new Set(a)].slice(0, 30);
+let browser = null;
+try {
+  browser = await launcher.launch({ args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
+  const page = await browser.newPage();
+  page.on('console', (m) => { try { if (m.type() === 'error') consoleErrors.push(String(m.text()).slice(0, 300)); } catch {} });
+  page.on('pageerror', (e) => { try { pageErrors.push(String((e && e.message) || e).slice(0, 300)); } catch {} });
+  page.on('dialog', (d) => { try { d.dismiss().catch(() => {}); } catch {} });
+  page.on('popup', (p) => { try { p.close().catch(() => {}); } catch {} });
+  await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load', timeout: timeoutMs });
+  await new Promise((r) => setTimeout(r, 1500));
+
+  // --- Interactive crawl: drive the app like a user (fill inputs, click every
+  // control) and capture interaction-triggered console/page errors + dead controls
+  // (a click that changes nothing: no DOM mutation, no nav, no network, no error).
+  // This is the "test by driving the app, not reading code" gate. Bounded + fail-soft.
+  const interactions = { total: 0, clicked: 0, filled: 0, dead_controls: [] };
+  const MAXI = Number(process.env.FE_RUNTIME_MAX_INTERACTIONS || 25);
+  const deadline = Date.now() + Math.min(timeoutMs, 75000);
+  const HOME = `http://127.0.0.1:${port}`;
+  try {
+    const fields = await page.$$('input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=checkbox]):not([type=radio]):not([type=file]), textarea');
+    for (const el of fields.slice(0, 15)) {
+      try {
+        const t = (await el.getAttribute('type')) || 'text';
+        const v = t === 'email' ? 'demo@example.com' : t === 'password' ? 'Demo1234!' : t === 'number' ? '1' : t === 'tel' ? '13800000000' : 'test';
+        await el.fill(v, { timeout: 1500 });
+        interactions.filled++;
+      } catch {}
+    }
+    const controls = await page.$$('button:not([disabled]), [role="button"], a[href]:not([href=""]):not([href="#"]), input[type="submit"], [onclick]');
+    interactions.total = controls.length;
+    for (let i = 0; i < Math.min(controls.length, MAXI); i++) {
+      if (Date.now() > deadline) break;
+      const el = controls[i];
+      let label = '';
+      try { label = ((await el.innerText().catch(() => '')) || (await el.getAttribute('aria-label').catch(() => '')) || (await el.getAttribute('title').catch(() => '')) || '').replace(/\s+/g, ' ').trim().slice(0, 40); } catch {}
+      let beforeLen = 0; try { beforeLen = await page.evaluate(() => (document.body ? document.body.innerHTML.length : 0)); } catch {}
+      const beforeUrl = page.url();
+      const errBefore = consoleErrors.length + pageErrors.length;
+      let net = false; const onReq = () => { net = true; };
+      try { page.on('request', onReq); } catch {}
+      try { await el.click({ timeout: 2000 }); interactions.clicked++; await new Promise((r) => setTimeout(r, 300)); } catch {}
+      try { page.off('request', onReq); } catch {}
+      try { if (!page.url().startsWith(HOME)) { await page.goto(HOME, { waitUntil: 'load', timeout: timeoutMs }); await new Promise((r) => setTimeout(r, 250)); continue; } } catch {}
+      let afterLen = beforeLen; try { afterLen = await page.evaluate(() => (document.body ? document.body.innerHTML.length : 0)); } catch {}
+      const errAfter = consoleErrors.length + pageErrors.length;
+      const changed = afterLen !== beforeLen || page.url() !== beforeUrl || net || errAfter !== errBefore;
+      if (!changed && label) interactions.dead_controls.push(label);
+    }
+    // Keyboard surfaces (P-C): games / canvas apps respond to keys, not clicks —
+    // drive a few common controls so INPUT-triggered runtime errors surface via the
+    // page listeners. A key that does nothing is NOT flagged (apps legitimately
+    // ignore most keys); only thrown errors count. Inside the inner try so a harness
+    // hiccup stays a soft interactions.error, never a hard page_error. Bounded.
+    try {
+      for (const k of ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Enter']) {
+        if (Date.now() > deadline) break;
+        try { await page.keyboard.press(k); await new Promise((r) => setTimeout(r, 120)); interactions.keys = (interactions.keys || 0) + 1; } catch {}
+      }
+    } catch {}
+  } catch (e) { interactions.error = String((e && e.message) || e).slice(0, 200); }
+  interactions.dead_controls = [...new Set(interactions.dead_controls)].slice(0, 20);
+
+  try { fs.mkdirSync(path.dirname(shotPath), { recursive: true }); await page.screenshot({ path: shotPath }); } catch {}
+  const ce = uniq(consoleErrors), pe = uniq(pageErrors);
+  writeResult({ ran: true, ok: ce.length === 0 && pe.length === 0, console_errors: ce, page_errors: pe, interactions, screenshot: fs.existsSync(shotPath) ? path.basename(shotPath) : null });
+} catch (e) {
+  writeResult({ ran: true, ok: false, console_errors: uniq(consoleErrors), page_errors: uniq([...pageErrors, 'smoke harness: ' + ((e && e.message) || e)]) });
+} finally {
+  try { if (browser) await browser.close(); } catch {}
+  try { server.close(); } catch {}
+}
+process.exit(0);
+RUNTIMECHK_EOF
+
+# progress.mjs (P2-F) — write a deterministic progress.json (build + runtime
+# status) into the project, preserving any agent-maintained progress under merge.
+cat > /tmp/progress.mjs <<'PROGRESS_EOF'
+import fs from 'node:fs';
+import path from 'node:path';
+const root = process.argv[2];
+const read = (f) => { try { return fs.readFileSync(f, 'utf8').trim(); } catch { return ''; } };
+let rc = null;
+try { rc = JSON.parse(read('/out/runtime_check.json')); } catch {}
+const status = {
+  build_exit: read('/out/npm_build_exit') || null,
+  degraded: read('/out/degraded') || null,
+  runtime: rc ? { ran: !!rc.ran, ok: !!rc.ok, console_errors: (rc.console_errors || []).length, page_errors: (rc.page_errors || []).length } : null,
+  by: 'fe-agent',
+};
+const p = path.join(root, 'progress.json');
+let existing = null;
+try { existing = JSON.parse(fs.readFileSync(p, 'utf8')); } catch {}
+let out;
+if (existing && typeof existing === 'object' && !Array.isArray(existing)) out = existing;
+else if (existing != null) out = { agent_notes: existing };
+else out = {};
+out.build = status;
+try { fs.writeFileSync(p, JSON.stringify(out, null, 2)); } catch {}
+PROGRESS_EOF
+
 DEGRADED=""
 run_build() {
   ( cd "$PROJECT_ROOT" && timeout "${FE_AGENT_BUILD_TIMEOUT:-180}" npm run build ) > /out/npm_build.log 2>&1
@@ -504,7 +676,7 @@ build_ok() { [ "$(cat /out/npm_build_exit 2>/dev/null)" = "0" ]; }
 
 if [ -f "$PROJECT_ROOT/package.json" ]; then
   emit install
-  ( cd "$PROJECT_ROOT" && timeout "${FE_AGENT_NPM_TIMEOUT:-240}" npm install --no-audit --no-fund ) > /out/npm_install.log 2>&1
+  ( cd "$PROJECT_ROOT" && timeout "${FE_AGENT_NPM_TIMEOUT:-240}" npm install --no-audit --no-fund --prefer-offline ) > /out/npm_install.log 2>&1
   echo "$?" > /out/npm_install_exit
 
   # rung 1: build as generated
@@ -555,6 +727,19 @@ if [ ! -f "$PROJECT_ROOT/dist/index.html" ]; then
 fi
 echo "$DEGRADED" > /out/degraded
 
+# --- Runtime smoke (P1-C): load the built dist in a headless browser and capture
+# console/page errors + a screenshot. Fail-soft: no browser module in the image
+# -> ran:false (skipped), never sinks the build. Activated once the fe-agent image
+# bakes Playwright/Chromium (see backend/docker/fe-agent/Dockerfile).
+emit runtime-check
+run_capped "${FE_RUNTIME_TIMEOUT:-90}" node /tmp/runtimecheck.mjs "$PROJECT_ROOT/dist" /out/runtime_check.json /out/runtime/screenshot.png > /out/runtime_check.log 2>&1 || true
+
+# --- Progress checkpoint (P2-F): record build + runtime status, then commit. ---
+node /tmp/progress.mjs "$PROJECT_ROOT" > /dev/null 2>&1 || true
+if command -v git >/dev/null 2>&1; then
+  ( cd "$PROJECT_ROOT" && git add -A && git commit -q -m "build + verify checkpoint" --allow-empty ) >/dev/null 2>&1 || true
+fi
+
 # --- Collect deliverable (source + built/synthesized dist) ---------------
 if [ -d "$PROJECT_ROOT" ]; then
   (
@@ -602,6 +787,10 @@ class FrontendProjectService:
         # per-`gen-assets`-call budget and per-image API budget, both in-container.
         self.codex_timeout = int(os.getenv("FE_CODEX_TIMEOUT", "420"))
         self.genimage_timeout = int(os.getenv("FE_GENIMAGE_TIMEOUT", "180"))
+        # Runtime browser-smoke (P1-C): headless load of the built dist to capture
+        # console/page errors. Optional — skipped fail-soft when the image has no
+        # browser baked in (see backend/docker/fe-agent/Dockerfile).
+        self.runtime_timeout = int(os.getenv("FE_RUNTIME_TIMEOUT", "90"))
 
     # --- prompt assembly -----------------------------------------------------
     def _load_prompt(self, name: str) -> str:
@@ -695,14 +884,21 @@ class FrontendProjectService:
         source_digest: str,
         requirements_registry: str,
         style_prompt: str = "",
+        features_block: str = "",
+        house_rules_report: str = "",
+        runtime_report: str = "",
+        extra_directive: str = "",
         on_model_call=None,
     ) -> Optional[dict]:
-        """Acceptance review of the generated project against the FR/NFR registry.
+        """Skeptical, rubric-graded acceptance review of the generated project.
 
-        One text-model call -> a structured verdict
-        ``{verdict: PASS|CONCERNS|FAIL, fr_coverage, issues, summary}``. Advisory:
-        returns ``None`` when no text provider is configured or on any failure
-        (never raises, never blocks publish).
+        One text-model call (on the reliable text lane) returns a structured
+        verdict ``{verdict, scores, fr_coverage, feature_results, blocking_issues,
+        advisory_issues, issues, summary}``. The evaluator is fed the deterministic
+        signals (``house_rules_report`` / ``runtime_report``) + the acceptance
+        ``features_block`` so its judgment is grounded, and its ``blocking_issues``
+        drive the verify->repair loop. Returns ``None`` when no text provider is
+        configured or on any failure (never raises).
         """
         from backend.services.ai import get_text_provider
 
@@ -714,7 +910,15 @@ class FrontendProjectService:
             REQUIREMENTS=requirements_registry or "",
             STYLE_PROMPT=style_prompt or "",
             SOURCE=source_digest or "",
+            FEATURES=features_block or "(本次未提供功能清单)",
+            HOUSE_RULES=house_rules_report or "(确定性房规检查未发现问题)",
+            RUNTIME=runtime_report or "(本次未运行运行时冒烟)",
         )
+        if extra_directive:
+            prompt += (
+                "\n\n# 本次审查侧重(在完成完整 rubric 的同时,尤其严格审查以下方面)\n"
+                + extra_directive
+            )
         provider_name = getattr(provider, "provider_name", None)
         model_name = getattr(provider, "model", None)
         try:
@@ -904,6 +1108,7 @@ class FrontendProjectService:
             "-e", f"FE_AGENT_BUILD_TIMEOUT={self.build_timeout}",
             "-e", f"FE_CODEX_TIMEOUT={self.codex_timeout}",
             "-e", f"FE_GENIMAGE_TIMEOUT={self.genimage_timeout}",
+            "-e", f"FE_RUNTIME_TIMEOUT={self.runtime_timeout}",
         ]
         if user != "node":
             # When matching the host UID the image's /home/node is owned by uid
@@ -915,6 +1120,14 @@ class FrontendProjectService:
             value = os.getenv(key)
             if value:
                 cmd += ["-e", f"{key}={value}"]
+        # Optional persistent npm cache across runs (default OFF). Set FE_AGENT_NPM_CACHE
+        # to a Docker volume name (or host path) to speed up repeat installs / survive a
+        # flaky registry. Empty = unchanged behaviour (fresh per-run cache). Validate with
+        # one real generation before relying on it (container user must be able to write
+        # the mount). ``--prefer-offline`` (above) makes the warm cache actually used.
+        _npm_cache = os.getenv("FE_AGENT_NPM_CACHE", "").strip()
+        if _npm_cache:
+            cmd += ["-v", f"{_npm_cache}:/npm-cache", "-e", "NPM_CONFIG_CACHE=/npm-cache"]
         cmd += ["-v", f"{host_workdir(workdir)}:/out", self.image, "bash", "-c", _CONTAINER_SCRIPT]
 
         env = dict(os.environ, **cred_env)
@@ -978,6 +1191,23 @@ class FrontendProjectService:
         files = self._collect(workdir / "project", exclude_top="dist")
         dist_files = self._collect(workdir / "project" / "dist")
 
+        # Runtime smoke (P1-C): parse the headless-browser findings + screenshot
+        # (both absent fail-soft when the image bakes no browser → ran:false).
+        runtime_check = None
+        _rc_raw = self._read_text(workdir / "runtime_check.json")
+        if _rc_raw:
+            try:
+                runtime_check = json.loads(_rc_raw)
+            except json.JSONDecodeError:
+                runtime_check = None
+        runtime_screenshot = None
+        _shot = workdir / "runtime" / "screenshot.png"
+        if _shot.exists():
+            try:
+                runtime_screenshot = _shot.read_bytes()
+            except OSError:
+                runtime_screenshot = None
+
         # Asset-lane diagnostics: was Codex even present (i.e. was fe-agent
         # rebuilt?), did Claude actually invoke gen-assets, and how many raster
         # assets landed in the source? Lets the host explain a "no assets" run.
@@ -1031,6 +1261,8 @@ class FrontendProjectService:
             "usage": usage,
             "cost_usd": cost,
             "asset_lane": asset_lane,
+            "runtime_check": runtime_check,
+            "runtime_screenshot": runtime_screenshot,
             "workdir": str(workdir),
         }
 
@@ -1040,7 +1272,8 @@ class FrontendProjectService:
         return {
             "success": False, "degraded": False, "degraded_reason": None,
             "error": error, "files": {}, "dist_files": {},
-            "summary": "", "usage": {}, "cost_usd": 0.0, "asset_lane": {}, "workdir": None,
+            "summary": "", "usage": {}, "cost_usd": 0.0, "asset_lane": {},
+            "runtime_check": None, "runtime_screenshot": None, "workdir": None,
         }
 
     @staticmethod

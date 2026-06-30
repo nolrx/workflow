@@ -1,0 +1,156 @@
+{
+  "version": 1,
+  "panel": 1,
+  "discrimination": {
+    "correct": 20,
+    "judged": 20,
+    "total": 20
+  },
+  "functionality_gap": {
+    "good_min": 4.0,
+    "bad_max": 2.0,
+    "clean": true
+  },
+  "fixtures": {
+    "good-todo": {
+      "lane": "frontend",
+      "label": "good",
+      "correct": true,
+      "blocked": false,
+      "verdict": "PASS"
+    },
+    "good-counter": {
+      "lane": "frontend",
+      "label": "good",
+      "correct": true,
+      "blocked": false,
+      "verdict": "PASS"
+    },
+    "bad-dead-control": {
+      "lane": "frontend",
+      "label": "bad",
+      "correct": true,
+      "blocked": true,
+      "verdict": "FAIL"
+    },
+    "bad-fake-data": {
+      "lane": "frontend",
+      "label": "bad",
+      "correct": true,
+      "blocked": true,
+      "verdict": "FAIL"
+    },
+    "bad-browser-router": {
+      "lane": "frontend",
+      "label": "bad",
+      "correct": true,
+      "blocked": true,
+      "verdict": "FAIL"
+    },
+    "bad-tailwind": {
+      "lane": "frontend",
+      "label": "bad",
+      "correct": true,
+      "blocked": true,
+      "verdict": "FAIL"
+    },
+    "good-form-submit": {
+      "lane": "frontend",
+      "label": "good",
+      "correct": true,
+      "blocked": false,
+      "verdict": "PASS"
+    },
+    "good-tabs": {
+      "lane": "frontend",
+      "label": "good",
+      "correct": true,
+      "blocked": false,
+      "verdict": "PASS"
+    },
+    "bad-remote-font": {
+      "lane": "frontend",
+      "label": "bad",
+      "correct": true,
+      "blocked": true,
+      "verdict": "FAIL"
+    },
+    "bad-lockfile-mirror": {
+      "lane": "frontend",
+      "label": "bad",
+      "correct": true,
+      "blocked": true,
+      "verdict": "FAIL"
+    },
+    "bad-runtime-crash": {
+      "lane": "frontend",
+      "label": "bad",
+      "correct": true,
+      "blocked": true,
+      "verdict": "FAIL"
+    },
+    "bad-no-submit-form": {
+      "lane": "frontend",
+      "label": "bad",
+      "correct": true,
+      "blocked": true,
+      "verdict": "FAIL"
+    },
+    "good-be-crud": {
+      "lane": "backend",
+      "label": "good",
+      "correct": true,
+      "blocked": false,
+      "verdict": "CONCERNS"
+    },
+    "bad-be-api-prefix": {
+      "lane": "backend",
+      "label": "bad",
+      "correct": true,
+      "blocked": true,
+      "verdict": "FAIL"
+    },
+    "bad-be-missing-endpoint": {
+      "lane": "backend",
+      "label": "bad",
+      "correct": true,
+      "blocked": true,
+      "verdict": "FAIL"
+    },
+    "good-be-auth": {
+      "lane": "backend",
+      "label": "good",
+      "correct": true,
+      "blocked": false,
+      "verdict": "CONCERNS"
+    },
+    "bad-be-no-envelope": {
+      "lane": "backend",
+      "label": "bad",
+      "correct": true,
+      "blocked": true,
+      "verdict": "FAIL"
+    },
+    "bad-be-no-health": {
+      "lane": "backend",
+      "label": "bad",
+      "correct": true,
+      "blocked": true,
+      "verdict": "FAIL"
+    },
+    "bad-be-password-leak": {
+      "lane": "backend",
+      "label": "bad",
+      "correct": true,
+      "blocked": true,
+      "verdict": "FAIL"
+    },
+    "bad-be-login-token-shape": {
+      "lane": "backend",
+      "label": "bad",
+      "correct": true,
+      "blocked": true,
+      "verdict": "FAIL"
+    }
+  }
+}

@@ -17,6 +17,7 @@ frozen contract from ``CodeProjectLedger`` so they stay in lock-step.
 import io
 import json
 import logging
+import os
 import zipfile
 
 from backend.extensions import db
@@ -31,6 +32,8 @@ from backend.models.code import CodeProject
 from backend.services import pricing
 from backend.services.agent.context_ledger import ContextLedger, seed_from_inputs
 from backend.services.agent.context_verifier import gate_available
+from backend.services.agent.workflows import _verify_support
+from backend.services.code import house_rules, scaffold
 from backend.services.code.backend_project_service import get_backend_project_service
 from backend.services.code.fullstack import contract_service
 from backend.services.credit_service import charge
@@ -294,25 +297,227 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
                 payload={"mode": "iteration", "base_files": len(base_files)},
             )
 
-        result = service.build_project(
-            requirement=project.requirement_input,
-            requirements_doc=project.requirements_doc,
-            development_flow=project.development_flow or "",
-            documents_digest=_documents_digest(project),
-            contract_block=contract_block,
-            middleware_block=middleware_block,
-            context_ledger=injected,
-            base_files=base_files or None,
-            change_instruction=(change or {}).get("instruction", ""),
-            change_plan=(change or {}).get("plan_text", ""),
-            on_event=on_event,
-            is_cancelled=ctx.is_cancelled,
+        def _build(**overrides):
+            kw = dict(
+                requirement=project.requirement_input,
+                requirements_doc=project.requirements_doc,
+                development_flow=project.development_flow or "",
+                documents_digest=_documents_digest(project),
+                contract_block=contract_block,
+                middleware_block=middleware_block,
+                context_ledger=injected,
+                base_files=base_files or None,
+                change_instruction=(change or {}).get("instruction", ""),
+                change_plan=(change or {}).get("plan_text", ""),
+                on_event=on_event,
+                is_cancelled=ctx.is_cancelled,
+            )
+            kw.update(overrides)
+            return service.build_project(**kw)
+
+        # P-B incremental batched build (env CODE_BUILD_BATCHES; default 1 → single
+        # _build() = pre-P-B behaviour). Fresh generation only; batch 0 = scaffold,
+        # later batches ADD their feature subset via the edit-mode path (no prompt change).
+        _batches = (
+            _verify_support.split_batches(
+                _verify_support.features_from_ledger(ledger.to_dict()),
+                _verify_support.build_batches(),
+            )
+            if not change else []
         )
+        if _batches:
+            recorder.emit(
+                AgentEventType.PROGRESS, step_id=step.id,
+                message=f"分批增量构建:共 {len(_batches)} 批(每批聚焦一组功能,逐批累加)",
+                payload={"batches": len(_batches)},
+            )
+            result = _build()  # batch 0: scaffold + first pass
+            for _bi in range(1, len(_batches)):
+                if not result.get("success") or ctx.is_cancelled():
+                    break
+                _acc = result.get("files") or {}
+                if not _acc:
+                    break
+                recorder.emit(
+                    AgentEventType.PROGRESS, step_id=step.id,
+                    message=f"增量构建 第 {_bi + 1}/{len(_batches)} 批:"
+                            + "、".join(f"[{f['id']}]" for f in _batches[_bi]),
+                    payload={"batch": _bi + 1, "of": len(_batches)},
+                )
+                _wave = _build(
+                    base_files=_acc,
+                    change_instruction=_verify_support.render_feature_subset(
+                        _batches[_bi], _bi, len(_batches)),
+                    change_plan="在现有工程基础上增量新增本批功能,完整实现端到端,"
+                                "保持已实现功能与构建不被破坏,不要整体重写。",
+                )
+                if _wave.get("error") == "cancelled":
+                    return cancel_result(project_id)
+                if _wave.get("success") and _wave.get("files"):
+                    result = _wave
+        else:
+            result = _build()
 
         if result.get("error") == "cancelled":
             return cancel_result(project_id)
         if not result.get("success"):
             raise RuntimeError(f"后端工程生成失败：{result.get('error') or '未知错误'}")
+
+        # --- Verify -> repair loop (P0-A house rules / P0-B rubric review /
+        # P1-D features) -------------------------------------------------------
+        # Block only on OBJECTIVE defects: deterministic house-rule errors (e.g.
+        # an /api route prefix) or the skeptical evaluator's explicit
+        # blocking_issues. Repair = edit-mode rebuild seeded with the current
+        # source + a targeted brief, bounded by CODE_VERIFY_MAX_ROUNDS. The final
+        # review verdict still decides PARTIAL (below).
+        max_verify_rounds = max(0, int(os.getenv("CODE_VERIFY_MAX_ROUNDS", "2") or 0))
+        # A1 score gate + A3 refine/pivot — all env-gated (defaults preserve behaviour).
+        _min_score = _verify_support.env_score_floor()
+        _min_dims = _verify_support.env_dim_floors()
+        _pivot_on = _verify_support.pivot_enabled()
+        _score_history: list = []
+        # P-A acceptance-driven iteration (env-gated; OFF → identical to pre-P-A loop).
+        _to_acceptance = _verify_support.iterate_to_acceptance()
+        _max_rounds = (
+            _verify_support.iterate_max_rounds(max_verify_rounds)
+            if _to_acceptance else max_verify_rounds
+        )
+        _stall = _verify_support.iterate_stall()
+        _cov_history: list = []
+        ledger_dict = ledger.to_dict()
+        features = _verify_support.features_from_ledger(ledger_dict)
+        _features_block = _verify_support.render_features_block(features)
+
+        def _review_one(digest: str, house_report: str, lens: str):
+            """ONE skeptical review on the reliable text lane. No DB work, so it is
+            safe to run concurrently; charging happens in _review_panel before fan-out."""
+            return service.review_project(
+                source_digest=digest,
+                contract_summary=contract_block,
+                requirements_doc=project.requirements_doc or "",
+                development_flow=project.development_flow or "",
+                features_block=_features_block,
+                house_rules_report=house_report,
+                extra_directive=lens,
+            )
+
+        def _review_panel(files, house_report):
+            """N independent reviews (rotating lenses) -> majority consensus (②a). Charge
+            per reviewer up-front (DB, this thread), then run the model calls CONCURRENTLY."""
+            n = max(1, int(os.getenv("CODE_REVIEW_PANEL", "1") or 1))
+            if not (files and gate_available()):
+                return None
+            lenses = _verify_support.REVIEW_LENSES_BACKEND
+            digest = _source_digest(files)
+            thunks = []
+            for i in range(n):
+                if not charge(
+                    user_id=ctx.user_id, amount=pricing.CODE_PROJECT_REVIEW,
+                    operation="code_project_review", resource_type="agent_run",
+                    resource_id=ctx.run_id, description="backend project review",
+                    team_id=ctx.team_id,
+                ):
+                    break
+                _lens = lenses[i % len(lenses)] if n > 1 else ""
+                thunks.append(lambda lens=_lens: _review_one(digest, house_report, lens))
+            out = _verify_support.run_reviewers(thunks)
+            return _verify_support.aggregate_reviews([r for r in out if r])
+
+        # Verify each artifact exactly ONCE; a repair is adopted only if it did not
+        # REGRESS (P1-1) — otherwise revert to the prior, better artifact. ``review``
+        # tracks the current verification for the post-loop final-verdict block.
+        def _verify(res):
+            _files = res.get("files") or {}
+            _violations = house_rules.check_backend(_files)
+            _rev = _review_panel(_files, house_rules.render_report(_violations))
+            _feats, _feat_stats = _verify_support.apply_feature_results(
+                features, (_rev or {}).get("feature_results")
+            )
+            return _verify_support.Verification(
+                house_rule_errors=house_rules.errors(_violations),
+                house_rule_warnings=house_rules.warnings(_violations),
+                runtime_errors=[], review=_rev, features=_feats,
+                feature_stats=_feat_stats,
+                min_weighted_score=_min_score, min_dim_scores=_min_dims,
+            )
+
+        verification = _verify(result)
+        review = verification.review
+        for _round in range(_max_rounds + 1):
+            _ws = verification.weighted_score
+            if _ws is not None:
+                _score_history.append(_ws)
+            _cov_history.append(_verify_support.functional_coverage(verification.features)[0])
+            _blocking = verification.blocking
+            _stop, _stop_why = _verify_support.should_stop(
+                verification, _round, _max_rounds,
+                to_acceptance=_to_acceptance, coverage_history=_cov_history, stall=_stall,
+            )
+            recorder.emit(
+                AgentEventType.WARNING if _blocking else AgentEventType.PROGRESS,
+                level=AgentEventLevel.WARNING if _blocking else AgentEventLevel.INFO,
+                step_id=step.id,
+                message=f"质量验证(第 {_round} 轮):{verification.summary_line()}"
+                        + ("" if _stop else "，启动定向修复重建")
+                        + (f"({_stop_why})" if _stop and _stop_why and _to_acceptance else ""),
+                payload={
+                    "round": _round, "blocking": _blocking,
+                    "house_rules": house_rules.summarize(
+                        list(verification.house_rule_errors) + list(verification.house_rule_warnings)
+                    ),
+                    "feature_stats": verification.feature_stats,
+                    "verdict": (verification.review or {}).get("verdict"),
+                },
+            )
+            if _stop:
+                break
+            if ctx.is_cancelled():
+                return cancel_result(project_id)
+            # A3: if the rubric score stalled across rounds, escalate refine -> pivot.
+            _pivot = _pivot_on and _verify_support.should_pivot(_score_history)
+            if _pivot:
+                recorder.emit(
+                    AgentEventType.PROGRESS, step_id=step.id,
+                    message=f"质量分连续未改善({_score_history[-2:]})，本轮放宽为允许较大重构(pivot)",
+                )
+            _change_plan = _verify_support.REPAIR_PIVOT_PLAN if _pivot else (
+                "仅修复上述硬性问题(房规违规 / 契约不一致 / 缺失的核心功能 / 缺 Dockerfile|/health),"
+                "保持其余文件不变,不要重写整个工程。"
+            )
+            _repaired = service.build_project(
+                requirement=project.requirement_input,
+                requirements_doc=project.requirements_doc,
+                development_flow=project.development_flow or "",
+                documents_digest=_documents_digest(project),
+                contract_block=contract_block,
+                middleware_block=middleware_block,
+                context_ledger=injected,
+                base_files=result.get("files") or {},
+                change_instruction=verification.repair_instruction(),
+                change_plan=_change_plan,
+                on_event=on_event,
+                is_cancelled=ctx.is_cancelled,
+            )
+            if _repaired.get("error") == "cancelled":
+                return cancel_result(project_id)
+            if not _repaired.get("success"):
+                recorder.emit(
+                    AgentEventType.WARNING, level=AgentEventLevel.WARNING, step_id=step.id,
+                    message="修复重建未产出有效结果,沿用上一轮产物。",
+                )
+                break
+            # P1-1 regression guard: verify the repaired artifact, adopt only if it did
+            # not regress; otherwise revert to the prior (better) artifact and stop.
+            _cand = _verify(_repaired)
+            _regressed, _why = _verify_support.repair_regressed(verification, _cand)
+            if _regressed:
+                recorder.emit(
+                    AgentEventType.WARNING, level=AgentEventLevel.WARNING, step_id=step.id,
+                    message=f"本轮修复出现回归,已回退到上一轮产物:{_why}",
+                    payload={"regressed": True, "reason": _why, "round": _round},
+                )
+                break
+            result, verification, review = _repaired, _cand, _cand.review
 
         usage = result.get("usage") or {}
         src_files = result.get("files") or {}
@@ -374,72 +579,54 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
                 payload={"dockerfile_warn": result.get("dockerfile_warn")},
             )
 
-        # --- Acceptance review vs the shared contract (advisory, charged) ----
-        if (
-            src_files
-            and gate_available()
-            and charge(
-                user_id=ctx.user_id,
-                amount=pricing.CODE_CONTEXT_VERIFY,
-                operation="code_context_verify",
-                resource_type="agent_run",
-                resource_id=ctx.run_id,
-                description="backend acceptance review",
-                team_id=ctx.team_id,
+        # --- Final review verdict -> PARTIAL + verification artifact (P0-B) ----
+        # The verify->repair loop above already ran the (rubric-graded) review; its
+        # FINAL verdict decides PARTIAL and its per-anchor coverage feeds the meta.
+        # A distinct ref type keeps the verification artifact from colliding with
+        # the publish step's project-meta artifact.
+        if review:
+            verdict = str(review.get("verdict") or "").upper()
+            contract_failed = verdict == "FAIL"
+            fr_coverage_summary = (review.get("fr_coverage") or [])[:50]
+            missing_ep = [
+                c.get("endpoint") or c.get("id")
+                for c in (review.get("endpoint_coverage") or [])
+                if isinstance(c, dict) and not c.get("covered")
+            ]
+            missing_fr = [
+                c.get("id") for c in fr_coverage_summary
+                if isinstance(c, dict) and not c.get("covered")
+            ]
+            missing_all = [m for m in (*missing_ep, *missing_fr) if m]
+            concern = verdict in ("CONCERNS", "FAIL")
+            recorder.emit(
+                AgentEventType.WARNING if concern else AgentEventType.PROGRESS,
+                level=AgentEventLevel.WARNING if concern else AgentEventLevel.INFO,
+                step_id=step.id,
+                message=f"契约 / 功能锚点符合性评审：{verdict or '—'}"
+                + (f"；未覆盖 {', '.join(missing_all)}" if missing_all else "；端点与功能锚点覆盖完整"),
+                payload={
+                    "verdict": verdict, "missing_endpoints": missing_ep,
+                    "missing_fr": missing_fr, "summary": review.get("summary"),
+                },
             )
-        ):
-            review = service.review_project(
-                source_digest=_source_digest(src_files),
-                contract_summary=contract_block,
-                requirements_doc=project.requirements_doc or "",
-                development_flow=project.development_flow or "",
+        if verification is not None:
+            step.add_artifact(
+                AgentArtifactType.JSON, "后端验收与质量验证",
+                content_json=verification.to_record(),
+                filename="backend_project_verification.json",
+                domain_ref_type="code_backend_project_review", domain_ref_id=project_id,
             )
-            if review:
-                verdict = str(review.get("verdict") or "").upper()
-                missing_ep = [
-                    c.get("endpoint") or c.get("id")
-                    for c in (review.get("endpoint_coverage") or [])
-                    if isinstance(c, dict) and not c.get("covered")
-                ]
-                # Functional-anchor (FR/NFR/M) coverage — the "implement the whole
-                # feature, not just the route" gate. The critic already folds
-                # "core FR/M uncovered" into verdict=FAIL, so PARTIAL stays a single
-                # source of truth (verdict); missing_fr is for narration + meta.
-                fr_coverage_summary = (review.get("fr_coverage") or [])[:50]
-                missing_fr = [
-                    c.get("id")
-                    for c in fr_coverage_summary
-                    if isinstance(c, dict) and not c.get("covered")
-                ]
-                missing_all = [m for m in (*missing_ep, *missing_fr) if m]
-                concern = verdict in ("CONCERNS", "FAIL")
-                contract_failed = verdict == "FAIL"
-                recorder.emit(
-                    AgentEventType.WARNING if concern else AgentEventType.PROGRESS,
-                    level=AgentEventLevel.WARNING if concern else AgentEventLevel.INFO,
-                    step_id=step.id,
-                    message=f"契约 / 功能锚点符合性评审：{verdict or '—'}"
-                    + (
-                        f"；未覆盖 {', '.join(missing_all)}"
-                        if missing_all
-                        else "；端点与功能锚点覆盖完整"
-                    ),
-                    payload={
-                        "verdict": verdict,
-                        "missing_endpoints": missing_ep,
-                        "missing_fr": missing_fr,
-                        "issues": (review.get("issues") or [])[:20],
-                        "summary": review.get("summary"),
-                    },
-                )
-                step.add_artifact(
-                    AgentArtifactType.JSON,
-                    "后端契约符合性评审",
-                    content_json=review,
-                    filename="backend_project_review.json",
-                    domain_ref_type="code_backend_project_meta",
-                    domain_ref_id=project_id,
-                )
+            # Persist ONE online quality sample (eval framework, P0-B) — symmetric
+            # with the frontend lane. Fail-soft inside the helper. ``_round`` leaks
+            # from the verify loop as the count of verify passes that ran.
+            from backend.services.code.quality_metrics import record_quality_sample
+
+            record_quality_sample(
+                run_id=ctx.run_id, project_id=project_id, user_id=ctx.user_id,
+                team_id=ctx.team_id, lane="backend", verification=verification,
+                verify_rounds=_round + 1, degraded_reason=result.get("degraded_reason"),
+            )
 
         step.model_response = (result.get("summary") or "")[:8000]
         db.session.commit()
@@ -468,6 +655,21 @@ def run_code_backend_project_workflow(ctx, recorder) -> dict:
         "be_publish", "发布 Agent", "publisher", 3, input_summary="保存后端源码 zip 与元数据"
     ) as step:
         files = result.get("files") or {}
+        # P2-E: guarantee a navigable AGENTS.md + docs/ scaffold in the published
+        # source (adds only what the agent didn't write), so iteration / repair
+        # runs (re-seeded from this source) get a knowledge base + golden
+        # principles in-repo. contract / db_schema injected as docs when available.
+        _db_schema = (contract or {}).get("db_schema")
+        _db_schema_block = (
+            json.dumps(_db_schema, ensure_ascii=False, indent=2) if _db_schema else ""
+        )
+        files = {
+            **files,
+            **scaffold.ensure_scaffold(
+                files, kind="backend", contract_block=contract_block,
+                db_schema_block=_db_schema_block,
+            ),
+        }
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
             for rel, content in files.items():

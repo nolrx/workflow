@@ -1,6 +1,34 @@
 {
   "nav": {
-    "prompts": "提示词管理"
+    "prompts": "提示词管理",
+    "quality": "质量趋势"
+  },
+  "quality": {
+    "title": "生成质量趋势",
+    "subtitle": "汇总每次生成的验收质量样本(成功率 / 质量分 / 修复轮次 / 降级率),按通道与时间观察趋势。",
+    "filters": {
+      "allLanes": "全部通道",
+      "frontend": "前端工程",
+      "backend": "后端工程",
+      "full_generation": "文档流水线",
+      "days": "近 {{n}} 天",
+      "allTime": "全部时间",
+      "scopeAll": "全平台",
+      "scopeOwn": "仅我的"
+    },
+    "metrics": {
+      "count": "样本数",
+      "passRate": "通过率",
+      "meanScore": "平均质量分",
+      "meanRounds": "平均修复轮次",
+      "degradedRate": "降级率",
+      "featurePassRate": "功能达成率"
+    },
+    "byDay": "按天趋势(柱高 = 通过率)",
+    "byLane": "按通道",
+    "verdicts": "评审结论分布",
+    "empty": "该范围暂无质量样本(生成运行后会逐步累积)。",
+    "loadError": "加载质量趋势失败"
   },
   "title": "提示词管理",
   "subtitle": "在线查看与调整系统内置提示词,保存后对后续生成立即生效。",

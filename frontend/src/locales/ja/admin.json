@@ -1,6 +1,34 @@
 {
   "nav": {
-    "prompts": "プロンプト管理"
+    "prompts": "プロンプト管理",
+    "quality": "品質トレンド"
+  },
+  "quality": {
+    "title": "生成品質トレンド",
+    "subtitle": "各生成の受け入れ品質サンプル(合格率 / スコア / 修復ラウンド / デグレ率)をレーン・時系列で集計します。",
+    "filters": {
+      "allLanes": "全レーン",
+      "frontend": "フロントエンド",
+      "backend": "バックエンド",
+      "full_generation": "ドキュメント生成",
+      "days": "直近 {{n}} 日",
+      "allTime": "全期間",
+      "scopeAll": "全体",
+      "scopeOwn": "自分のみ"
+    },
+    "metrics": {
+      "count": "サンプル数",
+      "passRate": "合格率",
+      "meanScore": "平均品質スコア",
+      "meanRounds": "平均修復ラウンド",
+      "degradedRate": "デグレ率",
+      "featurePassRate": "機能達成率"
+    },
+    "byDay": "日次トレンド(棒 = 合格率)",
+    "byLane": "レーン別",
+    "verdicts": "評価結果の分布",
+    "empty": "この範囲の品質サンプルはまだありません(生成の実行に伴い蓄積されます)。",
+    "loadError": "品質トレンドの読み込みに失敗しました"
   },
   "title": "プロンプト管理",
   "subtitle": "組み込みのシステムプロンプトをオンラインで確認・調整できます。保存すると次回の生成から反映されます。",

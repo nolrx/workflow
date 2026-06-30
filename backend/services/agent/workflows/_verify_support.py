@@ -26,12 +26,51 @@ and import-light so it is unit-testable without Docker.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 from backend.services.code import house_rules
 
 _MAX_FEATURES = 60
 _MAX_RUNTIME_ERRORS = 30
+
+# Canonical rubric weights — MUST match the weights baked into the critic prompts
+# (code/{frontend,backend}_project_critic_prompt.txt: design×.35 + originality×.25
+# + craft×.20 + functionality×.20). Kept here as the single programmatic source so
+# the trend reporting / eval / (future) score gate can recompute a weighted_score
+# when the model — or a panel aggregate — didn't emit one.
+RUBRIC_WEIGHTS = {
+    "design_quality": 0.35,
+    "originality": 0.25,
+    "craft": 0.20,
+    "functionality": 0.20,
+}
+
+
+def weighted_score_of(review: dict | None) -> float | None:
+    """The review's overall rubric score (0~5), or ``None`` if not derivable.
+
+    Prefers the model's own ``weighted_score``; falls back to recomputing it from
+    the per-dimension ``scores`` with :data:`RUBRIC_WEIGHTS` (normalised over the
+    dimensions actually present) so a panel-aggregated review — which only averages
+    the per-dimension scores and does NOT re-emit ``weighted_score`` — still yields
+    one gradable number.
+    """
+    if not isinstance(review, dict):
+        return None
+    ws = review.get("weighted_score")
+    if isinstance(ws, (int, float)):
+        return round(float(ws), 2)
+    scores = review.get("scores")
+    if not isinstance(scores, dict):
+        return None
+    total = wsum = 0.0
+    for key, weight in RUBRIC_WEIGHTS.items():
+        val = scores.get(key)
+        if isinstance(val, (int, float)):
+            total += float(val) * weight
+            wsum += weight
+    return round(total / wsum, 2) if wsum > 0 else None
 
 
 # --- features checklist (P1-D) ----------------------------------------------
@@ -163,6 +202,10 @@ class Verification:
     review: dict | None = None
     features: list[dict] = field(default_factory=list)
     feature_stats: dict = field(default_factory=dict)
+    # A1 score gate (env CODE_QUALITY_MIN_SCORE / per-dim). None = OFF → behaviour
+    # unchanged. Only ever bites when the judge actually produced a score.
+    min_weighted_score: float | None = None
+    min_dim_scores: dict | None = None
 
     @property
     def review_blocking(self) -> list[str]:
@@ -170,9 +213,38 @@ class Verification:
         return [str(x)[:300] for x in (r.get("blocking_issues") or [])]
 
     @property
+    def weighted_score(self) -> float | None:
+        return weighted_score_of(self.review)
+
+    @property
+    def score_blocking(self) -> list[str]:
+        """A1: rubric score below the configured floor(s).
+
+        Fires only when (a) a floor is configured AND (b) the judge produced a
+        score — a build the judge couldn't evaluate (review None / no score) is
+        never penalised by the score gate (the objective blockers still apply).
+        """
+        if self.review is None:
+            return []
+        reasons: list[str] = []
+        if self.min_weighted_score is not None:
+            ws = self.weighted_score
+            if ws is not None and ws < self.min_weighted_score:
+                reasons.append(f"质量总分 {ws} 低于阈值 {self.min_weighted_score}")
+        if self.min_dim_scores:
+            scores = self.review.get("scores") if isinstance(self.review.get("scores"), dict) else {}
+            for dim, floor in self.min_dim_scores.items():
+                val = scores.get(dim)
+                if floor is not None and isinstance(val, (int, float)) and val < floor:
+                    reasons.append(f"{dim} 维度分 {val} 低于阈值 {floor}")
+        return reasons
+
+    @property
     def blocking(self) -> bool:
-        """Block only on OBJECTIVE defects (deterministic or explicitly flagged)."""
-        return bool(self.house_rule_errors or self.runtime_errors or self.review_blocking)
+        """Block on OBJECTIVE defects (deterministic or explicitly flagged) or, when a
+        score floor is configured (A1), a sub-threshold rubric score."""
+        return bool(self.house_rule_errors or self.runtime_errors
+                    or self.review_blocking or self.score_blocking)
 
     def repair_instruction(self) -> str:
         """The change brief fed to the edit-mode rebuild (one repair round).
@@ -210,6 +282,21 @@ class Verification:
                 "# 验收清单中尚未实现的功能(请补全为真实可用实现,禁止占位/TODO):\n"
                 + "\n".join(f"- [{f['id']}] {f['description']}" for f in failed)
             )
+        # A1: when the score gate fires, fold the evaluator's advisory (polish) items
+        # back in as quality-improvement targets — the design/originality/craft work
+        # that is normally demoted to advisory now becomes load-bearing for the score.
+        sb = self.score_blocking
+        if sb:
+            advisory = [str(x)[:200] for x in ((self.review or {}).get("advisory_issues") or [])][:8]
+            lines = [
+                "# 质量未达阈值(在不改动已通过功能、不破坏现有实现与构建的前提下,"
+                "提升设计质量 / 原创性 / 工艺):"
+            ]
+            lines += [f"- {s}" for s in sb]
+            if advisory:
+                lines.append("可优先处理以下打磨项:")
+                lines += [f"- {a}" for a in advisory]
+            parts.append("\n".join(lines))
         return "\n\n".join(p for p in parts if p)
 
     def summary_line(self) -> str:
@@ -241,6 +328,8 @@ class Verification:
             "review": self.review,
             "features": self.features,
             "feature_stats": self.feature_stats,
+            "weighted_score": self.weighted_score,
+            "score_blocking": self.score_blocking,
         }
 
 
@@ -257,6 +346,245 @@ REVIEW_LENSES_BACKEND = [
     "安全:鉴权是否正确、有无越权 / 缺失校验 / 跨租户串读 / 敏感信息泄露。",
     "健壮与可部署:错误处理 / 边界 / 校验是否完备,Dockerfile / /health / env 读取 / 空库自播种是否到位。",
 ]
+
+
+# --- A1/A3 gate configuration (all env-gated; defaults preserve behaviour) ---
+_DIM_ENVS = {
+    "design_quality": "CODE_QUALITY_MIN_DESIGN",
+    "originality": "CODE_QUALITY_MIN_ORIGINALITY",
+    "craft": "CODE_QUALITY_MIN_CRAFT",
+    "functionality": "CODE_QUALITY_MIN_FUNCTIONALITY",
+}
+
+
+def env_score_floor() -> float | None:
+    """``CODE_QUALITY_MIN_SCORE`` as a float, or None when unset/blank/invalid.
+
+    None = score gate OFF → ``Verification.blocking`` is unchanged from pre-A1.
+    """
+    raw = os.getenv("CODE_QUALITY_MIN_SCORE")
+    if not raw or not raw.strip():
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def env_dim_floors() -> dict | None:
+    """Per-dimension score floors from env (design/originality/craft/functionality),
+    or None when none are set."""
+    out: dict[str, float] = {}
+    for dim, env in _DIM_ENVS.items():
+        raw = os.getenv(env)
+        if raw and raw.strip():
+            try:
+                out[dim] = float(raw)
+            except ValueError:
+                pass
+    return out or None
+
+
+def pivot_enabled() -> bool:
+    """A3 refine-vs-pivot toggle (env CODE_REPAIR_PIVOT). Default OFF."""
+    return os.getenv("CODE_REPAIR_PIVOT", "0").strip().lower() not in ("0", "", "false", "no")
+
+
+# --- P-A: acceptance-driven iteration (all env-gated; defaults preserve behaviour) ---
+def iterate_to_acceptance() -> bool:
+    """``CODE_ITERATE_TO_ACCEPTANCE`` — when ON, the repair loop keeps going (within
+    budget) while functional features remain unmet, not only while ``blocking`` is
+    true. Default OFF → loop stops as soon as nothing is blocking (pre-P-A behaviour)."""
+    return os.getenv("CODE_ITERATE_TO_ACCEPTANCE", "0").strip().lower() not in ("0", "", "false", "no")
+
+
+def iterate_max_rounds(verify_default: int) -> int:
+    """The acceptance loop's repair-round budget. ``CODE_ITERATE_MAX_ROUNDS`` when set
+    (and >= 0), otherwise falls back to ``verify_default`` (the caller's
+    ``CODE_VERIFY_MAX_ROUNDS`` value) so an unset env changes nothing."""
+    raw = os.getenv("CODE_ITERATE_MAX_ROUNDS")
+    if raw and raw.strip():
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            pass
+    return verify_default
+
+
+def iterate_stall() -> int:
+    """Consecutive no-coverage-gain rounds that trigger an early stop
+    (``CODE_ITERATE_STALL``, default 2). ``<=0`` disables the stall guard."""
+    raw = os.getenv("CODE_ITERATE_STALL", "2")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 2
+
+
+def functional_coverage(features: list[dict]) -> tuple[int, int]:
+    """(passed, total) over FUNCTIONAL features only — the acceptance metric."""
+    funcs = [f for f in (features or []) if f.get("category") == "functional"]
+    return sum(1 for f in funcs if f.get("passes")), len(funcs)
+
+
+def _stalled(coverage_history: list | None, stall: int) -> bool:
+    """True when functional pass-count hasn't increased across the last ``stall`` rounds.
+    ``coverage_history`` is the passed-count after each completed round (oldest first).
+    Needs ``stall+1`` points; comparing current vs ``stall`` rounds back."""
+    nums = [c for c in (coverage_history or []) if isinstance(c, (int, float))]
+    if stall <= 0 or len(nums) < stall + 1:
+        return False
+    window = nums[-(stall + 1):]
+    return window[-1] <= window[0]
+
+
+def should_stop(
+    verification: "Verification",
+    round_idx: int,
+    max_rounds: int,
+    *,
+    to_acceptance: bool = False,
+    coverage_history: list | None = None,
+    stall: int = 2,
+) -> tuple[bool, str]:
+    """Unified repair-loop termination predicate, shared by FE/BE workflows.
+
+    ``round_idx`` = repair rounds already done (the loop is deciding whether to do
+    another). Returns ``(stop, reason)``.
+
+    With ``to_acceptance=False`` (default) this is **byte-identical** to the legacy
+    ``not verification.blocking or round_idx >= max_rounds`` break condition.
+
+    With ``to_acceptance=True`` the loop also continues while functional features are
+    unmet, and stops on three conditions: reached budget / fully accepted (nothing
+    blocking AND no unmet functional feature) / stalled (no coverage gain for
+    ``stall`` rounds).
+    """
+    if round_idx >= max_rounds:
+        return True, "已达迭代轮数上限"
+    if not to_acceptance:
+        return (not verification.blocking), ""
+    if not verification.blocking and not failed_functional_features(verification.features):
+        return True, "已达标:无阻断且功能清单全部通过"
+    if _stalled(coverage_history, stall):
+        return True, f"连续 {stall} 轮功能覆盖无增长,提前停止"
+    return False, ""
+
+
+# --- P-B: incremental batched build (env-gated; default 1 = single build) ----
+def build_batches() -> int:
+    """``CODE_BUILD_BATCHES`` — split generation into N incremental waves so a large
+    app (game / mid-back-office) is built feature-by-feature instead of one giant
+    pass. Default 1 = single monolithic build (pre-P-B behaviour)."""
+    raw = os.getenv("CODE_BUILD_BATCHES", "1")
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return 1
+
+
+def split_batches(features: list[dict], n: int) -> list[list[dict]]:
+    """Split FUNCTIONAL features into ``n`` contiguous near-equal batches.
+
+    Returns ``[]`` when batching does not apply (n<=1, or <2 functional features, or
+    fewer functional features than batches) so the caller falls back to one build.
+    Contiguous chunks preserve the requirements' authored order (related features
+    tend to be listed together); smarter semantic grouping is a future enhancement.
+    """
+    funcs = [f for f in (features or []) if f.get("category") == "functional"]
+    if n <= 1 or len(funcs) < 2 or len(funcs) < n:
+        return []
+    size = (len(funcs) + n - 1) // n  # ceil → at most n chunks
+    return [funcs[i:i + size] for i in range(0, len(funcs), size)]
+
+
+def render_feature_subset(batch: list[dict], idx: int, total: int) -> str:
+    """Change brief for incremental build wave ``idx`` of ``total`` — fed through the
+    existing edit-mode path (base_files + change_instruction), so NO prompt change."""
+    lines = [
+        f"# 增量构建 第 {idx + 1}/{total} 批:在现有工程基础上完整实现以下功能"
+        "(端到端真实可用,禁止占位/TODO),并保持已实现功能与构建不被破坏:"
+    ]
+    lines += [f"- [{f['id']}] {f.get('description', '')}" for f in batch]
+    return "\n".join(lines)
+
+
+# When a targeted repair round doesn't move the rubric score, escalate the brief from
+# "only fix the listed defects" to "you may refactor this module" — Article 1's
+# score-trend-driven refine-vs-pivot. Opt-in (pivot_enabled) so default repair is
+# unchanged; naturally dormant until the judge produces a score trend.
+REPAIR_PIVOT_PLAN = (
+    "上一轮定向修复后质量/功能仍未达标且无明显改善:可对相关模块做较大幅度的重构"
+    "(允许重写该模块),但必须保持已通过的功能可用、不破坏构建,不要只做表面微调。"
+)
+
+
+def should_pivot(score_history: list, min_gain: float = 0.2) -> bool:
+    """True when the rubric score has STALLED across rounds (refine isn't helping).
+
+    Needs >=2 scored rounds; pivots when the latest round gained < ``min_gain`` over
+    the previous. With <2 scores (judge down / first round) returns False, so the loop
+    keeps doing ordinary targeted repair.
+    """
+    nums = [s for s in (score_history or []) if isinstance(s, (int, float))]
+    if len(nums) < 2:
+        return False
+    return (nums[-1] - nums[-2]) < min_gain
+
+
+def repair_regressed(prior: "Verification", cand: "Verification") -> tuple[bool, str]:
+    """True when a repair round made the build WORSE on a HARD signal — the generation
+    analog of the deploy repair regression guard.
+
+    Hard regressions (revert to the prior, better artifact instead of adopting the
+    repair): a functional feature that PASSED before now fails, or the repair
+    introduced new house-rule errors / new runtime errors. Soft metric wobble (a
+    lower polish score) is NOT a regression — a repair is allowed to trade polish for
+    fixing a blocker. Panel consensus (CODE_REVIEW_PANEL>1) dampens the per-feature
+    judgment noise, so a pass->fail flip is a meaningful signal, not a coin toss.
+    """
+    prior_pass = {
+        str(f.get("id")) for f in (prior.features or [])
+        if f.get("category") == "functional" and f.get("passes")
+    }
+    cand_fail = {
+        str(f.get("id")) for f in (cand.features or [])
+        if f.get("category") == "functional" and not f.get("passes")
+    }
+    broke = sorted(prior_pass & cand_fail)
+    if broke:
+        return True, f"原本通过的功能回退:{', '.join(broke[:5])}"
+    if len(cand.house_rule_errors) > len(prior.house_rule_errors):
+        return True, f"房规错误增多({len(prior.house_rule_errors)}→{len(cand.house_rule_errors)})"
+    if len(cand.runtime_errors) > len(prior.runtime_errors):
+        return True, f"运行时错误增多({len(prior.runtime_errors)}→{len(cand.runtime_errors)})"
+    return False, ""
+
+
+def _safe_call(fn):
+    try:
+        return fn()
+    except Exception:  # noqa: BLE001 — one reviewer failing must not sink the panel
+        return None
+
+
+def run_reviewers(thunks: list) -> list:
+    """Run independent reviewer thunks (each ONE I/O-bound text-model call) CONCURRENTLY.
+
+    A consensus panel's reviews are independent and ``review_project`` does no DB work,
+    so N reviewers finish in ~one call's wall-clock instead of N sequential calls.
+    **Charging (DB) must happen on the caller's thread BEFORE this** — only the model
+    calls run here, so there is no cross-thread session sharing. A thunk that throws
+    yields ``None`` (filter before aggregating).
+    """
+    if not thunks:
+        return []
+    if len(thunks) == 1:
+        return [_safe_call(thunks[0])]
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=min(len(thunks), 8)) as pool:
+        return list(pool.map(_safe_call, thunks))
 
 
 def _dedup(items: list) -> list:
@@ -323,6 +651,9 @@ def aggregate_reviews(reviews) -> dict | None:
     return {
         "verdict": verdict,
         "scores": scores or None,
+        # The aggregate only averages per-dimension scores, so re-derive the single
+        # weighted_score (the model emits it per-review but not for the consensus).
+        "weighted_score": weighted_score_of({"scores": scores}) if scores else None,
         "feature_results": feature_results,
         "fr_coverage": revs[0].get("fr_coverage"),
         "blocking_issues": blocking,

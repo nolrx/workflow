@@ -21,6 +21,7 @@ from backend.models.code.github import (
     GitHubRepoLink,
 )
 from backend.models.code.project import CodeDocument, CodeProject, CodeProjectStatus
+from backend.models.code.quality import CodeQualitySample, QualitySampleKind
 from backend.models.code.stage_version import (
     CodeStage,
     CodeStageVersion,
@@ -50,4 +51,6 @@ __all__ = [
     "GitHubRepoLink",
     "GitHubPushLog",
     "GitHubPushStatus",
+    "CodeQualitySample",
+    "QualitySampleKind",
 ]

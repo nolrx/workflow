@@ -78,7 +78,7 @@ destroy: ## DESTRUCTIVE: down + remove volumes (DROPS the database!)
 	$(COMPOSE) down -v
 
 # ---- Local (bare-metal) dev -------------------------------------------------
-.PHONY: env setup dev lint test
+.PHONY: env setup dev lint test eval eval-baseline eval-regression
 
 env: ## Create .env from .env.example if it does not exist
 	@test -f .env && echo ".env already exists, leaving it untouched" \
@@ -95,3 +95,15 @@ lint: ## Ruff (backend) + eslint (frontend)
 
 test: ## Backend unit tests only (skips live-API integration tests)
 	uv run pytest -m "not integration"
+
+# ---- Eval / quality regression (hits the live text lane; needs AI_TEXT_*) ---
+EVAL_PANEL ?= 1
+
+eval: ## Run the evaluator eval over labeled fixtures (override panel: make eval EVAL_PANEL=3)
+	uv run python scripts/eval_review.py --panel $(EVAL_PANEL)
+
+eval-baseline: ## (Re)write eval/baseline.json from a fresh run — do this after tuning critic prompts
+	uv run python scripts/eval_review.py --panel $(EVAL_PANEL) --baseline
+
+eval-regression: ## Gate: fail on any discrimination/gap regression vs eval/baseline.json (local/manual)
+	uv run python scripts/eval_review.py --panel $(EVAL_PANEL) --check

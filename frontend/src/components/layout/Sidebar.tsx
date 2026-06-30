@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 import {
+  BarChart3,
   Plus,
   Settings,
   Users,
@@ -300,13 +301,28 @@ export function SidebarContent({ onNavigate }: SidebarContentProps) {
             onClick={onNavigate}
             className={cn(
               "flex items-center gap-3 border-l-2 px-4 py-2.5 text-sm font-medium transition-colors",
-              location.pathname.startsWith("/admin")
+              location.pathname.startsWith("/admin/prompts")
                 ? "border-primary bg-primary/10 text-primary"
                 : "border-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground"
             )}
           >
             <ScrollText className="h-4 w-4" />
             {t("admin:nav.prompts")}
+          </Link>
+        )}
+        {isAdmin && (
+          <Link
+            to="/admin/quality"
+            onClick={onNavigate}
+            className={cn(
+              "flex items-center gap-3 border-l-2 px-4 py-2.5 text-sm font-medium transition-colors",
+              location.pathname.startsWith("/admin/quality")
+                ? "border-primary bg-primary/10 text-primary"
+                : "border-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            )}
+          >
+            <BarChart3 className="h-4 w-4" />
+            {t("admin:nav.quality")}
           </Link>
         )}
       </div>

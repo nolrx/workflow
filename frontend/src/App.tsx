@@ -15,6 +15,7 @@ import { CodeCanvas } from "@/pages/code/CodeCanvas"
 import { AppSpace } from "@/pages/apps/AppSpace"
 import { AppDetail } from "@/pages/apps/AppDetail"
 import { PromptAdmin } from "@/pages/admin/PromptAdmin"
+import { QualityTrends } from "@/pages/admin/QualityTrends"
 import { AdminRoute } from "@/components/common/AdminRoute"
 
 /** Wrap a page element in the auth guard (keeps the route list readable). */
@@ -46,12 +47,20 @@ function App() {
             {/* Dashboard */}
             <Route path="/dashboard" element={guarded(<Dashboard />)} />
 
-            {/* Admin: prompt management (admin role only) */}
+            {/* Admin: prompt management + generation-quality trends (admin only) */}
             <Route
               path="/admin/prompts"
               element={
                 <AdminRoute>
                   <PromptAdmin />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/quality"
+              element={
+                <AdminRoute>
+                  <QualityTrends />
                 </AdminRoute>
               }
             />

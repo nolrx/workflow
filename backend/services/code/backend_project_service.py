@@ -164,7 +164,7 @@ echo "$SCAFFOLD" > /out/scaffold
 # heuristic would self-pollute (e.g. the word "skipping" in the skip branch).
 case "$STACK" in
   node)
-    NI='npm ci || npm install --no-audit --no-fund'
+    NI='npm ci --prefer-offline || npm install --no-audit --no-fund --prefer-offline'
     NC='if [ -f tsconfig.json ]; then npx --no-install tsc --noEmit; else npm run build --if-present; fi'
     NT='if grep -q "no test specified" package.json 2>/dev/null; then echo 0 > /out/tests_ran_marker; echo "default npm test placeholder; not run"; exit 0; else echo 1 > /out/tests_ran_marker; npm test --if-present; fi'
     ;;

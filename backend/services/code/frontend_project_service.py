@@ -615,6 +615,17 @@ try {
       const changed = afterLen !== beforeLen || page.url() !== beforeUrl || net || errAfter !== errBefore;
       if (!changed && label) interactions.dead_controls.push(label);
     }
+    // Keyboard surfaces (P-C): games / canvas apps respond to keys, not clicks —
+    // drive a few common controls so INPUT-triggered runtime errors surface via the
+    // page listeners. A key that does nothing is NOT flagged (apps legitimately
+    // ignore most keys); only thrown errors count. Inside the inner try so a harness
+    // hiccup stays a soft interactions.error, never a hard page_error. Bounded.
+    try {
+      for (const k of ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Enter']) {
+        if (Date.now() > deadline) break;
+        try { await page.keyboard.press(k); await new Promise((r) => setTimeout(r, 120)); interactions.keys = (interactions.keys || 0) + 1; } catch {}
+      }
+    } catch {}
   } catch (e) { interactions.error = String((e && e.message) || e).slice(0, 200); }
   interactions.dead_controls = [...new Set(interactions.dead_controls)].slice(0, 20);
 
@@ -665,7 +676,7 @@ build_ok() { [ "$(cat /out/npm_build_exit 2>/dev/null)" = "0" ]; }
 
 if [ -f "$PROJECT_ROOT/package.json" ]; then
   emit install
-  ( cd "$PROJECT_ROOT" && timeout "${FE_AGENT_NPM_TIMEOUT:-240}" npm install --no-audit --no-fund ) > /out/npm_install.log 2>&1
+  ( cd "$PROJECT_ROOT" && timeout "${FE_AGENT_NPM_TIMEOUT:-240}" npm install --no-audit --no-fund --prefer-offline ) > /out/npm_install.log 2>&1
   echo "$?" > /out/npm_install_exit
 
   # rung 1: build as generated
@@ -1109,6 +1120,14 @@ class FrontendProjectService:
             value = os.getenv(key)
             if value:
                 cmd += ["-e", f"{key}={value}"]
+        # Optional persistent npm cache across runs (default OFF). Set FE_AGENT_NPM_CACHE
+        # to a Docker volume name (or host path) to speed up repeat installs / survive a
+        # flaky registry. Empty = unchanged behaviour (fresh per-run cache). Validate with
+        # one real generation before relying on it (container user must be able to write
+        # the mount). ``--prefer-offline`` (above) makes the warm cache actually used.
+        _npm_cache = os.getenv("FE_AGENT_NPM_CACHE", "").strip()
+        if _npm_cache:
+            cmd += ["-v", f"{_npm_cache}:/npm-cache", "-e", "NPM_CONFIG_CACHE=/npm-cache"]
         cmd += ["-v", f"{host_workdir(workdir)}:/out", self.image, "bash", "-c", _CONTAINER_SCRIPT]
 
         env = dict(os.environ, **cred_env)

@@ -61,6 +61,16 @@ WORKFLOW_COSTS = {
     "code_fullstack_deploy": pricing.CODE_FULLSTACK_DEPLOY,
     # Secondary development: impact analysis + execution plan for a deployed app.
     "code_app_iteration_analysis": pricing.CODE_APP_ITERATION_ANALYSIS,
+    # Dev Mode: one interactive development turn (edit + verify + checklist).
+    "code_dev_turn": pricing.CODE_DEV_TURN,
+    # Dev Mode: a parallel multi-feature turn (N isolated subagents + integration).
+    "code_dev_parallel_turn": pricing.CODE_DEV_TURN,
+    # Backend Dev Mode: one interactive backend turn (edit + verify + integration test).
+    "code_dev_backend_turn": pricing.CODE_DEV_TURN,
+    # Dev Mode sprint: the serial task scheduler (each scheduled turn bills itself).
+    "code_dev_sprint": pricing.CODE_DEV_SPRINT,
+    # Dev Mode backlog planner: docs -> user-confirmable task draft (P1).
+    "code_dev_backlog_planner": pricing.CODE_DEV_BACKLOG_PLANNER,
 }
 VALID_DOMAINS = {"code"}
 # The full-stack pipeline starts THREE concurrent runs per project (frontend +

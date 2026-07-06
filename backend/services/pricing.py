@@ -115,6 +115,25 @@ CODE_FULLSTACK_INTEGRATION_TEST = _credits("PRICE_CODE_FULLSTACK_ITEST", 0)
 # the analysis itself is metered here. Defaults 0 (free) like the rest of Code.
 CODE_APP_ITERATION_ANALYSIS = _credits("PRICE_CODE_ITERATION_ANALYSIS", 0)
 
+# --- Dev Mode (交互式开发模式) ---------------------------------------------------
+# Each interactive development turn (one edit-mode round inside the long-running dev
+# container + verify + checklist update) is a bounded AgentRun (code_dev_turn). Billed
+# PER TURN so the "refund only when nothing was produced" semantics of the runtime
+# fit cleanly (a turn is a normal bounded run). Reserved up-front like the other agent
+# workflows; defaults 0 (free) like the rest of the Code domain — set PRICE_CODE_DEV_TURN
+# to meter. The long-running dev container itself is not separately metered (default 0).
+CODE_DEV_TURN = _credits("PRICE_CODE_DEV_TURN", 0)
+# The sprint ORCHESTRATOR run (the serial scheduling loop over the task board) —
+# each scheduled turn bills itself as a normal code_dev_turn, so this prices only
+# the coordination. Defaults 0 (free) like the rest of the Code domain.
+CODE_DEV_SPRINT = _credits("PRICE_CODE_DEV_SPRINT", 0)
+# Backlog planner (P1): one text-model call that drafts the sprint task list from
+# the project docs (user-confirmed before it touches the board).
+CODE_DEV_BACKLOG_PLANNER = _credits("PRICE_CODE_DEV_BACKLOG_PLANNER", 0)
+# Asset generation inside a dev turn (P2): charged per REQUIRED output image on
+# top of the turn's own price, as the asset task starts.
+CODE_DEV_ASSET_IMAGE = _credits("PRICE_CODE_DEV_ASSET_IMAGE", 0)
+
 
 # Operation label -> (resource_type, unit_cost). Used when writing CreditTransaction
 # records so the audit log carries a stable operation/resource vocabulary.
@@ -134,4 +153,8 @@ OPERATION = {
     "code_fullstack_deploy": ("agent_run", CODE_FULLSTACK_DEPLOY),
     "code_fullstack_itest": ("agent_run", CODE_FULLSTACK_INTEGRATION_TEST),
     "code_app_iteration_analysis": ("agent_run", CODE_APP_ITERATION_ANALYSIS),
+    "code_dev_turn": ("agent_run", CODE_DEV_TURN),
+    "code_dev_sprint": ("agent_run", CODE_DEV_SPRINT),
+    "code_dev_backlog_planner": ("agent_run", CODE_DEV_BACKLOG_PLANNER),
+    "code_dev_asset_image": ("agent_run", CODE_DEV_ASSET_IMAGE),
 }

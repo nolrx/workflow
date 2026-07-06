@@ -60,6 +60,7 @@ def ctx(tmp_path):
 
         yield {
             "client": application.test_client(),
+            "app": application,
             "pid": project.id,
             "token": token,
             "other_token": other_token,
@@ -135,8 +136,24 @@ def test_minted_cookie_outlives_access_token_and_is_project_scoped(ctx):
     assert preview_identity(minted, f"project:{pid}") == "u-prev"
     assert preview_identity(minted, "project:some-other-pid") is None
     # A token minted for another project cannot authenticate THIS project's preview.
+    # Use a FRESH client (no pinned cookie): the cross-project token must fail on its
+    # own. (The main `client` legitimately holds a valid cookie for this project from
+    # the entry above, which — correctly — still authenticates the owner regardless of
+    # a stale/foreign ?token=; see the query-token→cookie fallback in the route.)
+    fresh = ctx["app"].test_client()
     foreign = mint_preview_token("u-prev", "project:other")
-    assert client.get(f"/preview/{pid}/?token={foreign}").status_code == 403
+    assert fresh.get(f"/preview/{pid}/?token={foreign}").status_code == 403
+
+
+def test_stale_query_token_falls_back_to_cookie(ctx):
+    # Regression: after the 30-min access token expires, an iframe re-navigating to its
+    # ORIGINAL src carries a now-invalid ?token=. That stale token must NOT override the
+    # still-valid pinned cookie — otherwise the owner drops to 403 / the public-static
+    # path and a live dev preview would be silently replaced by the last static build.
+    client, pid, token = ctx["client"], ctx["pid"], ctx["token"]
+    client.get(f"/preview/{pid}/?token={token}")  # entry pins the owner cookie
+    resp = client.get(f"/preview/{pid}/?token=STALE_INVALID_TOKEN")
+    assert resp.status_code == 200  # still authenticated as owner via the cookie
 
 
 def test_serves_index_and_assets_via_cookie(ctx):

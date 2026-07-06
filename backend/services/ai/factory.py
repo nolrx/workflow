@@ -35,7 +35,7 @@ Environment variables:
 import logging
 import os
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional
 
 from backend.services.ai.base import AIProvider
@@ -45,6 +45,10 @@ logger = logging.getLogger(__name__)
 # Thread-safe provider caching
 _text_provider: Optional[AIProvider] = None
 _image_provider: Optional[AIProvider] = None
+# Per-role text providers for role-specific model/credential overrides (see
+# text_role_config / get_text_provider(role=...)). Keyed by role so a
+# reasoning-vs-fast split doesn't rebuild the client on every call.
+_text_providers_by_role: dict = {}
 _provider_lock = threading.Lock()
 
 # Default model configurations
@@ -299,18 +303,98 @@ def _create_provider(cfg: ResolvedProviderConfig, capability: str = "text") -> O
     return GeminiProvider(api_key=cfg.api_key, model=cfg.model)
 
 
-def get_text_provider(force_new: bool = False) -> Optional[AIProvider]:
+def text_model_for(role: Optional[str]) -> Optional[str]:
+    """The text model id for a task ROLE (or the default when role is None/unknown).
+    Thin accessor over :func:`text_role_config` for callers that only need the id
+    (logging / metering)."""
+    return text_role_config(role).get("model") or os.getenv("AI_TEXT_MODEL")
+
+
+def text_role_config(role: Optional[str]) -> dict:
+    """Env-driven model + credential overrides for a text task ROLE.
+
+    Different Code-domain tasks want different model TIERS on the same text gateway,
+    and on this gateway a token is authorized per-model — so a role override must
+    carry its OWN credential, not just a model id:
+
+      * ``'reasoning'`` — deep document synthesis (requirements / flow / documents /
+        style). Needs a reasoning model → ``AI_TEXT_REASONING_*``.
+      * ``'fast'`` — fast, structured, mechanical work a reasoning model over-thinks
+        / times out on: the backlog planner's per-FR task split, and (future)
+        large-file slicing → ``AI_TEXT_FAST_*``.
+
+    Reads ``AI_TEXT_<ROLE>_MODEL`` / ``_AUTH_TOKEN`` / ``_BASE_URL``; each key that is
+    unset falls back to the default ``AI_TEXT_*`` at build time, so a single-model
+    deploy keeps working unchanged. Returns only the keys that are explicitly set
+    (empty dict for the default role).
+    """
+    if not role:
+        return {}
+    prefix = f"AI_TEXT_{role.upper()}_"
+    out: dict = {}
+    model = os.getenv(prefix + "MODEL")
+    if model:
+        out["model"] = model
+    token = os.getenv(prefix + "AUTH_TOKEN")
+    if token:
+        out["auth_token"] = token
+    base_url = os.getenv(prefix + "BASE_URL")
+    if base_url:
+        out["base_url"] = base_url
+    return out
+
+
+def get_text_provider(
+    force_new: bool = False, role: Optional[str] = None
+) -> Optional[AIProvider]:
     """
     Get the configured TEXT generation provider (thread-safe).
 
     Args:
         force_new: Force creating a new instance instead of using cache
                    (use in background threads — see the agent runtime).
+        role: Route to a role-specific model tier + credential (see
+              ``text_role_config``): ``'reasoning'`` for doc synthesis, ``'fast'``
+              for the planner / slicing. Cached per-role. ``None`` = the default
+              ``AI_TEXT_*`` model and the default single-provider cache.
 
     Returns:
         AIProvider instance for text generation, or None if unconfigured.
     """
     global _text_provider
+
+    # Role-specific override: build (and per-role-cache) a provider on the text
+    # config with the role's model + credential (token per-model on this gateway).
+    overrides = text_role_config(role)
+    if overrides:
+        cached = _text_providers_by_role.get(role)
+        if cached is not None and not force_new:
+            return cached
+        with _provider_lock:
+            cached = _text_providers_by_role.get(role)
+            if cached is not None and not force_new:
+                return cached
+            cfg = _resolve_text_config()
+            token = overrides.get("auth_token")
+            merged = replace(
+                cfg,
+                model=overrides.get("model", cfg.model),
+                base_url=overrides.get("base_url", cfg.base_url),
+                # The role token authorizes the role's model. Set BOTH slots so it
+                # works whether the provider client reads api_key (openai lane) or
+                # auth_token (claude Bearer lane).
+                api_key=token or cfg.api_key,
+                auth_token=token or cfg.auth_token,
+            )
+            if not (merged.api_key or merged.auth_token):
+                logger.warning("No credential configured for text provider (role=%s)", role)
+                return None
+            provider = _create_provider(merged)
+            if not force_new:
+                _text_providers_by_role[role] = provider
+            logger.info("Text provider (role=%s) initialized: %s with model %s",
+                        role, merged.provider_type, merged.model)
+            return provider
 
     if _text_provider is not None and not force_new:
         return _text_provider
@@ -443,4 +527,5 @@ def reset_providers():
     with _provider_lock:
         _text_provider = None
         _image_provider = None
+        _text_providers_by_role.clear()
     logger.info("AI providers cache reset")

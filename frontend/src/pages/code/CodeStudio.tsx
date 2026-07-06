@@ -268,6 +268,20 @@ export function CodeStudio() {
                                 <span className="hidden sm:inline">{tc("entry")}</span>
                             </Button>
                         )} */}
+                        {/* Dev Mode entry —— 已移除:开发模式入口现统一由「生成项目/重新生成项目」
+                            按钮承载(CodeAppPreview → /code/:id/dev?start=plan),不再在流程步骤条上
+                            单列入口。保留代码以便需要时恢复:
+                        {project && (
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8 sm:h-9"
+                                onClick={() => navigate(`/code/${project.id}/dev`)}
+                            >
+                                <Terminal className="h-4 w-4 sm:mr-1.5" />
+                                <span className="hidden sm:inline">{t("dev.entry")}</span>
+                            </Button>
+                        )} */}
                         {/* GitHub auto-sync status (read-only): repo link + latest push. Renders
                 nothing until the session has a repo or a sync event. */}
                         {project && <GitHubRepoCard projectId={project.id} />}

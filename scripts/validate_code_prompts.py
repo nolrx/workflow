@@ -123,6 +123,22 @@ MANIFEST: dict[str, dict] = {
         "placeholders": [],
         "must_contain": ["npm run build", "base: './'", "HashRouter"],
     },
+    "dev_backlog_planner_prompt.txt": {
+        "mode": "fill",
+        # P1 backlog planner: docs+board+goal -> user-confirmable task draft
+        # (dev-backlog-plan.v1). The JSON schema is injected from code
+        # (dev_backlog_planner_service.OUTPUT_SCHEMA) so parser and contract stay
+        # versioned together.
+        "placeholders": [
+            "PROJECT_CONTEXT", "EXISTING_BOARD", "TARGET_LANES",
+            "USER_PLANNING_INSTRUCTION", "MAX_TASKS", "OUTPUT_SCHEMA",
+        ],
+        "must_contain": [
+            "feature_id", "parent_feature_id", "depends_on", "acceptance_criteria",
+            "resource_spec", "src/assets/", "frontend", "asset", "priority",
+            "planner_meta", "不得成环", "单回合",
+        ],
+    },
     "frontend_project_critic_prompt.txt": {
         "mode": "fill",
         # Skeptical rubric evaluator (P0-B): fed the deterministic house-rules +

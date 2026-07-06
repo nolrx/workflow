@@ -1,8 +1,9 @@
 """
 User management routes
 """
-from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask import Blueprint, jsonify, request
+from flask_jwt_extended import get_jwt_identity, jwt_required
+
 from backend.extensions import db
 from backend.models.user import User
 

@@ -2,16 +2,18 @@
 Authentication routes
 """
 from datetime import datetime
-from flask import Blueprint, request, jsonify
+
+from flask import Blueprint, jsonify, request
 from flask_jwt_extended import (
     create_access_token,
     create_refresh_token,
-    jwt_required,
     get_jwt_identity,
+    jwt_required,
 )
+
 from backend.extensions import db
-from backend.models.user import User, Plan
 from backend.models.credit import CreditBalance
+from backend.models.user import Plan, User
 
 auth_bp = Blueprint("auth", __name__)
 

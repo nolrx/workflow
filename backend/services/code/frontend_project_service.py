@@ -40,6 +40,7 @@ from typing import Callable, Optional
 
 from werkzeug.utils import secure_filename
 
+from backend.services.code import asset_lane
 from backend.services.code.docker_env import (
     ANTHROPIC_RETRY_PROXY_BOOTSTRAP,
     anthropic_agent_credentials,
@@ -109,209 +110,13 @@ if command -v git >/dev/null 2>&1; then
     && git config user.name worksflow-agent && git add -A \
     && git commit -q -m "baseline" --allow-empty ) >/dev/null 2>&1 || true
 fi
-export CODEX_HOME="$HOME/.codex"
-export PATH="$HOME/bin:$PATH"
-mkdir -p "$HOME/bin" "$HOME/.fe-assets" "$HOME/.claude/skills/image-assets" "$CODEX_HOME"
-
 # `Skill` is added so Claude can trigger the bundled image-assets skill; Bash lets
 # that skill (and Claude itself) shell out to the Codex CLI for asset generation.
 CLAUDE_FLAGS="--output-format stream-json --verbose --permission-mode bypassPermissions --allowedTools Read Write Edit Bash Skill"
 
 # __ANTHROPIC_PROXY_BOOTSTRAP__
 
-# ===========================================================================
-# Asset-generation lane: Claude (code) -> image-assets skill -> Codex -> image
-# model. When the UI needs REAL raster imagery (instead of emoji / placeholders)
-# Claude runs `gen-assets "<spec>"`; that hands the request to the Codex agent,
-# which generates each picture with the OpenAI image model (genimage.mjs) and
-# writes it into src/assets/. Everything below is written at startup so no app
-# code is baked into the image and it stays tweakable without a rebuild.
-# ===========================================================================
-
-# genimage.mjs — deterministic one-prompt-one-file OpenAI image call (pure Node,
-# global fetch, no deps). Codex invokes it once per asset.
-cat > "$HOME/.fe-assets/genimage.mjs" <<'GENIMG_EOF'
-#!/usr/bin/env node
-import fs from 'node:fs';
-import path from 'node:path';
-
-function parseArgs(argv) {
-  const out = {};
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i].startsWith('--')) { out[argv[i].slice(2)] = argv[i + 1]; i++; }
-  }
-  return out;
-}
-
-const args = parseArgs(process.argv.slice(2));
-const prompt = args.prompt;
-const outPath = args.out;
-const size = args.size || process.env.OPENAI_IMAGE_SIZE || '1024x1024';
-const quality = args.quality || process.env.OPENAI_IMAGE_QUALITY || 'medium';
-if (!prompt || !outPath) {
-  console.error('usage: node genimage.mjs --out <path> --prompt "<text>" [--size WxH] [--quality low|medium|high]');
-  process.exit(2);
-}
-const apiKey = process.env.OPENAI_API_KEY;
-if (!apiKey) { console.error('OPENAI_API_KEY not set; cannot generate image'); process.exit(3); }
-const base = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
-const model = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2';
-
-const body = { model, prompt, size, n: 1 };
-if (quality && quality !== 'auto') body.quality = quality;
-
-const timeoutMs = Number(process.env.FE_GENIMAGE_TIMEOUT || 180) * 1000;
-let resp;
-try {
-  resp = await fetch(`${base}/images/generations`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-} catch (err) {
-  console.error('image request failed:', err && err.message ? err.message : err);
-  process.exit(4);
-}
-if (!resp.ok) {
-  let detail = '';
-  try { detail = await resp.text(); } catch {}
-  console.error(`image API ${resp.status}: ${detail.slice(0, 400)}`);
-  process.exit(5);
-}
-const data = await resp.json();
-const b64 = data && data.data && data.data[0] && data.data[0].b64_json;
-if (!b64) { console.error('no image data in response'); process.exit(6); }
-const abs = path.resolve(outPath);
-fs.mkdirSync(path.dirname(abs), { recursive: true });
-fs.writeFileSync(abs, Buffer.from(b64, 'base64'));
-console.log(`wrote ${outPath} (${size}, ${model})`);
-GENIMG_EOF
-
-# gen-assets — the image-assets skill's executor: forward Claude's request to the
-# Codex agent. Fail-soft (always exits 0) so a missing key / image error never
-# sinks the build; Claude then falls back to CSS/SVG (never emoji).
-cat > "$HOME/bin/gen-assets" <<'GENASSETS_EOF'
-#!/usr/bin/env bash
-set -uo pipefail
-GENIMG="$HOME/.fe-assets/genimage.mjs"
-
-# Evidence that Claude actually invoked the asset lane (host reads this back).
-echo "invoked: $*" >> /out/asset_gen.log 2>/dev/null || true
-
-if ! command -v codex >/dev/null 2>&1; then
-  echo "[gen-assets] 容器内未安装 codex(fe-agent 镜像可能未重建);跳过图片资源生成。"
-  echo "no-codex" >> /out/asset_gen.log 2>/dev/null || true
-  exit 0
-fi
-if [ -z "${OPENAI_API_KEY:-}" ]; then
-  echo "[gen-assets] 未配置 OPENAI_API_KEY,跳过图片资源生成;请用 CSS/SVG 兜底,不要用 emoji。"
-  echo "no-key" >> /out/asset_gen.log 2>/dev/null || true
-  exit 0
-fi
-REQUEST="$*"
-if [ -z "${REQUEST// /}" ]; then
-  echo "[gen-assets] 用法: gen-assets \"<需要的图片:相对路径(放 src/assets/ 下)/主题/风格/尺寸>\""
-  exit 0
-fi
-
-# Pull the project's visual-style context straight from the assembled prompt
-# (/out/prompt.txt already carries the 视觉风格规格 / UI 基调 / Figma sections),
-# so EVERY image is anchored to one consistent style family even when Claude's
-# per-image spec is terse. Sliced between the two stable section headers; cap the
-# bytes so a long style doc can't blow up Codex's context / wall-clock. Fail-soft:
-# missing file / no match -> empty -> no baseline block prepended.
-STYLE_CTX=""
-if [ -f /out/prompt.txt ]; then
-  STYLE_CTX="$(awk '/^# 视觉风格规格/{f=1} /^# 共享 API 契约/{f=0} f' /out/prompt.txt 2>/dev/null | head -c 6000)"
-fi
-STYLE_BLOCK=""
-if [ -n "${STYLE_CTX// /}" ]; then
-  STYLE_BLOCK="# 全局视觉风格基线(本工程统一视觉口径 — 所有图片必须严格遵循、属于同一风格家族)
-$STYLE_CTX
-
-请据上述风格基线,让所有图在以下维度保持一致(看起来像同一个产品出品):配色(尽量呼应基线里的主色/强调色)、媒介(写实照片 / 扁平插画 / 3D 等,全工程统一一种)、光影、质感、构图与背景处理。
-
-"
-fi
-
-INSTR="你是一个「资源图片生成」子 Agent。请为当前前端工程生成所需的位图资源。
-${STYLE_BLOCK}唯一的生成手段是调用本机脚本(它会请求 OpenAI 图像模型并把 PNG 写入文件):
-  node \"$GENIMG\" --out <相对路径,统一放在 src/assets/ 下> --size <1024x1024|1536x1024|1024x1536> --prompt \"<英文图像提示词>\"
-要求:
-- 为下面每一项资源各调用一次该脚本,保存到 src/assets/ 指定路径(目录会自动创建)。
-- **把上面的全局视觉风格基线融进每一条英文 prompt**(配色 / 媒介 / 光影 / 质感 / 构图保持一致),让所有图属于同一视觉风格家族、并呼应 UI 的主色与强调色;提示词用英文、具体写实、贴合产品语境;图内不要渲染界面文字 / 按钮 / 水印 / UI 截图。
-- 只能写入 src/assets/ 下的图片文件,不要改动任何其他源码。
-- 全部完成后,用一句话列出你实际写入的文件路径。
-
-# 需要的资源
-$REQUEST"
-
-printf '%s' "$INSTR" | timeout "${FE_CODEX_TIMEOUT:-420}" \
-  codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check 2>&1
-status=$?
-if [ "$status" -ne 0 ]; then
-  echo "[gen-assets] Codex 资源生成未完成(code $status,已忽略);请用 CSS/SVG 兜底,不要用 emoji。"
-fi
-exit 0
-GENASSETS_EOF
-chmod +x "$HOME/bin/gen-assets"
-
-# image-assets skill — the documented trigger Claude uses for real imagery.
-cat > "$HOME/.claude/skills/image-assets/SKILL.md" <<'SKILL_EOF'
----
-name: image-assets
-description: Generate real raster image assets (hero images, illustrations, photos, avatars, product shots, backgrounds, textures, logos) for the project. Use this whenever the UI needs genuine imagery instead of emoji, icon-font hacks, or empty placeholders. Delegates to the Codex agent and the OpenAI image model.
----
-
-# 生成真实图片资源(经 Codex)
-
-当界面需要**真实图片**(主视觉/插画/照片/头像/产品图/背景/纹理/Logo 等)时使用本技能,
-用真实位图取代 emoji、字符画或空占位,以达到高保真。
-
-## 用法
-
-在**工程根目录**运行(一次可描述多张):
-
-    gen-assets "把需要的图片逐条列清楚:每张写明 src/assets/ 下的目标路径、主题内容、风格、建议尺寸"
-
-例如:
-
-    gen-assets "1) src/assets/hero.png — 现代简约 SaaS 仪表盘工作场景照,冷色调,1536x1024; 2) src/assets/avatar-1.png — 职业人物头像,中性背景,1024x1024"
-
-该命令会触发 Codex 子 Agent,用 OpenAI 图像模型逐张生成位图并写入对应路径。
-
-## 在代码中引用
-
-资源统一放在 `src/assets/` 并通过 import 引用(Vite 会打包并按 base './' 重写路径,
-保证子路径 iframe 预览也能加载):
-
-    import heroUrl from './assets/hero.png'
-    // ...
-    <img src={heroUrl} alt="产品概览" />
-
-## 约束
-
-- 优先真实图片;**禁止**用 emoji 当图标/插画/装饰。
-- **风格一致**:Codex 子 Agent 看不到工程的视觉风格规格,只能读你写进 `gen-assets` 的描述——所以**每条描述都要带上统一的视觉风格简报(主色/强调色、媒介、光影、调性),全工程所有图共用同一套**,让它们属于同一风格家族并呼应 UI 配色。
-- 资源数量适度(一般 3–8 张),聚焦关键视觉位。
-- 图片放 `src/assets/`(被打包);不要放 `public/` 再用运行时绝对路径(子路径预览会失效)。
-- 若资源生成不可用,改用克制的 CSS/SVG 兜底,仍然不要用 emoji。
-SKILL_EOF
-
-# Diagnostics so the host can explain a "no assets" run: is the Codex CLI even in
-# this image (i.e. was fe-agent rebuilt?) and is gen-assets on PATH for Claude?
-command -v codex     > /out/codex_path     2>/dev/null || true
-command -v gen-assets > /out/gen_assets_path 2>/dev/null || true
-: > /out/asset_gen.log  # gen-assets appends one line per invocation
-
-# Authenticate Codex for the image-assets skill (optional). Codex does NOT read
-# OPENAI_API_KEY from the env on its own — the key must be written to auth.json
-# via `login --with-api-key` (mirrors the slicer-agent). Degrades to no assets
-# when unset; gen-assets gates on the key too, so the build never blocks on this.
-if [ -n "${OPENAI_API_KEY:-}" ] && command -v codex >/dev/null 2>&1; then
-  printf '%s' "$OPENAI_API_KEY" | codex login --with-api-key > /out/codex_login.log 2>&1 || true
-fi
+# __ASSET_LANE_BOOTSTRAP__
 
 # Emit a phase sentinel onto the JSON stream so the host timeline can narrate
 # the recovery ladder (build phases write their output to /out logs, not stdout).
@@ -760,6 +565,19 @@ fi
 # flaky gateway is configured. No-op for the official API. See docker_env.py.
 _CONTAINER_SCRIPT = _CONTAINER_SCRIPT.replace(
     "# __ANTHROPIC_PROXY_BOOTSTRAP__", ANTHROPIC_RETRY_PROXY_BOOTSTRAP
+)
+
+# Splice the SHARED asset lane (backend/services/code/asset_lane.py — same module
+# Dev Mode injects) with the one-shot parameters: diagnostics under /out and the
+# style context sliced out of the assembled prompt (/out/prompt.txt), preserving
+# the pre-extraction behaviour/diagnostics contract exactly.
+_CONTAINER_SCRIPT = _CONTAINER_SCRIPT.replace(
+    "# __ASSET_LANE_BOOTSTRAP__",
+    asset_lane.render_bootstrap(
+        style_context_path="/out/prompt.txt",
+        diagnostics_dir="/out",
+        style_extract="prompt_sections",
+    ),
 )
 
 

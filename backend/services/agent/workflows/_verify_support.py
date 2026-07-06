@@ -246,6 +246,19 @@ class Verification:
         return bool(self.house_rule_errors or self.runtime_errors
                     or self.review_blocking or self.score_blocking)
 
+    @property
+    def objective_blocking(self) -> bool:
+        """Hard, deterministic blockers ONLY: house-rule errors, runtime errors, and
+        the configured score gate. EXCLUDES the reviewer's subjective, free-form
+        ``blocking_issues`` (``review_blocking``).
+
+        Used to gate a single dev-task turn's closure/repair: those blocking_issues
+        are judged over the WHOLE app against a truncated source digest, so a page
+        the reviewer couldn't see ("源码未提供") would otherwise fail an unrelated
+        task forever. A task is judged on its own AC (feature_results) + these hard
+        signals; the reviewer's whole-app verdict stays advisory."""
+        return bool(self.house_rule_errors or self.runtime_errors or self.score_blocking)
+
     def repair_instruction(self) -> str:
         """The change brief fed to the edit-mode rebuild (one repair round).
 

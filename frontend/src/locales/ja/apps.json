@@ -60,6 +60,7 @@
     "open": "アプリを開く",
     "detail": "詳細",
     "iterate": "二次開発",
+    "devMode": "開発モード",
     "redeploy": "再デプロイ",
     "replay": "実行記録",
     "openProject": "元のプロジェクト",

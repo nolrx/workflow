@@ -157,3 +157,51 @@ def test_missing_key_returns_none(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
     reset_providers()
     assert get_text_provider() is None
+
+
+# --- role-based text model tiers (reasoning vs fast) --------------------------
+@pytest.fixture
+def role_env(monkeypatch):
+    """openai-lane gateway with distinct per-role models + tokens (as in prod:
+    a token is authorized per-model on the gateway)."""
+    monkeypatch.setenv("AI_TEXT_PROVIDER", "openai")
+    monkeypatch.setenv("AI_TEXT_MODEL", "flash-model")
+    monkeypatch.setenv("AI_TEXT_AUTH_TOKEN", "flash-token")
+    monkeypatch.setenv("AI_TEXT_BASE_URL", "https://gw/v1")
+    monkeypatch.setenv("AI_TEXT_REASONING_MODEL", "pro-model")
+    monkeypatch.setenv("AI_TEXT_REASONING_AUTH_TOKEN", "pro-token")
+    monkeypatch.delenv("AI_TEXT_FAST_MODEL", raising=False)
+    monkeypatch.delenv("AI_TEXT_FAST_AUTH_TOKEN", raising=False)
+    reset_providers()
+
+
+def test_text_role_config_resolves_overrides(role_env):
+    from backend.services.ai.factory import text_model_for, text_role_config
+
+    assert text_role_config("reasoning") == {"model": "pro-model", "auth_token": "pro-token"}
+    # fast falls back to the default AI_TEXT_MODEL (no fast-specific env set).
+    assert text_role_config("fast") == {}
+    assert text_role_config(None) == {}
+    assert text_model_for("reasoning") == "pro-model"
+    assert text_model_for("fast") == "flash-model"  # default fallback
+
+
+def test_role_provider_uses_role_model_and_token(role_env):
+    reasoning = get_text_provider(role="reasoning", force_new=True)
+    fast = get_text_provider(role="fast", force_new=True)
+    default = get_text_provider(force_new=True)
+    # Reasoning routes to the pro model + its OWN token (per-model gateway auth).
+    assert reasoning.model == "pro-model"
+    assert reasoning.api_key == "pro-token"
+    # Fast (no fast-specific env) inherits the default model + token.
+    assert fast.model == "flash-model"
+    assert fast.api_key == "flash-token"
+    assert default.model == "flash-model"
+
+
+def test_role_provider_cached_per_role(role_env):
+    a = get_text_provider(role="reasoning")
+    b = get_text_provider(role="reasoning")
+    assert a is b  # per-role cache hit
+    # A different role is a distinct instance.
+    assert get_text_provider(role="fast") is not a

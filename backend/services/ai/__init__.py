@@ -24,6 +24,7 @@ from backend.services.ai.factory import (
     get_provider_config,
     get_text_provider,
     reset_providers,
+    text_model_for,
 )
 
 __all__ = [
@@ -36,4 +37,5 @@ __all__ = [
     "get_text_provider",
     "get_image_provider",
     "reset_providers",
+    "text_model_for",
 ]

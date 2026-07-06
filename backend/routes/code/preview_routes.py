@@ -23,9 +23,11 @@ token-less URL, so the JWT never lingers in the address bar / history while the
 dist's relative asset requests stay authenticated via the cookie.
 """
 import os
+from datetime import datetime
 
 from flask import Blueprint, Response, redirect, request, send_from_directory
 
+from backend.extensions import db
 from backend.models.agent.run import AgentRun, AgentRunStatus
 from backend.models.code import CodeProject
 from backend.models.code.fullstack import CodeDeployment, DeploymentStatus
@@ -69,6 +71,114 @@ def _running_deployment(project_id: str, user_id: str) -> CodeDeployment | None:
     return dep if dep and dep.status == DeploymentStatus.RUNNING else None
 
 
+def _running_dev_session(project_id: str, user_id: str, lane: str = "frontend"):
+    """The owner's live Dev Mode session (given ``lane``) with a running container, or None.
+
+    Dev Mode's preview is the RUNNING dev server (frontend Vite HMR, or the backend
+    hot-reload container), not the static dist. Resolved ONLY for the owner (see the
+    proxy branches): the dev servers expose source / an owner-scoped API and MUST NOT
+    be reachable by the public anonymous branch (design-review must-fix #6)."""
+    from backend.models.code.fullstack import CodeDevSession, DevSessionStatus
+
+    session = (
+        CodeDevSession.query.filter_by(project_id=project_id, user_id=user_id, lane=lane)
+        .filter(CodeDevSession.status.in_([DevSessionStatus.RUNNING, DevSessionStatus.REPAIRING]))
+        .order_by(CodeDevSession.created_at.desc())
+        .first()
+    )
+    return session if session and session.container_name else None
+
+
+def _proxy_to_dev_server(session, project_id: str, inject_api_base: str | None = None):
+    """Relay the current HTTP request to the dev container's Vite server.
+
+    Forwards the FULL ``/preview/<pid>/...`` path unchanged because the dev server
+    is configured with ``base=/preview/<pid>/`` (see dev_service). HMR websockets do
+    NOT come through here — the Flask ``requests`` proxy cannot upgrade a connection;
+    nginx routes the ``Upgrade`` request straight to the container (``@preview_ws``).
+    Owner-only: the caller has already proven ownership.
+
+    ``inject_api_base`` (set when a BACKEND dev session is live) rewrites the served
+    HTML document to point ``window.__API_BASE__`` at the backend dev container, so
+    the live frontend calls the live backend — the full-stack dev loop. Only the HTML
+    document is buffered+injected; all other assets stream unchanged."""
+    import requests
+
+    port = session.internal_port or 5173
+    target = f"http://{session.container_name}:{port}{request.path}"
+    fwd_headers = {
+        k: v for k, v in request.headers.items()
+        if k.lower() not in ("host", "cookie", "authorization", "content-length")
+    }
+    params = {k: v for k, v in request.args.items() if k != "token"}
+    try:
+        upstream = requests.request(
+            request.method, target, params=params, headers=fwd_headers,
+            data=request.get_data(), stream=True, timeout=(5, 60), allow_redirects=False,
+        )
+    except requests.RequestException:
+        return error_response("SERVER_ERROR", "开发服务器尚未就绪，请稍候重试", 503)
+    excluded = {"content-encoding", "transfer-encoding", "connection", "content-length", "keep-alive"}
+    is_html = "text/html" in (upstream.headers.get("Content-Type") or "").lower()
+    if inject_api_base and is_html:
+        # Buffer the (small) HTML document and inject the live API base.
+        body = upstream.content
+        try:
+            html = _inject_api_base(body.decode("utf-8", "replace"), inject_api_base)
+            body = html.encode("utf-8")
+        except Exception:  # noqa: BLE001 — never break the preview on injection
+            pass
+        headers = [(k, v) for k, v in upstream.raw.headers.items()
+                   if k.lower() not in excluded]
+        return Response(body, status=upstream.status_code, headers=headers)
+    headers = [(k, v) for k, v in upstream.raw.headers.items() if k.lower() not in excluded]
+    return Response(
+        upstream.iter_content(chunk_size=8192), status=upstream.status_code, headers=headers
+    )
+
+
+def _proxy_to_backend_dev(session, project_id: str, filename: str):
+    """Relay ``/preview/<pid>/api/...`` to the backend dev container (owner-only).
+
+    The backend mounts its routes at ROOT (contract convention), so we strip the
+    ``/preview/<pid>/api`` prefix and forward ``/<subpath>``. Mirrors the deployed
+    app proxy's tolerance: if the backend 404s on ``/<subpath>`` and the path isn't
+    already under ``/api``, retry once as ``/api/<subpath>`` (some frameworks mount
+    under an ``/api`` prefix). A 404 body is safe to replay."""
+    import requests
+
+    port = session.internal_port or 8080
+    # filename is "api" or "api/<subpath>"; strip the "api" segment.
+    sub = filename[len("api"):]
+    if not sub.startswith("/"):
+        sub = "/" + sub if sub else "/"
+    fwd_headers = {
+        k: v for k, v in request.headers.items()
+        if k.lower() not in ("host", "cookie", "authorization", "content-length")
+    }
+    params = {k: v for k, v in request.args.items() if k != "token"}
+    body = request.get_data()
+    excluded = {"content-encoding", "transfer-encoding", "connection", "content-length", "keep-alive"}
+
+    def _call(path: str):
+        return requests.request(
+            request.method, f"http://{session.container_name}:{port}{path}",
+            params=params, headers=fwd_headers, data=body,
+            stream=True, timeout=(5, 120), allow_redirects=False,
+        )
+
+    try:
+        upstream = _call(sub)
+        if upstream.status_code == 404 and not sub.startswith("/api/"):
+            upstream = _call("/api" + sub)
+    except requests.RequestException:
+        return error_response("SERVER_ERROR", "后端开发服务器尚未就绪，请稍候重试", 503)
+    headers = [(k, v) for k, v in upstream.raw.headers.items() if k.lower() not in excluded]
+    return Response(
+        upstream.iter_content(chunk_size=8192), status=upstream.status_code, headers=headers
+    )
+
+
 def _inject_api_base(html: str, api_base: str) -> str:
     """Inject ``window.__API_BASE__`` / ``window.__WS_BASE__`` so the static build
     talks to the live backend over both HTTP and WebSocket.
@@ -108,6 +218,31 @@ def _latest_built_run(project_id: str, user_id: str) -> AgentRun | None:
     )
 
 
+def _resolve_site_dir(run: AgentRun | None, deployment) -> str | None:
+    """The static dist dir to serve: the NEWER of the frontend-generation run's site
+    and a deploy-built (Dev-Mode-graduated) site, whichever exists on disk.
+
+    A deploy that graduated Dev Mode edits writes the built dist under its own run's
+    ``site`` dir and records it on ``deployment.frontend_site_run_id``. That deploy run
+    is created after generation, so it wins by ``created_at`` — the deployed preview
+    then reflects the code tuned in Dev Mode. Falls back to the generation dist when no
+    deploy-built dist exists (legacy behaviour)."""
+    candidates: list[tuple[datetime, str]] = []
+    if run:
+        candidates.append((run.created_at or datetime.min, artifact_abs_path(f"agent_runs/{run.id}/site")))
+    site_run_id = getattr(deployment, "frontend_site_run_id", None) if deployment else None
+    if site_run_id:
+        site_run = db.session.get(AgentRun, site_run_id)
+        if site_run:
+            candidates.append(
+                (site_run.created_at or datetime.min, artifact_abs_path(f"agent_runs/{site_run_id}/site"))
+            )
+    for _created, site_dir in sorted(candidates, key=lambda t: t[0], reverse=True):
+        if os.path.isdir(site_dir):
+            return site_dir
+    return None
+
+
 def _serve_index(site_dir: str, deployment, project_id: str, csp: str):
     """Serve the dist's ``index.html`` — injecting the live API base when the
     project is deployed, plain otherwise. Used both for the explicit entry request
@@ -138,10 +273,19 @@ def serve_project_preview(project_id: str, filename: str = "index.html"):
         return error_response("NOT_FOUND", "项目不存在或无权访问", 404)
 
     query_token = request.args.get("token", "")
-    token = query_token or request.cookies.get(_PREVIEW_COOKIE, "")
-    # Accepts the one-shot ?token= access token (entry) or a minted, project-scoped
-    # preview token (cookie). A non-decodable token just means an anonymous visitor.
-    identity = preview_identity(token, f"project:{project_id}")
+    cookie_token = request.cookies.get(_PREVIEW_COOKIE, "")
+    # Authenticate the OWNER from the one-shot ?token= (entry) OR the pinned, longer-
+    # lived cookie. Try the query token FIRST, then fall back to the cookie — a stale
+    # or expired ?token= must NOT override a still-valid cookie. (An iframe re-navigating
+    # to its ORIGINAL src — key remount — carries the access token captured at page
+    # mount; after the 30-min access-token expiry that token is invalid, and the old
+    # `query_token or cookie` picked it anyway → is_owner=false → the request dropped to
+    # the public/static path and the LIVE dev preview was silently replaced by the last
+    # STATIC build. Hence dev edits "stopped showing".) A non-decodable token on both is
+    # just an anonymous visitor.
+    scope = f"project:{project_id}"
+    query_identity = preview_identity(query_token, scope) if query_token else None
+    identity = query_identity or (preview_identity(cookie_token, scope) if cookie_token else None)
 
     is_owner = bool(identity) and identity == project.user_id
     is_public = project.visibility == "public"
@@ -151,23 +295,41 @@ def serve_project_preview(project_id: str, filename: str = "index.html"):
     # The deliverable is always resolved against the project OWNER: an anonymous
     # public visitor has no identity of their own.
     owner_id = project.user_id
+
+    # What can we actually serve? A live dev container (owner only) OR a built dist.
+    # Resolve this BEFORE the token→cookie→302 exchange so an entry with nothing to
+    # preview still 404s cleanly (no pointless cookie/redirect) — preserving the
+    # legacy "404 when no built run" behaviour. ``_running_dev_session`` is a pure DB
+    # lookup (no docker), safe here.
+    dev_session = _running_dev_session(project_id, owner_id, lane="frontend") if is_owner else None
+    be_dev_session = _running_dev_session(project_id, owner_id, lane="backend") if is_owner else None
+
+    # Backend dev API proxy (owner-only): the live frontend calls /preview/<pid>/api/…,
+    # which we relay to the backend dev container — the full-stack dev loop. Handled
+    # BEFORE the "nothing to preview" 404 (an API call works even with no frontend
+    # build) and before the 302 exchange (API calls carry the cookie, not ?token=).
+    if be_dev_session and (filename == "api" or filename.startswith("api/")):
+        return _proxy_to_backend_dev(be_dev_session, project_id, filename)
+
     run = _latest_built_run(project_id, owner_id)
-    if not run:
+    if not dev_session and not run:
         return error_response("NOT_FOUND", "该项目尚未生成可预览的前端工程", 404)
-    site_dir = artifact_abs_path(f"agent_runs/{run.id}/site")
-    if not os.path.isdir(site_dir):
-        return error_response("NOT_FOUND", "预览不存在或尚未生成", 404)
 
-    deployment = _running_deployment(project_id, owner_id)
-
-    # Owner entry request: pin the token into a path-scoped cookie, then redirect
-    # to a clean (token-less) URL so the JWT stays out of the address bar/history.
-    # Public anonymous visitors carry no token and skip this entirely.
-    if query_token and is_owner:
+    # Owner ENTRY request: pin the one-shot ?token= into path-scoped cookies and 302
+    # to a clean (token-less) URL. This MUST run BEFORE the dev-proxy branch below:
+    # otherwise the entry request would be proxied straight to Vite without ever
+    # setting the cookie, and the served index.html's module / HMR sub-requests
+    # (/preview/<pid>/src/*.tsx, /@vite/client, …) — which carry neither ?token= nor
+    # a cookie — would fall through to the public/static path and 404. Public
+    # anonymous visitors carry no token and skip this entirely. Only when the QUERY
+    # token itself authenticated the owner (not a cookie-only auth, which already has
+    # its cookie) — and a stale query token that fell back to the cookie skips this,
+    # so it never redirect-loops nor re-mints from an expired token.
+    if query_identity == project.user_id:
         # Exchange the one-shot 30-min access token for a longer-lived token scoped
         # to THIS project, so a left-open preview tab keeps authenticating past the
         # access token's expiry (the deployed app polls /app/<pid>/api for hours).
-        session_token = mint_preview_token(identity, f"project:{project_id}")
+        session_token = mint_preview_token(query_identity, f"project:{project_id}")
         response = redirect(f"/preview/{project_id}/")
         response.set_cookie(
             _PREVIEW_COOKIE, session_token, max_age=_COOKIE_MAX_AGE,
@@ -175,19 +337,33 @@ def serve_project_preview(project_id: str, filename: str = "index.html"):
         )
         # Also authenticate the served frontend's calls to /app/<pid>/api with a
         # path-scoped cookie — planted on EVERY owner entry, NOT gated on a running
-        # deployment. The common sequence is: open preview, THEN deploy, THEN the
-        # tab reloads token-lessly and the now-running deployment makes the build
-        # call /app/<pid>/api/<...>. If the cookie were only set when a deployment
-        # already existed at entry time, that later reload would carry no token and
-        # the proxy would reject the API calls with 403 ("无效的访问令牌"). The cookie
-        # is harmless before a backend exists: for a valid token with no running
-        # deployment the proxy returns 404 ("后端尚未部署"), and the proxy re-checks
-        # project ownership on every request regardless. Scoped to /app/<pid>/.
+        # deployment (open preview → deploy → token-less reload calls /app/<pid>/api).
         response.set_cookie(
             APP_TOKEN_COOKIE, session_token, max_age=_COOKIE_MAX_AGE,
             httponly=True, samesite="Lax", path=f"/app/{project_id}/",
         )
         return response
+
+    # Dev Mode: when the OWNER has a running dev container, the preview IS the live
+    # Vite dev server (real-time HMR), proxied here over HTTP. Owner-only — the dev
+    # server exposes source, so a public/anonymous visitor NEVER reaches it and falls
+    # through to the static dist below (design-review must-fix #6). Reached on the
+    # token-less follow-up request, cookie-authenticated as the owner.
+    if dev_session:
+        # When a backend dev session is ALSO live, inject its API base into the served
+        # HTML so the live frontend talks to the live backend (full-stack dev loop).
+        api_base = f"/preview/{project_id}/api" if be_dev_session else None
+        return _proxy_to_dev_server(dev_session, project_id, inject_api_base=api_base)
+
+    # Static dist path (no live dev container). ``run`` is guaranteed here.
+    deployment = _running_deployment(project_id, owner_id)
+
+    # Serve the NEWER of the generation dist and a deploy-built (Dev-Mode-graduated)
+    # dist — so a deployed app reflects the code tuned in Dev Mode, not the pre-dev
+    # generation build.
+    site_dir = _resolve_site_dir(run, deployment)
+    if not site_dir:
+        return error_response("NOT_FOUND", "预览不存在或尚未生成", 404)
 
     csp = _DEPLOYED_CSP if deployment else _PREVIEW_CSP
 

@@ -193,6 +193,23 @@ def test_repair_not_regressed_ignores_nonfunctional_and_soft_score():
     assert _verify_support.repair_regressed(prior, cand)[0] is False
 
 
+# --- objective_blocking: dev-task closure ignores whole-app reviewer verdict ---
+def test_objective_blocking_excludes_review_blocking():
+    """A reviewer whole-app FAIL (blocking_issues) makes .blocking true but must NOT
+    make .objective_blocking true — a single dev-task turn gates on hard signals
+    only, not the reviewer's truncated-digest whole-app judgment."""
+    v = Verification(review={"verdict": "FAIL", "blocking_issues": ["FR2 页面组件未提供"]})
+    assert v.review_blocking  # the subjective whole-app signal is present
+    assert v.blocking is True  # legacy whole-app gate still sees it
+    assert v.objective_blocking is False  # ...but the task-turn gate ignores it
+
+
+def test_objective_blocking_still_fires_on_hard_signals():
+    assert _verif_with(house=1).objective_blocking is True
+    assert _verif_with(runtime=1).objective_blocking is True
+    assert _verif_with().objective_blocking is False
+
+
 # --- review-panel concurrency (#1) -------------------------------------------
 def test_run_reviewers_runs_all_in_order():
     out = _verify_support.run_reviewers([lambda i=i: {"i": i} for i in range(3)])

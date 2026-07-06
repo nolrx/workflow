@@ -2,6 +2,7 @@
 Code creation routes.
 """
 from backend.routes.code.apps_routes import apps_bp
+from backend.routes.code.dev_routes import dev_bp
 from backend.routes.code.figma_routes import figma_bp
 from backend.routes.code.fullstack_routes import app_proxy_bp, fullstack_bp
 from backend.routes.code.github_routes import github_bp
@@ -17,5 +18,6 @@ __all__ = [
     "fullstack_bp",
     "app_proxy_bp",
     "apps_bp",
+    "dev_bp",
     "quality_bp",
 ]

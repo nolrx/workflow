@@ -29,6 +29,11 @@ logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 
+# Max decisions rendered into a prompt block — keeps an ever-growing decisions log
+# (long interactive dev sessions) from starving the later constraint sections of the
+# render budget. Only elides when exceeded; the most recent are kept (latest intent).
+_MAX_RENDER_DECISIONS = 30
+
 
 def _now_iso() -> str:
     return datetime.utcnow().isoformat() + "Z"
@@ -296,6 +301,14 @@ class ContextLedger:
         text = _clean_str(instruction)
         if not text:
             return self
+        statement = f"用户在「{stage}」确认环节要求：{text}"
+        # Dedup (review must-fix #5): a long interactive dev session repeats the same
+        # instruction; unbounded appends would bloat the decisions section and starve
+        # the render budget (constraints / open_questions get trimmed first). Skip an
+        # exact-duplicate same-content decision instead of accumulating it.
+        for d in self._data["decisions"]:
+            if d.get("statement") == statement:
+                return self
         seq = (
             len([d for d in self._data["decisions"] if str(d.get("id", "")).startswith(f"user-{stage}-")])
             + 1
@@ -304,7 +317,7 @@ class ContextLedger:
             decisions_add=[
                 {
                     "id": f"user-{stage}-{seq}",
-                    "statement": f"用户在「{stage}」确认环节要求：{text}",
+                    "statement": statement,
                     "rationale": "用户人工确认时提出的调整，后续产物必须体现",
                     "source_step": f"{stage}_revision",
                 }
@@ -369,8 +382,16 @@ class ContextLedger:
             sections.append("\n".join(lines))
 
         if self._data["decisions"]:
+            # Cap the rendered decisions (review must-fix #5): keep the MOST RECENT
+            # ones (latest user intent wins) so an ever-growing decisions log in a
+            # long dev session can't push the global-constraints / open-questions
+            # sections out of the render budget. Only ever elides when very large.
+            decisions = self._data["decisions"]
+            shown = decisions[-_MAX_RENDER_DECISIONS:]
             lines = ["### 关键决策"]
-            for d in self._data["decisions"]:
+            if len(decisions) > len(shown):
+                lines.append(f"- (更早的 {len(decisions) - len(shown)} 条决策略,以下为最新,以最新为准)")
+            for d in shown:
                 because = f"（因为 {d['rationale']}）" if d.get("rationale") else ""
                 lines.append(f"- [{d['id']}] {d['statement']}{because}")
             sections.append("\n".join(lines))

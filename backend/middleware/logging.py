@@ -3,9 +3,10 @@ Request Logging Middleware
 
 Logs all HTTP requests with timing information.
 """
-import time
 import logging
-from flask import Flask, request, g
+import time
+
+from flask import Flask, g, request
 
 logger = logging.getLogger(__name__)
 

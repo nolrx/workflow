@@ -55,6 +55,7 @@ def create_app(config_name: str = None, *, reconcile_on_boot: bool = False) -> F
         apps_bp,
         code_preview_bp,
         code_project_bp,
+        dev_bp,
         figma_bp,
         fullstack_bp,
         github_bp,
@@ -79,6 +80,8 @@ def create_app(config_name: str = None, *, reconcile_on_boot: bool = False) -> F
     app.register_blueprint(fullstack_bp, url_prefix="/api/code")
     # App Space (应用空间) + secondary development (二次开发) over deployed apps.
     app.register_blueprint(apps_bp, url_prefix="/api/code")
+    # Dev Mode (交互式开发模式): long-running dev container + turn runs + checklist.
+    app.register_blueprint(dev_bp, url_prefix="/api/code")
     # Generation-quality trend endpoint (eval framework read side): /api/code/quality/*
     app.register_blueprint(quality_bp, url_prefix="/api/code")
     # Session-bound deployed preview of generated frontend projects. Mounted at the
@@ -201,6 +204,16 @@ def create_app(config_name: str = None, *, reconcile_on_boot: bool = False) -> F
             reconcile_orphaned_runs(app)
         except Exception as error:  # noqa: BLE001 — never block startup on reconciliation
             logger.warning("Orphaned-run reconciliation skipped: %s", error)
+
+        # Dev Mode background maintenance: reap idle dev containers + self-heal
+        # crashed ones. Server boot only (never an incidental create_app), like the
+        # orphaned-run reconciliation above.
+        try:
+            from backend.services.code.dev_maintenance import start_maintenance_daemon
+
+            start_maintenance_daemon(app)
+        except Exception as error:  # noqa: BLE001 — never block startup on the daemon
+            logger.warning("Dev maintenance daemon not started: %s", error)
 
     # Seed editable system prompts into MongoDB (idempotent; only inserts
     # missing keys). Fails soft — if Mongo is unreachable the app still runs off

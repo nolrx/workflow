@@ -60,6 +60,7 @@
     "open": "打开应用",
     "detail": "查看详情",
     "iterate": "二次开发",
+    "devMode": "开发模式",
     "redeploy": "重新部署",
     "replay": "查看执行记录",
     "openProject": "进入原项目",

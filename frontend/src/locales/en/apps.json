@@ -60,6 +60,7 @@
     "open": "Open app",
     "detail": "Details",
     "iterate": "Iterate",
+    "devMode": "Dev Mode",
     "redeploy": "Redeploy",
     "replay": "Execution record",
     "openProject": "Open project",

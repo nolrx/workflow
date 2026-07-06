@@ -45,7 +45,7 @@ from backend.extensions import db
 from backend.models.agent import AgentArtifact, AgentRun, AgentRunStatus
 from backend.models.code import CodeProject
 from backend.models.code.fullstack import CodeDeployment, DeploymentStatus
-from backend.services.agent.files import artifact_abs_path
+from backend.services.agent.files import agent_run_dir, artifact_abs_path
 from backend.services.code import middleware_service
 from backend.services.code.backend_project_service import get_backend_project_service
 
@@ -85,6 +85,22 @@ _BACKEND_WORKFLOW = "code_backend_project_generation"
 _MIDDLEWARE_WORKFLOW = "code_middleware_provisioning"
 _FRONTEND_WORKFLOW = "code_frontend_project_generation"
 _BUILT = (AgentRunStatus.COMPLETED, AgentRunStatus.PARTIAL)
+
+
+def _deploy_from_dev() -> bool:
+    """Whether a deploy graduates the LATEST source (incl. Dev Mode edits) to release.
+
+    Dev Mode persists tuned source as the newest ``code_*_project_zip`` snapshot. With
+    this ON (default), deploy builds/serves from that newest snapshot instead of the
+    original generation run — so "现在开发模式调好的应用" actually goes live on deploy.
+    Ops kill-switch: ``CODE_DEPLOY_FROM_DEV=0`` restores the legacy generation-only
+    behaviour verbatim."""
+    return os.getenv("CODE_DEPLOY_FROM_DEV", "1") not in ("0", "false", "False", "")
+
+
+def _artifact_sort_key(art: "AgentArtifact"):
+    """created_at that sorts None last (oldest) — for picking the newest artifact."""
+    return art.created_at or datetime.min
 
 # The generated FRONTEND source is staged into the SAME comprehensive-repair workdir
 # under this reference-only subdir so the Codex repair pass can READ the real
@@ -355,15 +371,230 @@ def _latest_repaired_artifact(project_id: str, user_id: str) -> Optional[AgentAr
     )
 
 
+def _latest_backend_zip_artifact(project_id: str, user_id: str) -> Optional[AgentArtifact]:
+    """The newest ``code_backend_project_zip`` for a project across ANY run — so a
+    Dev Mode backend snapshot (published on a ``code_dev_backend_turn`` run) competes
+    with the generation run's zip, not just the generation run's own."""
+    return (
+        AgentArtifact.query.filter_by(
+            domain_ref_type="code_backend_project_zip", domain_ref_id=project_id
+        )
+        .join(AgentRun, AgentArtifact.run_id == AgentRun.id)
+        .filter(AgentRun.user_id == user_id, AgentRun.status.in_(_BUILT))
+        .order_by(AgentArtifact.created_at.desc())
+        .first()
+    )
+
+
 def _resolve_backend_source(project_id: str, user_id: str, backend_run: AgentRun) -> dict:
-    """Backend source to deploy. Prefers the latest promoted (deploy-repaired) zip so
-    a re-deploy builds from the FIXED code; falls back to the generation run's zip."""
+    """Backend source to deploy.
+
+    Picks the NEWEST of: the deploy-repaired zip (a prior deploy's fix) and — when
+    ``CODE_DEPLOY_FROM_DEV`` is on — the newest ``code_backend_project_zip`` (which
+    includes a Dev Mode backend snapshot). This way the latest intent wins: a fresh
+    Dev Mode edit graduates to release, while a later re-deploy's repair still trumps
+    a stale snapshot. Falls back to the generation run's zip (legacy behaviour, and
+    the ONLY path when the flag is off)."""
     rep = _latest_repaired_artifact(project_id, user_id)
-    if rep:
-        files = _load_zip_artifact(rep)
+    candidates: list[AgentArtifact] = [a for a in (rep,) if a]
+    if _deploy_from_dev():
+        newest = _latest_backend_zip_artifact(project_id, user_id)
+        if newest:
+            candidates.append(newest)
+    for art in sorted(candidates, key=_artifact_sort_key, reverse=True):
+        files = _load_zip_artifact(art)
         if files:
             return files
     return _load_backend_source(backend_run)
+
+
+def _latest_frontend_zip_artifact(project_id: str, user_id: str) -> Optional[AgentArtifact]:
+    """The newest ``code_frontend_project_zip`` across ANY run — so a Dev Mode
+    frontend snapshot (published on a ``code_dev_turn`` run, source-only) competes
+    with the generation run's zip for what we deploy."""
+    return (
+        AgentArtifact.query.filter_by(
+            domain_ref_type="code_frontend_project_zip", domain_ref_id=project_id
+        )
+        .join(AgentRun, AgentArtifact.run_id == AgentRun.id)
+        .filter(AgentRun.user_id == user_id, AgentRun.status.in_(_BUILT))
+        .order_by(AgentArtifact.created_at.desc())
+        .first()
+    )
+
+
+def _latest_frontend_dist_cache(project_id: str, user_id: str) -> Optional[AgentArtifact]:
+    """The newest WARM-built dist cache (``code_frontend_dist_zip``) for a project.
+
+    Written by ``dev_service.build_dist_in_container`` right before a dev container is
+    torn down (warm node_modules → seconds). A deploy prefers this over a cold rebuild
+    when it is fresh (newer than the newest source snapshot)."""
+    return (
+        AgentArtifact.query.filter_by(
+            domain_ref_type="code_frontend_dist_zip", domain_ref_id=project_id
+        )
+        .join(AgentRun, AgentArtifact.run_id == AgentRun.id)
+        .filter(AgentRun.user_id == user_id, AgentRun.status.in_(_BUILT))
+        .order_by(AgentArtifact.created_at.desc())
+        .first()
+    )
+
+
+def _has_dev_frontend_edits(
+    project_id: str, user_id: str, frontend_run: Optional[AgentRun]
+) -> Optional[AgentArtifact]:
+    """The newest frontend source snapshot IFF it was tuned past generation.
+
+    Returns that artifact (a Dev Mode ``code_frontend_project_zip``) when the newest
+    snapshot is NOT the generation run's own zip — i.e. there is Dev Mode work to
+    graduate — else ``None`` (the generation dist is already correct)."""
+    newest = _latest_frontend_zip_artifact(project_id, user_id)
+    if not newest or (frontend_run and newest.run_id == frontend_run.id):
+        return None
+    return newest
+
+
+def _stage_dev_site(run_id: str, dist: dict) -> bool:
+    """Write a built dist ({rel: bytes}) under the deploy run's ``site`` dir."""
+    try:
+        site_dir = agent_run_dir(run_id) / "site"
+        site_dir.mkdir(parents=True, exist_ok=True)
+        for rel, content in dist.items():
+            target = site_dir / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content if isinstance(content, bytes) else str(content).encode("utf-8"))
+        return True
+    except Exception:  # noqa: BLE001
+        logger.warning("failed staging dev frontend dist under %s", run_id, exc_info=True)
+        return False
+
+
+def _harvest_dev_frontend_dist(
+    project: CodeProject, user_id: str, frontend_run: Optional[AgentRun],
+    phase: Callable[[str, str, dict], None],
+) -> None:
+    """Build the dist in the WARM dev container, cache it, then tear the container down.
+
+    This is what makes deploy near-instant: the frontend dev container's node_modules
+    is already installed, so a ``vite build`` here is seconds. The result is cached as
+    a ``code_frontend_dist_zip`` (freshness by ``created_at``) that
+    ``_maybe_build_dev_frontend_dist`` then serves directly — no cold rebuild. Runs as
+    an early deploy phase (NOT in the HTTP request) so it never blocks the deploy call.
+    Fully best-effort: on any failure the deploy just cold-builds later.
+    """
+    if not _deploy_from_dev():
+        return
+    from backend.models.code.fullstack import CodeDevSession, DevSessionStatus
+    from backend.services.code.dev_service import get_dev_service
+
+    session = (
+        CodeDevSession.query.filter_by(project_id=project.id, user_id=user_id, lane="frontend")
+        .filter(CodeDevSession.status.in_(list(DevSessionStatus.ACTIVE)))
+        .order_by(CodeDevSession.created_at.desc())
+        .first()
+    )
+    if not session:
+        return  # no live frontend dev container to harvest
+    dev = get_dev_service()
+    # Only bother building when there is Dev Mode work past generation.
+    if not _has_dev_frontend_edits(project.id, user_id, frontend_run):
+        _teardown_dev_session(dev, project.id, session)
+        return
+    try:
+        if dev.container_status(project.id).get("running"):
+            phase("frontend", "正在开发容器内构建发布版前端(热构建,秒级)…", {"stage": "dev_harvest"})
+            dist = dev.build_dist_in_container(project.id, base=f"/preview/{project.id}/")
+            if dist:
+                from backend.services.agent.workflows.code_dev_turn_workflow import (
+                    persist_dist_cache_standalone,
+                )
+
+                run_id = _latest_dev_turn_run_id(project.id, user_id)
+                if run_id and persist_dist_cache_standalone(run_id, project.id, dist):
+                    phase("frontend", f"发布版前端已在开发容器内构建并缓存({len(dist)} 个文件)。",
+                          {"stage": "dev_harvest", "files": len(dist), "cached": True})
+    except Exception:  # noqa: BLE001 — harvest must never sink a deploy
+        logger.warning("dev frontend dist harvest failed for %s", project.id, exc_info=True)
+    finally:
+        _teardown_dev_session(dev, project.id, session)
+
+
+def _latest_dev_turn_run_id(project_id: str, user_id: str) -> Optional[str]:
+    """The newest frontend dev-turn run (owner-scoped) to attach the dist cache to."""
+    run = (
+        AgentRun.query.filter_by(resource_id=project_id, user_id=user_id, workflow="code_dev_turn")
+        .order_by(AgentRun.created_at.desc())
+        .first()
+    )
+    return run.id if run else None
+
+
+def _teardown_dev_session(dev, project_id: str, session) -> None:
+    """Stop the dev container + mark the session stopped (deploy is the interruption)."""
+    from backend.models.code.fullstack import DevSessionStatus
+
+    try:
+        dev.stop_container(project_id)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        session.status = DevSessionStatus.STOPPED
+        session.stopped_at = datetime.utcnow()
+        db.session.commit()
+    except Exception:  # noqa: BLE001
+        db.session.rollback()
+
+
+def _maybe_build_dev_frontend_dist(
+    project: CodeProject,
+    user_id: str,
+    frontend_run: Optional[AgentRun],
+    run_id: Optional[str],
+    phase: Callable[[str, str, dict], None],
+) -> Optional[str]:
+    """Serve the frontend the user tuned in Dev Mode by staging its dist under the
+    deploy run's ``site`` dir.
+
+    Prefers the WARM dist cache built at container teardown (``code_frontend_dist_zip``)
+    — the instant path — and cold-builds only when no fresh cache exists. Returns the
+    deploy run id (now holding the dist) or ``None`` to keep serving the generation
+    dist. Fully fail-soft: any problem → ``None`` and the previous dist stays live.
+    """
+    if not _deploy_from_dev() or not run_id:
+        return None
+    newest = _has_dev_frontend_edits(project.id, user_id, frontend_run)
+    if not newest:
+        return None  # nothing tuned past generation → generation dist is correct
+
+    # Fast path: a warm dist cache at least as new as the source snapshot → serve it
+    # directly, no rebuild (this is the "秒级部署" the pre-teardown build buys us).
+    cache = _latest_frontend_dist_cache(project.id, user_id)
+    if cache and _artifact_sort_key(cache) >= _artifact_sort_key(newest):
+        dist = _load_zip_artifact(cache)
+        if dist and _stage_dev_site(run_id, dist):
+            phase("frontend", f"发布版前端命中开发容器热构建缓存,秒级发布({len(dist)} 个文件)。",
+                  {"stage": "dev_frontend", "files": len(dist), "cache_hit": True})
+            return run_id
+
+    # Cold fallback: rebuild the source snapshot in a throwaway container.
+    source = _load_zip_artifact(newest)
+    if not source:
+        return None
+    phase("frontend", "未命中热构建缓存,正在用最新代码构建发布版前端…", {"stage": "dev_frontend"})
+    try:
+        from backend.services.code import frontend_dist_builder
+
+        dist = frontend_dist_builder.build_dist(source, base=f"/preview/{project.id}/")
+    except Exception:  # noqa: BLE001 — never let the dev-dist build sink a deploy
+        logger.warning("dev frontend dist build raised for %s", project.id, exc_info=True)
+        dist = {}
+    if not dist:
+        phase("frontend", "开发模式前端构建未产出,发布将回退到上次构建版本。", {"stage": "dev_frontend", "degraded": True})
+        return None
+    if not _stage_dev_site(run_id, dist):
+        return None
+    phase("frontend", f"已用开发模式最新代码构建发布版前端({len(dist)} 个文件)。", {"stage": "dev_frontend", "files": len(dist)})
+    return run_id
 
 
 # --- frontend reference (read-only, for the comprehensive repair) ------------
@@ -651,6 +882,12 @@ def deploy(
         project.id, user_id, _MIDDLEWARE_WORKFLOW, "code_middleware_meta"
     )
 
+    # Dev Mode graduation, step 1 (warm build): while the frontend dev container is
+    # still alive, build its dist there (node_modules warm → seconds) and cache it,
+    # then tear it down. Makes the frontend staging below a cache hit — near-instant.
+    # Best-effort; runs in the deploy RUN (not the request) so it never blocks.
+    _harvest_dev_frontend_dist(project, user_id, frontend_run, phase)
+
     # Prefer the latest PROMOTED (deploy-repaired) backend source so a re-deploy
     # builds from the fixed code; fall back to the backend-generation run's zip.
     source = _resolve_backend_source(project.id, user_id, backend_run)
@@ -661,6 +898,12 @@ def deploy(
     dep.backend_run_id = backend_run.id
     dep.frontend_run_id = frontend_run.id if frontend_run else None
     dep.middleware_run_id = middleware_run.id if middleware_run else None
+    # Graduate Dev Mode frontend edits: if the newest frontend source snapshot is
+    # tuned past the generation build, build it into a dist under this deploy run and
+    # point the preview at it. Best-effort — falls back to the generation dist.
+    site_run_id = _maybe_build_dev_frontend_dist(project, user_id, frontend_run, run_id, phase)
+    if site_run_id:
+        dep.frontend_site_run_id = site_run_id
     container = _container_name(project.id)
     image_tag = _image_tag(project.id)
     dep.container_name = container

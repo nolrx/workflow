@@ -34,7 +34,9 @@ class CodeGenerationService:
         return prompt_store.get(f"code/{name}")
 
     def _generate_text(self, prompt: str, fallback: str, on_model_call=None) -> str:
-        provider = get_text_provider()
+        # Document synthesis (requirements / flow / documents / style) is
+        # reasoning-heavy → route to the reasoning model tier (see text_role_config).
+        provider = get_text_provider(role="reasoning")
         provider_name = getattr(provider, "provider_name", None)
         model_name = getattr(provider, "model", None)
         if not provider or not provider.is_configured():
@@ -86,7 +88,7 @@ class CodeGenerationService:
         model_response stay consistent. Falls back to local text when the
         provider is missing or streaming fails midway.
         """
-        provider = get_text_provider()
+        provider = get_text_provider(role="reasoning")
         provider_name = getattr(provider, "provider_name", None)
         model_name = getattr(provider, "model", None)
         if not provider or not provider.is_configured():

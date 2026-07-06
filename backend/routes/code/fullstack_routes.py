@@ -238,6 +238,47 @@ def start_fullstack(project_id: str):
     )
 
 
+def _stop_dev_sessions(project_id: str, user_id: str) -> None:
+    """Release BACKEND dev resources before a production deploy (best-effort).
+
+    Deploy is the explicit interruption point ("除非用户明确指明部署,否则不得中断").
+    The FRONTEND dev container is deliberately LEFT running here: the deploy run
+    harvests its warm dist (node_modules already installed → a seconds-long build,
+    cached for a near-instant frontend stage) and stops it itself
+    (``deploy_service._harvest_dev_frontend_dist``). Stopping it in this HTTP request
+    would both block the response on a build and force a cold rebuild. So here we only
+    tear down the backend dev container (nothing to harvest — its source is already
+    snapshotted per-turn) and mark backend sessions stopped. Never fails the deploy."""
+    try:
+        from datetime import datetime
+
+        from backend.models.code.fullstack import CodeDevSession, DevSessionStatus
+
+        sessions = (
+            CodeDevSession.query.filter_by(project_id=project_id, user_id=user_id, lane="backend")
+            .filter(CodeDevSession.status.in_(list(DevSessionStatus.ACTIVE)))
+            .all()
+        )
+        if not sessions:
+            return
+        try:
+            from backend.services.code.dev_backend_service import get_dev_backend_service
+
+            get_dev_backend_service().stop_container(project_id)
+        except Exception:  # noqa: BLE001
+            pass
+        for s in sessions:
+            s.status = DevSessionStatus.STOPPED
+            s.stopped_at = datetime.utcnow()
+        db.session.commit()
+    except Exception:  # noqa: BLE001 — never let dev cleanup break a deploy
+        logger.warning("failed to stop dev sessions before deploy for %s", project_id, exc_info=True)
+        try:
+            db.session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 @fullstack_bp.route("/projects/<project_id>/deploy", methods=["POST"])
 @jwt_required()
 def start_deploy(project_id: str):
@@ -301,6 +342,10 @@ def start_deploy(project_id: str):
             {"run_id": in_flight.id, "stream_url": f"/api/agent/runs/{in_flight.id}/stream"},
             "部署已在进行中",
         )
+
+    # Deploy is the explicit interruption point for Dev Mode — stop the dev
+    # container before bringing up the production deployment.
+    _stop_dev_sessions(project_id, user_id)
 
     run = _start_run(user_id, project.team_id, "code_fullstack_deploy", project_id, {})
     if run is None:

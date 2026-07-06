@@ -3,6 +3,7 @@ Credit system models
 """
 import uuid
 from datetime import datetime
+
 from backend.extensions import db
 
 

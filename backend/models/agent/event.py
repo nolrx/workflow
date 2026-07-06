@@ -41,6 +41,14 @@ class AgentEventType:
     # GitHub auto-sync lifecycle (emitted at the tail of a completed code run).
     # payload.status is one of pending | success | failed.
     GITHUB_SYNC = "github_sync"
+    # Dev Mode (交互式开发模式) lifecycle. CHECKLIST_UPDATED carries the current
+    # functional checklist board (payload.board) so the right-pane progress window
+    # updates live; DEV_PREVIEW_READY signals the dev server is serving (payload.url)
+    # so the iframe can (re)load; DEV_CONTAINER_HEALTH reports container liveness /
+    # self-heal (payload.status). Emitted by the code_dev_turn workflow / dev_service.
+    CHECKLIST_UPDATED = "checklist_updated"
+    DEV_PREVIEW_READY = "dev_preview_ready"
+    DEV_CONTAINER_HEALTH = "dev_container_health"
 
 
 class AgentEventLevel:

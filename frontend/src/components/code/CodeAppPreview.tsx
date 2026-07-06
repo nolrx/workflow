@@ -19,9 +19,9 @@
  *   <CodeAppPreview />
  */
 import { useEffect, useMemo, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 import {
-  Bot,
   Check,
   Copy,
   Download,
@@ -32,6 +32,7 @@ import {
   Loader2,
   Lock,
   RefreshCw,
+  Terminal,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -138,9 +139,11 @@ export function CodeAppPreview() {
 
   const project = useCodeStore((state) => state.project)
   const updateProjectDraft = useCodeStore((state) => state.updateProjectDraft)
+  const navigate = useNavigate()
   const run = useAgentStore((state) => state.run)
   const isStreaming = useAgentStore((state) => state.isStreaming)
-  const startRun = useAgentStore((state) => state.startRun)
+  // 旧一次性生成用的 startRun,现随 handleGenerateOneShot 一并注释保留。
+  // const startRun = useAgentStore((state) => state.startRun)
 
   // Built frontend versions (runs) for this project; the selected version drives
   // the preview / download. Selection is DERIVED (see below) so we never sync
@@ -249,24 +252,33 @@ export function CodeAppPreview() {
     }
   }, [selectedRunId])
 
-  const handleGenerate = async () => {
+  // 「生成项目/重新生成项目」现在接入 Dev Mode 的 Sprint 增量开发流程:进入开发模式并
+  // 自动起草任务草案(planner),用户确认后由 Sprint 逐任务构建,取代旧的一次性整包生成。
+  const handleGenerate = () => {
     if (!project?.id) return
-    try {
-      await startRun({
-        domain: "code",
-        workflow: FRONTEND_WORKFLOW,
-        resource_type: "code_project",
-        resource_id: project.id,
-      })
-      setPickedRunId(null) // follow the newest output once the new run completes
-      toast.success(t("toast.started"))
-    } catch (err) {
-      const message =
-        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
-        t("toast.startFailed")
-      toast.error(message)
-    }
+    navigate(`/code/${project.id}/dev?start=plan`)
   }
+
+  // 旧的一次性前端工程生成(code_frontend_project_generation 整包重建)——先注释保留,
+  // 待需要时可恢复为独立入口。
+  // const handleGenerateOneShot = async () => {
+  //   if (!project?.id) return
+  //   try {
+  //     await startRun({
+  //       domain: "code",
+  //       workflow: FRONTEND_WORKFLOW,
+  //       resource_type: "code_project",
+  //       resource_id: project.id,
+  //     })
+  //     setPickedRunId(null) // follow the newest output once the new run completes
+  //     toast.success(t("toast.started"))
+  //   } catch (err) {
+  //     const message =
+  //       (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+  //       t("toast.startFailed")
+  //     toast.error(message)
+  //   }
+  // }
 
   const handleDownload = async () => {
     if (!builtProject?.zipArtifactId) return
@@ -320,7 +332,6 @@ export function CodeAppPreview() {
     else openRunSite(builtProject.runId)
   }
 
-  const canGenerate = !!project && !isStreaming
   const notConfirmed = project && project.status !== "ui_confirmed"
 
   return (
@@ -396,13 +407,12 @@ export function CodeAppPreview() {
               {t("download")}
             </Button>
           )}
-          <Button size="sm" onClick={handleGenerate} disabled={!canGenerate}>
-            {frontendRunActive ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : builtProject ? (
+          {/* 进入 Dev Mode 的 Sprint 增量开发流程(取代旧的一次性整包生成)。 */}
+          <Button size="sm" onClick={handleGenerate} disabled={!project}>
+            {builtProject ? (
               <RefreshCw className="mr-2 h-4 w-4" />
             ) : (
-              <Bot className="mr-2 h-4 w-4" />
+              <Terminal className="mr-2 h-4 w-4" />
             )}
             {builtProject ? t("regenerate") : t("generate")}
           </Button>

@@ -18,9 +18,9 @@ import {
   Power,
   RefreshCw,
   Search,
+  Terminal,
   User as UserIcon,
   Users,
-  Wand2,
 } from "lucide-react"
 import { AppLayout } from "@/components/layout/AppLayout"
 import { Card } from "@/components/ui/card"
@@ -281,7 +281,7 @@ export function AppSpace() {
             stoppingId={stoppingId}
             onOpen={openDeployedApp}
             onDetail={(id) => navigate(`/apps/${id}`)}
-            onIterate={(id) => navigate(`/apps/${id}/iterate`)}
+            onDevMode={(id) => navigate(`/code/${id}/dev`)}
             onRedeploy={handleRedeploy}
             onReplay={handleReplay}
             onStop={handleStop}
@@ -297,7 +297,7 @@ export function AppSpace() {
                 stopping={stoppingId === app.project_id}
                 onOpen={() => openDeployedApp(app.project_id)}
                 onDetail={() => navigate(`/apps/${app.project_id}`)}
-                onIterate={() => navigate(`/apps/${app.project_id}/iterate`)}
+                onDevMode={() => navigate(`/code/${app.project_id}/dev`)}
                 onRedeploy={() => handleRedeploy(app.project_id)}
                 onReplay={() => handleReplay(app.project_id)}
                 onStop={() => handleStop(app.project_id)}
@@ -329,7 +329,7 @@ function AppCard({
   stopping,
   onOpen,
   onDetail,
-  onIterate,
+  onDevMode,
   onRedeploy,
   onReplay,
   onStop,
@@ -340,7 +340,7 @@ function AppCard({
   stopping: boolean
   onOpen: () => void
   onDetail: () => void
-  onIterate: () => void
+  onDevMode: () => void
   onRedeploy: () => void
   onReplay: () => void
   onStop: () => void
@@ -388,9 +388,9 @@ function AppCard({
           <Eye className="mr-1 h-3.5 w-3.5" />
           {t("actions.detail")}
         </Button>
-        <Button size="sm" variant="outline" onClick={onIterate}>
-          <Wand2 className="mr-1 h-3.5 w-3.5" />
-          {t("actions.iterate")}
+        <Button size="sm" variant="outline" onClick={onDevMode}>
+          <Terminal className="mr-1 h-3.5 w-3.5" />
+          {t("actions.devMode")}
         </Button>
         <Button size="sm" variant="outline" onClick={onRedeploy} disabled={redeploying}>
           {redeploying ? (
@@ -425,7 +425,7 @@ function AppTable({
   stoppingId,
   onOpen,
   onDetail,
-  onIterate,
+  onDevMode,
   onRedeploy,
   onReplay,
   onStop,
@@ -435,7 +435,7 @@ function AppTable({
   stoppingId: string | null
   onOpen: (id: string) => void
   onDetail: (id: string) => void
-  onIterate: (id: string) => void
+  onDevMode: (id: string) => void
   onRedeploy: (id: string) => void
   onReplay: (id: string) => void
   onStop: (id: string) => void
@@ -482,8 +482,8 @@ function AppTable({
                   <Button size="icon" variant="ghost" title={t("actions.detail")} onClick={() => onDetail(app.project_id)}>
                     <Eye className="h-3.5 w-3.5" />
                   </Button>
-                  <Button size="icon" variant="ghost" title={t("actions.iterate")} onClick={() => onIterate(app.project_id)}>
-                    <Wand2 className="h-3.5 w-3.5" />
+                  <Button size="icon" variant="ghost" title={t("actions.devMode")} onClick={() => onDevMode(app.project_id)}>
+                    <Terminal className="h-3.5 w-3.5" />
                   </Button>
                   <Button
                     size="icon"

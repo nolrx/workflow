@@ -113,6 +113,11 @@ RESUME_FROM_SCRATCH = {
     # The iteration analysis is a single cheap planning pass with no external side
     # effects — a restart safely re-runs it from the top.
     "code_app_iteration_analysis",
+    # The sprint scheduler is stateless by design (DB task board = single source
+    # of truth): re-entering from the top reconciles interrupted claims and
+    # simply continues scheduling. Its in-flight child turn is NOT resumable and
+    # is failed by this same pass; the sprint's reconcile then retries the task.
+    "code_dev_sprint",
 }
 _RESUMABLE = RESUME_AS_RETRY | RESUME_FROM_SCRATCH
 # Everything else (notably ``code_fullstack_deploy``) is NOT auto-resumed: a crash
@@ -296,6 +301,19 @@ class AgentRuntime:
         """Submit a queued run for background execution."""
         self.executor.submit(self._execute, app, run_id)
 
+    def run_sync(self, app, run_id: str) -> None:
+        """Execute a run synchronously ON THE CALLER'S THREAD.
+
+        Used by orchestrating workflows (the dev sprint scheduler) to drive child
+        turn runs serially without occupying a second executor slot or polling.
+        The child gets the full ``_execute`` machinery (recorder, SSE, billing,
+        refund, autosync). Caveat for callers: the child's ``finally`` does
+        ``db.session.remove()``, so every ORM instance the caller held becomes
+        detached — re-fetch after this returns, and never call this inside an
+        open ``recorder.step(...)`` context.
+        """
+        self._execute(app, run_id)
+
     def _execute(self, app, run_id: str) -> None:
         with app.app_context():
             recorder = RunRecorder(run_id, event_bus)
@@ -467,6 +485,21 @@ def _register_builtin_workflows() -> None:
     from backend.services.agent.workflows.code_canvas_workflow import (
         run_code_canvas_generation,
     )
+    from backend.services.agent.workflows.code_dev_backend_turn_workflow import (
+        run_code_dev_backend_turn_workflow,
+    )
+    from backend.services.agent.workflows.code_dev_backlog_planner_workflow import (
+        run_code_dev_backlog_planner_workflow,
+    )
+    from backend.services.agent.workflows.code_dev_parallel_turn_workflow import (
+        run_code_dev_parallel_turn_workflow,
+    )
+    from backend.services.agent.workflows.code_dev_sprint_workflow import (
+        run_code_dev_sprint_workflow,
+    )
+    from backend.services.agent.workflows.code_dev_turn_workflow import (
+        run_code_dev_turn_workflow,
+    )
     from backend.services.agent.workflows.code_figma_slice_workflow import (
         run_code_figma_slice_workflow,
     )
@@ -486,6 +519,19 @@ def _register_builtin_workflows() -> None:
         "code_app_iteration_analysis", run_code_app_iteration_analysis_workflow
     )
     register_workflow("code_frontend_project_generation", run_code_frontend_project_workflow)
+    # Dev Mode: one interactive development turn (bounded run against a long-running
+    # dev container). The container lifecycle lives in dev_service, decoupled from the run.
+    register_workflow("code_dev_turn", run_code_dev_turn_workflow)
+    # Backend dev turn: the backend-lane twin (long-running dev-be container, native
+    # hot-reload, contract-driven integration test).
+    register_workflow("code_dev_backend_turn", run_code_dev_backend_turn_workflow)
+    # Parallel multi-feature dev turn (worktree-isolated fan-out + integration barrier).
+    register_workflow("code_dev_parallel_turn", run_code_dev_parallel_turn_workflow)
+    # Sprint: the serial task scheduler that feeds the backlog to dev turns one
+    # task at a time (DB task state machine = single source of truth).
+    register_workflow("code_dev_sprint", run_code_dev_sprint_workflow)
+    # Backlog planner (P1): docs+board+goal -> user-confirmable task draft.
+    register_workflow("code_dev_backlog_planner", run_code_dev_backlog_planner_workflow)
     register_workflow("code_canvas_generation", run_code_canvas_generation)
     register_workflow("code_figma_slice_generation", run_code_figma_slice_workflow)
     # Full-stack pipeline: backend + middleware generation (concurrent with the

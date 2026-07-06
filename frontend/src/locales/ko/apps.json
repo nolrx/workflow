@@ -60,6 +60,7 @@
     "open": "앱 열기",
     "detail": "상세",
     "iterate": "2차 개발",
+    "devMode": "개발 모드",
     "redeploy": "재배포",
     "replay": "실행 기록",
     "openProject": "원본 프로젝트",

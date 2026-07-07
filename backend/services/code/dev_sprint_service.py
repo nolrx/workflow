@@ -59,6 +59,28 @@ def sprint_stall_limit() -> int:
         return 4
 
 
+def sprint_parallel_enabled() -> bool:
+    """P3: run each scheduling round over a BATCH of independent ready tasks (via the
+    parallel turn) instead of one task at a time. Default OFF → the serial claim path
+    below is byte-for-byte unchanged."""
+    return os.getenv("CODE_DEV_SPRINT_PARALLEL", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def sprint_batch_size() -> int:
+    """Max tasks claimed per parallel round. Bounded by the parallel turn's own lane
+    cap (``DEV_MODE_MAX_PARALLEL``) so the scheduler never claims a task the turn would
+    then silently drop."""
+    try:
+        want = max(1, int(os.getenv("CODE_DEV_SPRINT_BATCH", "4")))
+    except (TypeError, ValueError):
+        want = 4
+    try:
+        lane_cap = max(1, int(os.getenv("DEV_MODE_MAX_PARALLEL", "4")))
+    except (TypeError, ValueError):
+        lane_cap = 4
+    return min(want, lane_cap)
+
+
 def max_retries_of(task: CodeDevTask) -> int:
     return task.max_retries if isinstance(task.max_retries, int) else task_default_max_retries()
 
@@ -255,6 +277,49 @@ def claim_next_task(session_id: str, session_lane: str = "frontend") -> CodeDevT
     return None
 
 
+def claim_ready_batch(
+    session_id: str, session_lane: str = "frontend", k: int = 1
+) -> list[CodeDevTask]:
+    """Claim up to ``k`` mutually-independent ready tasks (pending -> queued) for one
+    PARALLEL scheduling round (P3).
+
+    Selection rules (conflict heuristics — the parallel turn's integration barrier is
+    the real correctness backstop for any file overlap this misses):
+      - never two tasks sharing a ``parent_feature_id`` (same FR ⇒ likely same files),
+      - ASSET tasks run solo (they share a one-shot codex lane + output dirs) — an asset
+        task is only ever returned as a batch of exactly 1.
+
+    Each claim uses the same atomic ``mark_queued`` guard as ``claim_next_task``: losing
+    a race on a candidate just skips it. Attribute snapshots are taken up front because
+    ``mark_queued`` commits (and expiring the session mid-loop would reload rows).
+    """
+    k = max(1, int(k))
+    # (id, category, conflict-parent) snapshot — don't touch live ORM state after a claim.
+    plan = [
+        (c.id, c.category, c.parent_feature_id or c.feature_id or c.id)
+        for c in ready_tasks(session_id, session_lane)
+    ]
+    claimed_ids: list[str] = []
+    used_parents: set[str] = set()
+    for tid, category, parent in plan:
+        if len(claimed_ids) >= k:
+            break
+        if category == "asset":
+            if claimed_ids:
+                continue  # a non-asset batch is forming → asset waits for its own round
+            if mark_queued(tid):
+                claimed_ids.append(tid)
+                break  # asset runs solo
+            continue  # lost the race on this asset — try the next candidate
+        if parent in used_parents:
+            continue
+        if mark_queued(tid):
+            used_parents.add(parent)
+            claimed_ids.append(tid)
+    db.session.expire_all()
+    return [t for t in (db.session.get(CodeDevTask, tid) for tid in claimed_ids) if t is not None]
+
+
 def reconcile_stale_tasks(session_id: str) -> list[str]:
     """Heal tasks stranded in an ACTIVE state by a dead turn (service restart /
     crashed run): retry them (within budget) or fail them. Returns healed ids."""
@@ -340,7 +405,7 @@ def features_from_dev_tasks(
 
 def apply_verify_outcome(
     task: CodeDevTask, run_id: str, features: list[dict], verification_blocking: bool,
-    summary: str = "",
+    summary: str = "", *, shared_blocking: bool = False,
 ) -> dict:
     """Fold one turn's verification onto the task state machine.
 
@@ -348,6 +413,14 @@ def apply_verify_outcome(
     blocking (house rules / runtime / explicit reviewer blockers). Otherwise the
     task goes back to pending (retry budget left) or blocked. Returns
     ``{status, passed, failed_criteria, regressed, note}``.
+
+    ``shared_blocking`` (P3 parallel only): the ``verification_blocking`` signal came
+    from a BATCH-LEVEL objective check on the MERGED tree (house-rule / runtime smoke
+    over everyone's changes), not from this task. When set, a task whose OWN acceptance
+    is clean and which fails ONLY because of that shared blocker is re-queued WITHOUT
+    burning its retry budget — a co-batched task breaking the merged tree must not
+    erode (and eventually block) an innocent task. Serial callers leave it False, so
+    their judgement is byte-for-byte unchanged.
     """
     ac_ids = ac_ids_for(task)
     ac_items = [f for f in features if f.get("id") in ac_ids]
@@ -356,7 +429,8 @@ def apply_verify_outcome(
         str(f.get("id")) for f in features
         if f.get("id") not in ac_ids and not f.get("passes")
     ]
-    passed = not failed_ac and not regressed and not verification_blocking and bool(ac_items)
+    own_clean = not failed_ac and not regressed and bool(ac_items)
+    passed = own_clean and not verification_blocking
 
     if passed:
         note = f"验收通过({len(ac_items)}/{len(ac_items)} 项标准)。{summary}".strip()
@@ -367,6 +441,22 @@ def apply_verify_outcome(
             origin_turn_run_id=run_id, note=note[:1000], blocked_reason=None,
         )
         return {"status": DevTaskStatus.DONE, "passed": True,
+                "failed_criteria": [], "regressed": [], "note": note}
+
+    if shared_blocking and own_clean and verification_blocking:
+        # Innocent in a poisoned batch: its own AC all pass; only the shared merged-tree
+        # blocker fails it. Re-queue with NO retry charged so a sibling's breakage can't
+        # eventually block it — next round (offender blocked/removed) it can close.
+        note = (
+            f"批量合并树存在共享阻断({summary});本任务自身验收已通过,已无损重排等待修复"
+            if summary else "批量合并树存在共享阻断;本任务自身验收已通过,已无损重排等待修复"
+        )
+        _transition(
+            task.id,
+            {DevTaskStatus.VERIFYING, DevTaskStatus.IN_PROGRESS, DevTaskStatus.QUEUED},
+            DevTaskStatus.PENDING, note=note[:1000],
+        )
+        return {"status": DevTaskStatus.PENDING, "passed": False, "shared_block": True,
                 "failed_criteria": [], "regressed": [], "note": note}
 
     reasons: list[str] = []
@@ -405,6 +495,35 @@ def apply_verify_outcome(
     return {"status": DevTaskStatus.BLOCKED, "passed": False,
             "failed_criteria": [f["id"] for f in failed_ac],
             "regressed": regressed, "note": note}
+
+
+def apply_batch_verify_outcomes(
+    tasks: list[CodeDevTask], run_id: str, features: list[dict],
+    verification_blocking: bool, summary: str = "",
+) -> list[dict]:
+    """Fold ONE parallel batch turn's MERGED review onto EACH task's state machine (P3).
+
+    The single review scored the union of every task's AC; each task is judged only on
+    its own ``ac_ids_for``. Crucially, the SIBLING tasks' AC are masked out of each task's
+    feature list so a sibling's failed AC is never mis-counted as THIS task's regression.
+    ``verification_blocking`` (house-rule / runtime / score) is batch-level — a broken
+    merged tree fails every task, BUT a task whose own AC are all clean is re-queued
+    without burning its retry budget (``shared_blocking=True``) so one bad lane can't
+    block the innocents. Returns per-task outcome dicts (order matches ``tasks``), each =
+    ``apply_verify_outcome``'s result plus ``task_id``.
+    """
+    outcomes: list[dict] = []
+    for t in tasks:
+        sibling_ac: set = set()
+        for other in tasks:
+            if other.id != t.id:
+                sibling_ac |= ac_ids_for(other)
+        feats_for_t = [f for f in features if f.get("id") not in sibling_ac]
+        outcome = apply_verify_outcome(
+            t, run_id, feats_for_t, verification_blocking, summary, shared_blocking=True,
+        )
+        outcomes.append({"task_id": t.id, **outcome})
+    return outcomes
 
 
 # --- per-turn task brief --------------------------------------------------------

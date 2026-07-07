@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import zipfile
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from sqlalchemy import func
@@ -61,6 +62,7 @@ from backend.services.code import (
 )
 from backend.services.code.dev_service import get_dev_service
 from backend.services.code.frontend_project_service import get_frontend_project_service
+from backend.services.code.template_service import TemplateSelection, get_code_template_service
 from backend.services.credit_service import charge, refund_credits
 
 logger = logging.getLogger(__name__)
@@ -70,6 +72,8 @@ logger = logging.getLogger(__name__)
 _LEDGER_RENDER_CHARS = int(os.getenv("DEV_MODE_LEDGER_CHARS", "4000"))
 # One optional edit-mode repair round when the turn leaves blocking defects.
 _DEV_REPAIR = os.getenv("CODE_DEV_TURN_REPAIR", "1") not in ("0", "false", "False", "")
+_MAX_DOC_CHARS = 1500
+_MAX_DIGEST_CHARS = 12_000
 
 # Files whose change requires a dev-server RESTART (a dev server reads these at
 # startup, not per-request; dependency changes also need npm install). Source edits
@@ -159,6 +163,13 @@ _MINIMAL_SCAFFOLD: dict[str, bytes] = {
         "}\n"
     ).encode("utf-8"),
 }
+
+
+@dataclass
+class DevSourceResolution:
+    files: dict[str, bytes]
+    kind: str
+    template_selection: TemplateSelection | None = None
 
 
 # --- checklist helpers (persistent per-session board) ------------------------
@@ -406,6 +417,25 @@ def is_runnable_vite(src: dict) -> bool:
     return bool(has_vite and has_source)
 
 
+def _documents_digest(project: CodeProject) -> str:
+    parts = []
+    for document in project.documents.all():
+        body = (document.content or "")[:_MAX_DOC_CHARS]
+        parts.append(f"## {document.title} ({document.document_type})\n{body}")
+    return "\n\n".join(parts)[:_MAX_DIGEST_CHARS]
+
+
+def _template_context(project: CodeProject, documents_digest: str, contract_block: str) -> dict:
+    return {
+        "requirement": project.requirement_input or "",
+        "requirements_doc": project.requirements_doc or "",
+        "development_flow": project.development_flow or "",
+        "documents_digest": documents_digest or "",
+        "style_prompt": project.style_prompt or "",
+        "contract_block": contract_block or "",
+    }
+
+
 def _resolve_source(project_id: str) -> dict:
     """The frontend source to seed the dev container with: the last built project when
     it's a runnable Vite app, else the minimal scaffold so the dev server ALWAYS runs
@@ -419,6 +449,97 @@ def _resolve_source(project_id: str) -> dict:
     if is_runnable_vite(src):
         return src
     return dict(_MINIMAL_SCAFFOLD)
+
+
+def _resolve_source_for_project(
+    project: CodeProject, contract_block: str = ""
+) -> DevSourceResolution:
+    """Resolve the dev-container seed for a project-aware bootstrap.
+
+    Existing runnable source always wins. A brand-new frontend dev session then
+    starts from the selected Code template when it is compatible with the Vite
+    preview container; only template failures/non-runnable templates fall back to
+    the tiny built-in scaffold.
+    """
+    from backend.services.agent.workflows._iteration_support import load_prior_source
+
+    try:
+        src = load_prior_source(project.id, "frontend")
+    except Exception:  # noqa: BLE001
+        src = {}
+    if is_runnable_vite(src):
+        return DevSourceResolution(files=src, kind="prior")
+
+    try:
+        selection = get_code_template_service().select(
+            lane="frontend",
+            **_template_context(project, _documents_digest(project), contract_block),
+        )
+    except Exception as exc:  # noqa: BLE001 - template selection must never block Dev Mode
+        selection = TemplateSelection(
+            lane="frontend",
+            selected=False,
+            warning=f"template selection failed: {str(exc)[:260]}",
+        )
+
+    if selection.selected:
+        files = dict(selection.files or {})
+        if is_runnable_vite(files):
+            return DevSourceResolution(files=files, kind="template", template_selection=selection)
+        selection = replace(
+            selection,
+            selected=False,
+            files={},
+            warning=(
+                f"template {selection.template_path or selection.template_name or '(unknown)'} "
+                "is not runnable by the current Vite dev preview; using built-in scaffold"
+            ),
+        )
+
+    return DevSourceResolution(
+        files=dict(_MINIMAL_SCAFFOLD),
+        kind="minimal",
+        template_selection=selection if selection.warning else None,
+    )
+
+
+def _emit_template_resolution(recorder, step_id: str, resolution: DevSourceResolution) -> None:
+    selection = resolution.template_selection
+    if not selection:
+        return
+    if resolution.kind == "template":
+        recorder.emit(
+            AgentEventType.PROGRESS,
+            step_id=step_id,
+            message=(
+                f"已选择前端模板 {selection.template_path}，"
+                f"开发容器将基于该脚手架启动（{len(selection.files)} 个文件）"
+            ),
+            payload=selection.event_payload(),
+        )
+        return
+    if selection.warning:
+        recorder.emit(
+            AgentEventType.WARNING,
+            level=AgentEventLevel.WARNING,
+            step_id=step_id,
+            message=f"前端模板不可用，改用内置开发骨架：{selection.warning}",
+            payload=selection.event_payload(),
+        )
+
+
+def _load_contract_block(project_id: str) -> str:
+    try:
+        from backend.services.code.fullstack import contract_service
+
+        row = contract_service.get_ledger(project_id)
+        if row and row.contract_status == "ready":
+            return contract_service.render_contract_for_prompt(
+                row.get_api_contract(), include_db_schema=False
+            )
+    except Exception:  # noqa: BLE001
+        return ""
+    return ""
 
 
 def _source_digest(files: dict) -> str:
@@ -565,7 +686,9 @@ def persist_dist_cache_standalone(run_id: str, project_id: str, dist_files: dict
         return False
 
 
-def _build_turn_prompt(project, injected, contract_block, instruction, features, is_bootstrap):
+def _build_turn_prompt(
+    project, injected, contract_block, instruction, features, is_bootstrap, template_hint: str = ""
+):
     """Assemble the edit-mode instruction fed to the in-container claude.
 
     Grounds the agent in the project's documents + ledger + contract + the checklist
@@ -577,11 +700,19 @@ def _build_turn_prompt(project, injected, contract_block, instruction, features,
         "不需要完整实现所有功能(功能将在后续对话回合中逐步实现)。\n"
         if is_bootstrap else ""
     )
+    template_note = (
+        "本次开发容器已预置从 Code 模板仓库选择的前端脚手架。请先阅读并复用现有结构"
+        "(package.json、vite 配置、src 目录、路由/组件/API client),在此基础上补齐当前项目骨架;"
+        "不要从空目录重建,不要删除模板已有的通用工程能力。\n"
+        f"模板选择信息:\n{template_hint}\n"
+        if is_bootstrap and template_hint else ""
+    )
     return "\n\n".join(p for p in [
         "# 你在一个长运行的开发容器里,基于现有工程做增量修改(edit-mode)。"
         "Vite dev server 正在运行,你的改动会被热重载(HMR)实时预览。"
         "严格遵守下述既定文档与共识账本,不要跳出既定框架;除非用户明确提出新需求。",
         scaffold_note,
+        template_note,
         f"# 需求文档(节选)\n{(project.requirements_doc or '')[:4000]}",
         f"# 开发流程(节选)\n{(project.development_flow or '')[:2000]}" if project.development_flow else "",
         f"# 风格文档(节选)\n{(project.style_prompt or '')[:2000]}" if project.style_prompt else "",
@@ -640,6 +771,7 @@ def run_code_dev_turn_workflow(ctx, recorder) -> dict:
     injected = ""
     contract_block = ""
     features: list[dict] = []
+    seed_template_hint = ""
 
     # --- Step 1: prepare -----------------------------------------------------
     with recorder.step(
@@ -697,8 +829,12 @@ def run_code_dev_turn_workflow(ctx, recorder) -> dict:
                 AgentEventType.PROGRESS, step_id=step.id,
                 message="正在启动长运行开发容器(npm install + npm run dev)…",
             )
-            source = _resolve_source(project_id)
-            ok, err, info = dev.start_container(project_id, source)
+            contract_block = _load_contract_block(project_id)
+            source_resolution = _resolve_source_for_project(project, contract_block)
+            _emit_template_resolution(recorder, step.id, source_resolution)
+            if source_resolution.kind == "template" and source_resolution.template_selection:
+                seed_template_hint = source_resolution.template_selection.prompt_hint()
+            ok, err, info = dev.start_container(project_id, source_resolution.files)
             if not ok:
                 session.status = DevSessionStatus.FAILED
                 session.error_message = err
@@ -779,12 +915,8 @@ def run_code_dev_turn_workflow(ctx, recorder) -> dict:
                         payload={"outputs": [o["path"] for o in outputs]},
                     )
             try:
-                from backend.services.code.fullstack import contract_service
-                _row = contract_service.get_ledger(project_id)
-                if _row and _row.contract_status == "ready":
-                    contract_block = contract_service.render_contract_for_prompt(
-                        _row.get_api_contract(), include_db_schema=False
-                    )
+                if not contract_block:
+                    contract_block = _load_contract_block(project_id)
             except Exception:  # noqa: BLE001
                 contract_block = ""
 
@@ -835,7 +967,8 @@ def run_code_dev_turn_workflow(ctx, recorder) -> dict:
                 dev_sprint_service.ac_feature_items(focus_task) if focus_task else features
             )
             prompt = _build_turn_prompt(
-                project, injected, contract_block, instruction, prompt_features, is_bootstrap
+                project, injected, contract_block, instruction, prompt_features, is_bootstrap,
+                seed_template_hint,
             )
             res = dev.exec_turn(project_id, prompt, on_event=on_event, is_cancelled=ctx.is_cancelled)
             if res.cancelled:

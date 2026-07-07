@@ -23,6 +23,13 @@
 # both CLIs need a writable HOME for their config/session dirs.
 FROM node:22
 
+# git is required by Dev Mode parallel worktrees and by agent CLIs that expect a
+# working tree. Keep it in the frontend runtime image, not only the backend agent.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && git --version
+
 # Pre-bake both agent CLIs so each run starts fast (no per-run global install).
 RUN npm install -g @anthropic-ai/claude-code @openai/codex \
     && claude --version \

@@ -9,6 +9,7 @@ import {
   X,
 } from "lucide-react"
 import type { AgentStepStatus } from "@/api/agent"
+import { TemplateTraceList } from "@/components/agent/TemplateTrace"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { cn } from "@/lib/utils"
@@ -44,6 +45,7 @@ interface CodeAgentTimelineProps {
 export function CodeAgentTimeline({ onSelectTab }: CodeAgentTimelineProps) {
   const { t } = useTranslation("agent")
   const run = useAgentStore((state) => state.run)
+  const events = useAgentStore((state) => state.events)
   const isStreaming = useAgentStore((state) => state.isStreaming)
   const selectedStepId = useAgentStore((state) => state.selectedStepId)
   const selectStep = useAgentStore((state) => state.selectStep)
@@ -73,6 +75,8 @@ export function CodeAgentTimeline({ onSelectTab }: CodeAgentTimelineProps) {
           {progress.completed_steps}/{progress.total_steps}
         </span>
       </div>
+
+      <TemplateTraceList events={events} compact />
 
       <div className="space-y-1">
         {steps.map((step) => {

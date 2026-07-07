@@ -244,11 +244,16 @@ def test_dev_parallel_turn_registered(app):
 class _FakeDev:
     """A docker-free stand-in for DevService that records orchestration calls."""
 
-    def __init__(self, *, git=True, merge_ok=True):
+    def __init__(self, *, git=True, merge_ok=True, smoke=None):
         self._git = git
         self._merge_ok = merge_ok
+        self._smoke = smoke if smoke is not None else {"ran": False}
         self.exec_workdirs: list = []
         self.calls: list = []
+
+    def runtime_smoke(self, pid):
+        self.calls.append(("smoke", None))
+        return self._smoke
 
     def is_available(self):
         return True
@@ -357,6 +362,167 @@ def test_parallel_conflict_falls_back_to_serial_reapply(app, monkeypatch):
     # Parallel edit in worktrees, merges conflict → both re-applied serially on /work.
     assert "/work-lanes/lane-0" in fake.exec_workdirs
     assert fake.exec_workdirs.count(None) == 2  # both lanes re-applied serially
+
+
+class _PassingTaskService:
+    """Fake review that marks every acceptance-criterion feature id as passed — used
+    to drive the parallel turn's TASK mode (sprint batch) to a DONE outcome."""
+
+    def review_project(self, **kw):
+        # features_block carries the union of all tasks' AC; pass them all.
+        import re
+
+        block = kw.get("features_block") or ""
+        ids = re.findall(r"\b([A-Za-z0-9_.\-]+\.AC\d+)\b", block)
+        return {"verdict": "pass",
+                "feature_results": [{"id": i, "passes": True, "note": "ok"} for i in ids]}
+
+
+def _run_parallel_tasks(app, monkeypatch, task_rows, fake_dev, service=None):
+    from backend.models.agent import AgentRun, AgentRunStatus  # noqa: F401
+    from backend.services.agent.recorder import RunRecorder
+    from backend.services.agent.schemas import AgentContext
+    from backend.services.agent.workflows import code_dev_parallel_turn_workflow as wf
+
+    monkeypatch.setattr(wf, "get_dev_service", lambda: fake_dev)
+    monkeypatch.setattr(wf, "get_frontend_project_service", lambda: service or _PassingTaskService())
+
+    session = db.session.get(CodeDevSession, task_rows[0].session_id)
+    run = AgentRun(
+        user_id=session.user_id, domain="code", workflow="code_dev_parallel_turn",
+        resource_type="code_project", resource_id=session.project_id,
+        status=AgentRunStatus.RUNNING, credit_reserved=0,
+    )
+    run.set_config({
+        "session_id": session.id,
+        "tasks": [
+            {"task_id": t.id, "instruction": f"实现 {t.title}",
+             "feature_ids": [t.feature_id], "ac_ids": sorted(dev_sprint_service.ac_ids_for(t))}
+            for t in task_rows
+        ],
+    })
+    db.session.add(run)
+    db.session.commit()
+    ctx = AgentContext(
+        run_id=run.id, user_id=session.user_id, team_id=None, domain="code",
+        workflow="code_dev_parallel_turn", resource_type="code_project",
+        resource_id=session.project_id, config=run.get_config(), input_snapshot={},
+    )
+    return wf.run_code_dev_parallel_turn_workflow(ctx, RunRecorder(run.id)), run
+
+
+def test_parallel_task_mode_advances_each_task(app, monkeypatch):
+    """Sprint batch mode: config carries `tasks`; the verify tail drives EACH task's
+    state machine on its own AC (not a whole-app checklist sync)."""
+    from backend.models.agent import AgentRunStatus
+
+    uid = str(uuid.uuid4())
+    project = _make_project(uid)
+    session = _make_session(project)
+    a = CodeDevTask(project_id=project.id, session_id=session.id, feature_id="FR1.T1",
+                    parent_feature_id="FR1", title="列表页", status=DevTaskStatus.QUEUED)
+    b = CodeDevTask(project_id=project.id, session_id=session.id, feature_id="FR2.T1",
+                    parent_feature_id="FR2", title="表单页", status=DevTaskStatus.QUEUED)
+    for t in (a, b):
+        t.set_acceptance_criteria(["渲染无报错"])
+        db.session.add(t)
+    db.session.commit()
+
+    result, run = _run_parallel_tasks(app, monkeypatch, [a, b], _FakeDev(git=True))
+    assert result["status"] == AgentRunStatus.COMPLETED
+    outcomes = {o["task_id"]: o for o in result["task_outcomes"]}
+    assert outcomes[a.id]["passed"] and outcomes[b.id]["passed"]
+    db.session.expire_all()
+    assert db.session.get(CodeDevTask, a.id).status == DevTaskStatus.DONE
+    assert db.session.get(CodeDevTask, b.id).status == DevTaskStatus.DONE
+
+
+def test_parallel_task_mode_failed_ac_retries_not_regressed(app, monkeypatch):
+    """A failing task goes back to pending; its sibling still closes (no cross-task
+    regression) — the workflow's sibling-AC masking, end-to-end."""
+    from backend.models.agent import AgentRunStatus
+
+    uid = str(uuid.uuid4())
+    project = _make_project(uid)
+    session = _make_session(project)
+    a = CodeDevTask(project_id=project.id, session_id=session.id, feature_id="FR1.T1",
+                    parent_feature_id="FR1", title="好任务", status=DevTaskStatus.QUEUED)
+    b = CodeDevTask(project_id=project.id, session_id=session.id, feature_id="FR2.T1",
+                    parent_feature_id="FR2", title="坏任务", status=DevTaskStatus.QUEUED)
+    for t in (a, b):
+        t.set_acceptance_criteria(["渲染无报错"])
+        db.session.add(t)
+    db.session.commit()
+
+    class _OnlyAPasses:
+        def review_project(self, **kw):
+            import re
+            ids = re.findall(r"\b([A-Za-z0-9_.\-]+\.AC\d+)\b", kw.get("features_block") or "")
+            return {"verdict": "fail", "feature_results": [
+                {"id": i, "passes": not i.startswith("FR2"), "note": "x"} for i in ids]}
+
+    result, run = _run_parallel_tasks(app, monkeypatch, [a, b], _FakeDev(git=True),
+                                      service=_OnlyAPasses())
+    assert result["status"] == AgentRunStatus.COMPLETED
+    outcomes = {o["task_id"]: o for o in result["task_outcomes"]}
+    assert outcomes[a.id]["status"] == DevTaskStatus.DONE
+    assert outcomes[a.id]["regressed"] == []  # sibling B's failure not blamed on A
+    assert outcomes[b.id]["status"] == DevTaskStatus.PENDING and not outcomes[b.id]["passed"]
+
+
+def test_parallel_runtime_smoke_blocks_and_spares_innocents(app, monkeypatch):
+    """Fix① + Fix② together: even when every task's AC passes the review, a post-merge
+    runtime error (browser console/page error on the MERGED app) is an objective blocker
+    → no task closes DONE, and the innocent tasks are re-queued WITHOUT burning retry."""
+    from backend.models.agent import AgentRunStatus
+
+    uid = str(uuid.uuid4())
+    project = _make_project(uid)
+    session = _make_session(project)
+    a = CodeDevTask(project_id=project.id, session_id=session.id, feature_id="FR1.T1",
+                    parent_feature_id="FR1", title="A", status=DevTaskStatus.QUEUED, max_retries=1)
+    b = CodeDevTask(project_id=project.id, session_id=session.id, feature_id="FR2.T1",
+                    parent_feature_id="FR2", title="B", status=DevTaskStatus.QUEUED, max_retries=1)
+    for t in (a, b):
+        t.set_acceptance_criteria(["渲染无报错"])
+        db.session.add(t)
+    db.session.commit()
+
+    smoke = {"ran": True, "ok": False, "console_errors": ["TypeError: x is not a function"],
+             "page_errors": [], "interactions": {"clicked": 3, "total": 3, "filled": 0}}
+    result, run = _run_parallel_tasks(app, monkeypatch, [a, b],
+                                      _FakeDev(git=True, smoke=smoke))
+    assert result["status"] == AgentRunStatus.COMPLETED
+    outcomes = {o["task_id"]: o for o in result["task_outcomes"]}
+    # Merged app throws at runtime → NEITHER task is DONE despite passing AC review...
+    assert outcomes[a.id]["status"] == DevTaskStatus.PENDING and outcomes[a.id].get("shared_block")
+    assert outcomes[b.id]["status"] == DevTaskStatus.PENDING and outcomes[b.id].get("shared_block")
+    db.session.expire_all()
+    # ...and neither burned a retry (the runtime break isn't attributable to either).
+    assert db.session.get(CodeDevTask, a.id).effective_retry_count == 0
+    assert db.session.get(CodeDevTask, b.id).effective_retry_count == 0
+
+
+def test_parallel_runtime_smoke_failsoft_does_not_block(app, monkeypatch):
+    """A smoke that can't run ({"ran": False}) contributes no errors → tasks close as
+    usual (fail-open, never blocks on missing browser / harness error)."""
+    from backend.models.agent import AgentRunStatus
+
+    uid = str(uuid.uuid4())
+    project = _make_project(uid)
+    session = _make_session(project)
+    t = CodeDevTask(project_id=project.id, session_id=session.id, feature_id="FR1.T1",
+                    parent_feature_id="FR1", title="A", status=DevTaskStatus.QUEUED)
+    t.set_acceptance_criteria(["渲染无报错"])
+    db.session.add(t)
+    db.session.commit()
+
+    result, run = _run_parallel_tasks(app, monkeypatch, [t],
+                                      _FakeDev(git=True, smoke={"ran": False}))
+    assert result["status"] == AgentRunStatus.COMPLETED
+    assert result["task_outcomes"][0]["status"] == DevTaskStatus.DONE
+    db.session.expire_all()
+    assert db.session.get(CodeDevTask, t.id).status == DevTaskStatus.DONE
 
 
 def test_worktree_git_commands(app, monkeypatch):
@@ -536,6 +702,117 @@ def test_is_runnable_vite_gates_scaffold_fallback(app):
         "src/main.tsx": b"import React from 'react'",
     }
     assert is_runnable_vite(real) is True
+
+
+def test_bootstrap_dev_session_seeds_selected_code_template(app, monkeypatch):
+    """A brand-new frontend dev session should seed the selected Code template,
+    not the tiny built-in scaffold, when no prior runnable frontend source exists."""
+    from backend.models.agent import AgentRun, AgentRunStatus
+    from backend.services.agent.recorder import RunRecorder
+    from backend.services.agent.schemas import AgentContext
+    from backend.services.agent.workflows import _iteration_support as it
+    from backend.services.agent.workflows import code_dev_turn_workflow as wf
+    from backend.services.code.dev_service import DevTurnResult
+    from backend.services.code.template_service import TemplateSelection
+
+    template_files = {
+        "package.json": (
+            b'{"scripts":{"dev":"vite"},"dependencies":{"@vitejs/plugin-react":"^4.3.1"},'
+            b'"devDependencies":{"vite":"^5.0.0"}}'
+        ),
+        "vite.config.ts": b"import { defineConfig } from 'vite'\nexport default defineConfig({})\n",
+        "src/App.tsx": b"export default function App(){return <main>Template</main>}\n",
+        "src/main.tsx": b"import './App'\n",
+    }
+    selection = TemplateSelection(
+        lane="frontend",
+        selected=True,
+        files=template_files,
+        repo_url="file:///templates",
+        template_path="react-vite",
+        template_name="React Vite Template",
+        score=88,
+    )
+
+    class _TemplateService:
+        def select(self, **kw):
+            assert kw["lane"] == "frontend"
+            assert "任务管理" in kw["requirement"]
+            return selection
+
+    class _TemplateFakeDev:
+        prompt = ""
+        seeded = {}
+
+        def is_available(self):
+            return True
+
+        def container_status(self, pid):
+            return {"present": False, "running": False, "restart_count": 0}
+
+        def start_container(self, pid, source):
+            self.seeded = dict(source)
+            return True, None, {
+                "container_name": "dev-template", "internal_port": 5173,
+                "workdir": "/tmp/dev-template", "preview_path": f"/preview/{pid}/",
+            }
+
+        def health_check(self, pid):
+            return True
+
+        def exec_turn(self, pid, prompt, on_event=None, is_cancelled=None, workdir=None, timeout=None):
+            self.prompt = prompt
+            return DevTurnResult(True)
+
+        def collect_source(self, pid):
+            return dict(self.seeded)
+
+    class _NoopReview:
+        def review_project(self, **kw):
+            return None
+
+    uid = str(uuid.uuid4())
+    project = _make_project(uid)
+    project.requirements_doc = "FR-01 用户可以创建任务"
+    project.development_flow = "M-01 React 前端"
+    project.style_prompt = "清爽的任务管理 UI"
+    session = _make_session(project)
+    db.session.commit()
+
+    fake_dev = _TemplateFakeDev()
+    monkeypatch.setattr(it, "load_prior_source", lambda pid, lane: {})
+    monkeypatch.setattr(wf, "get_code_template_service", lambda: _TemplateService())
+    monkeypatch.setattr(wf, "get_dev_service", lambda: fake_dev)
+    monkeypatch.setattr(wf, "get_frontend_project_service", lambda: _NoopReview())
+    monkeypatch.setattr(wf, "_DEV_REPAIR", False)
+    monkeypatch.setattr(
+        wf.dev_backlog_planner_service, "decompose_coarse_seed_tasks", lambda *a, **kw: None
+    )
+
+    run = AgentRun(
+        user_id=project.user_id, domain="code", workflow="code_dev_turn",
+        resource_type="code_project", resource_id=project.id,
+        status=AgentRunStatus.RUNNING, credit_reserved=0,
+    )
+    run.set_config({
+        "session_id": session.id,
+        "instruction": "初始化项目框架",
+        "bootstrap": True,
+    })
+    db.session.add(run)
+    db.session.commit()
+    ctx = AgentContext(
+        run_id=run.id, user_id=project.user_id, team_id=None, domain="code",
+        workflow="code_dev_turn", resource_type="code_project", resource_id=project.id,
+        config=run.get_config(), input_snapshot={},
+    )
+
+    result = wf.run_code_dev_turn_workflow(ctx, RunRecorder(run.id))
+
+    assert result["status"] == AgentRunStatus.COMPLETED
+    assert fake_dev.seeded == template_files
+    assert "React Vite Template" in fake_dev.prompt
+    assert "不要从空目录重建" in fake_dev.prompt
 
 
 def test_audit_calibrates_checklist_over_existing_code(app, monkeypatch):

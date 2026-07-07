@@ -85,6 +85,7 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 RUN npm install -g @anthropic-ai/claude-code @openai/codex \
     && claude --version \
     && codex --version \
+    && git --version \
     && mvn -version \
     && go version \
     && java -version \

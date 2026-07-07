@@ -36,19 +36,23 @@ from backend.models.agent import (
     AgentRunStatus,
 )
 from backend.models.code import CodeProject
-from backend.models.code.fullstack import CodeDevSession, DevSessionStatus
+from backend.models.code.fullstack import CodeDevSession, CodeDevTask, DevSessionStatus
 from backend.services.agent.context_ledger import ContextLedger
 from backend.services.agent.workflows import _verify_support
 from backend.services.agent.workflows.code_dev_turn_workflow import (
     _build_turn_prompt,
+    _emit_template_resolution,
     _is_restart_trigger,
+    _load_contract_block,
+    _resolve_source_for_project,
     _source_digest,
+    checklist_board,
     load_dev_ledger,
     persist_source_snapshot,
     seed_checklist,
     sync_checklist,
 )
-from backend.services.code import house_rules
+from backend.services.code import dev_sprint_service, house_rules
 from backend.services.code.dev_service import get_dev_service
 from backend.services.code.frontend_project_service import get_frontend_project_service
 
@@ -103,15 +107,32 @@ def run_code_dev_parallel_turn_workflow(ctx, recorder) -> dict:
     service = get_frontend_project_service()
     cfg = ctx.config or {}
     session_id = cfg.get("session_id")
+    # Two callers: the sprint scheduler (P3) passes `tasks` (each carries a task_id +
+    # brief) → task mode, where the verify tail advances EACH task's state machine on
+    # its OWN acceptance criteria. A manual multi-lane turn passes `lanes` (free-form
+    # instructions) → whole-app checklist reconciliation. Task mode wins when present.
+    raw_tasks = cfg.get("tasks") or []
     raw_lanes = cfg.get("lanes") or []
-    lanes = [
-        {"instruction": (ln.get("instruction") or "").strip(), "feature_ids": ln.get("feature_ids") or []}
-        for ln in raw_lanes
-        if isinstance(ln, dict) and (ln.get("instruction") or "").strip()
-    ][:_MAX_LANES]
+    if raw_tasks:
+        task_mode = True
+        lanes = [
+            {"instruction": (t.get("instruction") or "").strip(),
+             "feature_ids": t.get("feature_ids") or [], "task_id": t.get("task_id")}
+            for t in raw_tasks
+            if isinstance(t, dict) and (t.get("instruction") or "").strip() and t.get("task_id")
+        ][:_MAX_LANES]
+    else:
+        task_mode = False
+        lanes = [
+            {"instruction": (ln.get("instruction") or "").strip(),
+             "feature_ids": ln.get("feature_ids") or [], "task_id": None}
+            for ln in raw_lanes
+            if isinstance(ln, dict) and (ln.get("instruction") or "").strip()
+        ][:_MAX_LANES]
 
     total_steps = 3
     completed = 0
+    batch_tasks: list[CodeDevTask] = []
 
     def progress(current: str) -> None:
         run = db.session.get(AgentRun, ctx.run_id)
@@ -159,7 +180,23 @@ def run_code_dev_parallel_turn_workflow(ctx, recorder) -> dict:
         session.set_shared_ledger(ledger.to_dict())
         db.session.commit()
         seed_checklist(session.id, project_id, ledger.to_dict())
-        features = _verify_support.features_from_ledger(ledger.to_dict())
+        if task_mode:
+            # Bind each claimed task to THIS run (queued -> in_progress) so a crash
+            # mid-run is reconcilable by last_attempt_run_id, then build the verify set
+            # from the UNION of every task's OWN acceptance criteria (not the ledger —
+            # mirrors the single-turn task path).
+            for ln in lanes:
+                dev_sprint_service.mark_in_progress(ln["task_id"], ctx.run_id)
+            db.session.expire_all()
+            batch_tasks = [
+                t for t in (db.session.get(CodeDevTask, ln["task_id"]) for ln in lanes)
+                if t is not None
+            ]
+            features = []
+            for t in batch_tasks:
+                features.extend(dev_sprint_service.ac_feature_items(t))
+        else:
+            features = _verify_support.features_from_ledger(ledger.to_dict())
 
         status = dev.container_status(project_id)
         if not status.get("running"):
@@ -167,8 +204,10 @@ def run_code_dev_parallel_turn_workflow(ctx, recorder) -> dict:
             db.session.commit()
             recorder.emit(AgentEventType.PROGRESS, step_id=step.id,
                           message="正在启动长运行开发容器…")
-            from backend.services.agent.workflows.code_dev_turn_workflow import _resolve_source
-            ok, err, info = dev.start_container(project_id, _resolve_source(project_id))
+            contract_block = _load_contract_block(project_id)
+            source_resolution = _resolve_source_for_project(project, contract_block)
+            _emit_template_resolution(recorder, step.id, source_resolution)
+            ok, err, info = dev.start_container(project_id, source_resolution.files)
             if not ok:
                 session.status = DevSessionStatus.FAILED
                 session.error_message = err
@@ -209,6 +248,19 @@ def run_code_dev_parallel_turn_workflow(ctx, recorder) -> dict:
         db.session.commit()
         # Track package.json / vite.config edits across all lanes → restart after.
         _cfg = {"config": False}
+
+        # Per-lane feature block for the EDIT prompt: in task mode each lane sees ONLY
+        # its own task's acceptance criteria (not the batch union) so it doesn't drift
+        # into a sibling's feature; manual mode shares the ledger feature list. Built on
+        # the MAIN thread (reads ORM) before the fan-out threads (DB-free) start.
+        _task_by_id = {t.id: t for t in batch_tasks}
+
+        def _lane_feats(lane):
+            if task_mode:
+                t = _task_by_id.get(lane.get("task_id"))
+                return dev_sprint_service.ac_feature_items(t) if t is not None else []
+            return features
+
         use_git = dev.git_ready(project_id)
         worktrees: dict[int, str] = {}
         if use_git:
@@ -234,7 +286,7 @@ def run_code_dev_parallel_turn_workflow(ctx, recorder) -> dict:
             # context" if touched inside a fan-out worker thread. The threads then use
             # the prebuilt strings and only do DB-free subprocess work.
             lane_prompts = [
-                _lane_prompt(project, injected, contract_block, ln["instruction"], features)
+                _lane_prompt(project, injected, contract_block, ln["instruction"], _lane_feats(ln))
                 for ln in lanes
             ]
 
@@ -302,7 +354,7 @@ def run_code_dev_parallel_turn_workflow(ctx, recorder) -> dict:
             recorder.emit(AgentEventType.PROGRESS, step_id=step.id,
                           message=f"串行开发:{lane['instruction'][:60]}",
                           payload={"serial": si + 1, "of": len(serial_lanes)})
-            prompt = _build_turn_prompt(project, injected, contract_block, lane["instruction"], features, False)
+            prompt = _build_turn_prompt(project, injected, contract_block, lane["instruction"], _lane_feats(lane), False)
             r = dev.exec_turn(
                 project_id, prompt,
                 on_event=lambda e: _emit_lane_event(recorder, step, 0, e, _cfg),
@@ -346,17 +398,71 @@ def run_code_dev_parallel_turn_workflow(ctx, recorder) -> dict:
                 logger.warning("parallel verify review raised: %s", exc)
                 review = None
         feats, stats = _verify_support.apply_feature_results(features, (review or {}).get("feature_results"))
+        # Post-merge runtime smoke: load + drive the MERGED app in a real browser so a
+        # semantically-broken-but-textually-clean merge (git only catches text conflicts)
+        # is caught as an OBJECTIVE blocker instead of being marked DONE. Fail-open — a
+        # smoke that can't run ({"ran": False}) contributes no errors, never blocks.
+        runtime_check = None
+        if files and not ctx.is_cancelled():
+            try:
+                runtime_check = dev.runtime_smoke(project_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("parallel runtime smoke raised: %s", exc)
+                runtime_check = None
+            _rt_errs = _verify_support.runtime_errors(runtime_check)
+            if runtime_check and runtime_check.get("ran"):
+                if _rt_errs:
+                    recorder.emit(
+                        AgentEventType.WARNING, level=AgentEventLevel.WARNING, step_id=step.id,
+                        message=f"运行时冒烟发现 {len(_rt_errs)} 处错误(合并后浏览器实际抛出)",
+                        payload={"runtime_errors": _rt_errs[:10]},
+                    )
+                else:
+                    recorder.emit(
+                        AgentEventType.PROGRESS, step_id=step.id,
+                        message="运行时冒烟通过:合并后应用可加载并驱动,无 console/page error",
+                    )
         verification = _verify_support.Verification(
             house_rule_errors=house_rules.errors(violations),
             house_rule_warnings=house_rules.warnings(violations),
+            runtime_errors=_verify_support.runtime_errors(runtime_check),
+            runtime_check=runtime_check,
             review=review, features=feats, feature_stats=stats,
         )
         # Durable snapshot so a re-entry restores the work (container fs dies on stop).
         persist_source_snapshot(step, project_id, files)
-        board = sync_checklist(session.id, project_id, feats, ctx.run_id)
-        recorder.emit(AgentEventType.CHECKLIST_UPDATED, step_id=step.id,
-                      message=f"功能进度 {board['functional_done']}/{board['functional_total']}",
-                      payload={"board": board, "feature_stats": stats})
+        task_outcomes: list[dict] = []
+        if task_mode:
+            # Drive EACH task's state machine on its OWN acceptance criteria (sibling AC
+            # masked out of each task's regression view; objective_blocking is batch-level
+            # — a broken merged tree fails everyone). See apply_batch_verify_outcomes.
+            task_outcomes = dev_sprint_service.apply_batch_verify_outcomes(
+                batch_tasks, ctx.run_id, feats, verification.objective_blocking,
+                verification.summary_line(),
+            )
+            for t, outcome in zip(batch_tasks, task_outcomes):
+                _fid = t.feature_id or t.id[:8]
+                if outcome["passed"]:
+                    msg = f"任务 [{_fid}] 验收通过"
+                elif outcome.get("shared_block"):
+                    msg = f"任务 [{_fid}] 自身验收通过,但合并树存在共享阻断,已无损重排(不计重试)"
+                else:
+                    msg = f"任务 [{_fid}] 未通过（→ {outcome['status']}）"
+                recorder.emit(
+                    AgentEventType.CHECKLIST_UPDATED, step_id=step.id,
+                    message=msg, payload={"task_id": t.id, "task_outcome": outcome},
+                )
+            board = checklist_board(session.id)
+            recorder.emit(
+                AgentEventType.CHECKLIST_UPDATED, step_id=step.id,
+                message=f"功能进度 {board['functional_done']}/{board['functional_total']}",
+                payload={"board": board, "feature_stats": stats, "task_outcomes": task_outcomes},
+            )
+        else:
+            board = sync_checklist(session.id, project_id, feats, ctx.run_id)
+            recorder.emit(AgentEventType.CHECKLIST_UPDATED, step_id=step.id,
+                          message=f"功能进度 {board['functional_done']}/{board['functional_total']}",
+                          payload={"board": board, "feature_stats": stats})
         session.set_shared_ledger(ledger.to_dict())
         session.last_active_at = datetime.utcnow()
         db.session.commit()
@@ -365,4 +471,7 @@ def run_code_dev_parallel_turn_workflow(ctx, recorder) -> dict:
         step.set_output(output_summary=f"验证:{verification.summary_line()}")
     completed = 3
     progress("done")
-    return {"status": AgentRunStatus.COMPLETED, "resource_id": project_id}
+    result = {"status": AgentRunStatus.COMPLETED, "resource_id": project_id}
+    if task_mode:
+        result["task_outcomes"] = task_outcomes
+    return result

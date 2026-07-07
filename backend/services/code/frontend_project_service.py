@@ -649,6 +649,20 @@ class FrontendProjectService:
             )
 
     @staticmethod
+    def _scaffold_preamble(scaffold_files: dict, scaffold_hint: str = "") -> str:
+        """Instruction prefix for first-generation runs seeded from a template."""
+        base_list = "\n".join(f"- {p}" for p in sorted(scaffold_files)[:300])
+        hint = (scaffold_hint or "").strip()
+        return (
+            "【模板脚手架已注入】当前目录在你开始前已经预置了从模板仓库选择的前端脚手架。"
+            "请先 Read 现有结构(package.json、vite 配置、src 目录、路由/组件/API client),"
+            "在此基础上完成本项目功能开发;不要从空目录重建,不要删除模板已有的通用工程能力。"
+            "可以按需求新增/修改页面、组件、状态、API 调用和样式,最终必须仍是可构建的完整工程。\n\n"
+            f"模板选择信息:\n{hint or '(未提供)'}\n\n"
+            f"模板文件清单(已在当前目录):\n{base_list}"
+        )
+
+    @staticmethod
     def _seed_base(base_dir: "Path", files: dict) -> None:
         """Write the existing project source under workdir/_base (binary-safe).
 
@@ -829,6 +843,8 @@ class FrontendProjectService:
         contract_block: str = "",
         figma_frames: Optional[list] = None,
         base_files: Optional[dict] = None,
+        scaffold_files: Optional[dict] = None,
+        scaffold_hint: str = "",
         change_instruction: str = "",
         change_plan: str = "",
         on_event: Optional[Callable[[dict], None]] = None,
@@ -840,6 +856,11 @@ class FrontendProjectService:
         source is seeded so the agent EDITS it per ``change_instruction`` /
         ``change_plan`` instead of regenerating (真实续改); the build ladder + dist
         collection are unchanged so deploy/preview consume the output as before.
+
+        ``scaffold_files`` (first generation): when provided WITHOUT
+        ``base_files``, the selected template scaffold is seeded before the first
+        generation prompt. This is not edit mode: the agent may adapt the scaffold
+        broadly to implement the full project.
 
         Returns ``{success, degraded, degraded_reason, error, files, dist_files,
         summary, usage, cost_usd, workdir}``. The container always produces a
@@ -860,6 +881,7 @@ class FrontendProjectService:
         # already capped upstream (``_MAX_DIGEST_CHARS``).
         _cap = 16_000
         edit_mode = bool(base_files)
+        seeded_files = base_files or scaffold_files or {}
         fill_vals = dict(
             CONTEXT_LEDGER=context_ledger or "",
             REQUIREMENT=(requirement or "")[:4_000],
@@ -877,6 +899,8 @@ class FrontendProjectService:
         prompt = self._build_prompt(
             fill_vals, edit_mode, base_files or {}, change_instruction, change_plan
         )
+        if scaffold_files and not base_files:
+            prompt = self._scaffold_preamble(scaffold_files, scaffold_hint) + "\n\n" + prompt
 
         workdir = Path(tempfile.mkdtemp(prefix="fe-agent-"))
         # The container runs as the non-root `node` user (uid 1000) and writes
@@ -885,10 +909,10 @@ class FrontendProjectService:
         # Mac is permissive and hides this), so open it up explicitly.
         os.chmod(workdir, 0o777)
         (workdir / "prompt.txt").write_text(prompt, encoding="utf-8")
-        # Edit mode: seed the existing project source so the container copies it
-        # into the agent workdir (真实续改). Binary-safe; skips pathological files.
-        if base_files:
-            self._seed_base(workdir / "_base", base_files)
+        # Seed either an existing project (edit mode) or a selected template
+        # scaffold (first generation). Binary-safe; skips pathological files.
+        if seeded_files:
+            self._seed_base(workdir / "_base", seeded_files)
         # The AI repair rung reuses this prompt; the container appends the live
         # build log before invoking claude a second time.
         (workdir / "repair_prompt.txt").write_text(

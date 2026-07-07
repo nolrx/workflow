@@ -80,6 +80,20 @@
     "check": "Verification result",
     "conflict": "Context conflict detected"
   },
+  "template": {
+    "selected": "Template selected",
+    "fallback": "Fallback",
+    "unknown": "Unnamed template",
+    "path": "Template",
+    "files": "{{count}} files",
+    "score": "score {{score}}",
+    "lane": {
+      "frontend": "Frontend",
+      "backend": "Backend",
+      "middleware": "Middleware",
+      "deploy": "Deploy"
+    }
+  },
   "toast": {
     "started": "Agent run started",
     "startFailed": "Failed to start",

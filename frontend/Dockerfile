@@ -14,6 +14,10 @@ RUN npm run build
 # ---- Serve stage: nginx hosts the static SPA and proxies /api ----
 FROM nginx:1.27-alpine
 
+# Keep git available in the frontend runtime container for operational parity
+# with the backend runtime.
+RUN apk add --no-cache git
+
 # Replace the stock server block with our SPA + API-proxy config.
 RUN rm -f /etc/nginx/conf.d/default.conf
 COPY nginx/default.conf /etc/nginx/conf.d/default.conf

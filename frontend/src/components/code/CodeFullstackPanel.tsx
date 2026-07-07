@@ -28,6 +28,7 @@ import { toast } from "sonner"
 
 import { agentApi, type AgentRunStatus, type AgentStepStatus } from "@/api/agent"
 import { tokenManager } from "@/api/client"
+import { TemplateTraceList } from "@/components/agent/TemplateTrace"
 import { GitHubDeliveryCard } from "@/components/code/GitHubDeliveryCard"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -259,8 +260,10 @@ function LaneCard({ lane }: { lane: Lane }) {
 
       {open && (
         <div className="border-t px-3 py-2">
+          <TemplateTraceList events={events} compact />
+
           {/* Steps */}
-          <div className="space-y-1">
+          <div className={cn("space-y-1", events.length > 0 && "mt-2")}>
             {steps.map((step) => (
               <div key={step.id} className="flex items-center gap-2 text-xs">
                 <StepIcon status={step.status} />

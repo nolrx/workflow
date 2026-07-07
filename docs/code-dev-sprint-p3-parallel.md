@@ -1,6 +1,12 @@
 # Dev Sprint P3:并行调度设计备忘
 
-> 状态:**设计草案(未实施)**。本文承接 `docs/code-dev-sprint-p1-p2.md`。
+> 状态:**已实施(env-gated,默认关)**。本文承接 `docs/code-dev-sprint-p1-p2.md`。
+> 落点:`dev_sprint_service.claim_ready_batch` / `sprint_parallel_enabled` /
+> `sprint_batch_size` / `apply_batch_verify_outcomes`;`code_dev_parallel_turn_workflow`
+> 的 task 感知模式(config 带 `tasks`);`code_dev_sprint_workflow._create_batch_turn_run`
+> + 调度循环 env-gated 分叉。测试:`tests/test_dev_sprint_parallel.py`(11 条)。
+> 激活:`.env` 设 `CODE_DEV_SPRINT_PARALLEL=1`(+ 可选 `CODE_DEV_SPRINT_BATCH`),
+> `make redeploy` 即生效(纯 backend `.py`,无需重建 agent 镜像 / sync Mongo / schema 迁移)。
 > P0/P1/P2 已交付:`CodeDevTask` 持久任务板、`CodeDevSprint` **串行**调度器、
 > `code_dev_turn` 单任务验收、`code_dev_backlog_planner` 任务规划、asset lane。
 > P1/P2 文档已明确「不启动并行 sprint,P3 再做」(`code-dev-sprint-p1-p2.md:45`)、
@@ -60,6 +66,15 @@ stream 事件推进线程安全队列;**主线程**排队 drain 并发 `AgentEve
 ---
 
 ## 2. 目标 / 非目标
+
+> **修订(缺陷修复,已实施)**:针对下文 §10 点出的两个最严重缺陷,已补两条修复:
+> - **F1 合并后运行时冒烟**:`dev_service.runtime_smoke` 对**活 dev server** 跑 Playwright 冒烟(加载
+>   + 有界交互爬),把批级 objective 闸从「只看房规」升级到「合并后应用真能加载并被驱动」——这样
+>   *语义级*合并破坏(git 只挡文本冲突)会被当 objective 阻断,而不是被标 DONE。**fail-open**:冒烟跑
+>   不起来(镜像无浏览器 / 纯导航超时且无真实报错)返回 `{"ran": False}`,绝不因基础设施误阻。
+> - **F2 无辜任务不连坐烧预算**:`apply_verify_outcome(..., shared_blocking=True)`——任务**自身 AC 全过**、
+>   仅因批级共享阻断(房规/运行时)失败时,**无损重排**(不计 retry、不因预算耗尽被 blocked),下一回合待
+>   肇事任务被 block/移除后即可 close。串行路径默认 `shared_blocking=False`,判定逐字不变。
 
 **目标**
 - 让一个 sprint 在无依赖冲突的前提下,单回合并行推进**多个**就绪任务,缩短整体墙钟时间。
@@ -298,26 +313,40 @@ retry 循环回下一回合,更简单、语义也和串行一致。(可作为 P3
 
 ## 10. 风险与开放问题
 
+- **语义级合并破坏**(原最严重):`git merge` 只挡文本行冲突;两个改不同文件但有语义依赖的任务能干净
+  合并出坏树。**已由 F1(合并后运行时冒烟)缓解**——真跑一次浏览器加载+交互,console/page error 即
+  objective 阻断,不再被标 DONE。残留:冒烟是有界爬,覆盖不到的深路径仍可能漏(和单任务同限)。
+- **连坐烧无辜任务预算**(原次严重):批级 objective 阻断会让 AC 全过的无辜任务也失败并 retry+1,反复
+  会把健康任务熬 blocked。**已由 F2 修复**(shared_blocking 无损重排)。残留:肇事任务若其 AC 侥幸
+  通过、只被运行时冒烟逮到,会一直无损重排churn,靠 sprint 级 `stall_count`/`max_turns` 兜底收敛。
 - **共享文件冲突频率**:`parent_feature_id` 去重挡不住「不同 FR 都改 App/路由/全局 store」。缓解:
-  `_LANE_NOTE` 已叮嘱少碰共享入口;集成屏障兜底串行。若冲突率高(WARNING 频繁),说明并行收益被
-  串行重做吃掉,可调小 `CODE_DEV_SPRINT_BATCH` 或对「触碰共享入口的任务」强制串行(P3.1)。
+  `_LANE_NOTE` 已叮嘱少碰共享入口;集成屏障兜底串行。可作 P3.1:选批引入 planner 的 `files_hint`
+  做更强冲突预测,或对「触碰共享入口的任务」强制串行。
 - **合并后评审的截断**:`_source_digest` 有体量上限,批越大源越大,评审 digest 越可能截断 →
-  误判。缓解:`apply_verify_outcome` 只认 objective 硬阻断做闸门,主观 whole-app blocking 不参与
-  任务关闭(现单任务 turn 已是此策略),批量沿用。仍建议批不宜过大(默认 4 保守)。
+  假阴性(写对了被退)。缓解:F1 的运行时冒烟提供一路**不依赖 digest**的客观信号;仍建议批不宜过大
+  (默认 4 保守)。
 - **turn_count 语义**:一批算 1 回合,`max_turns` 预算下并行能推进更多任务——是增益不是问题,但
   停滞检测 `stall_count` 需按「本批**是否有**任务转 DONE」判,已在 §4 处理。
 - **批内 in-turn 修复缺席**:失败任务多绕一个回合。可接受;P3.1 再补。
 
 ---
 
-## 11. 实施清单(小步,每步可独立上线且默认关)
+## 11. 实施清单(已全部落地)
 
-1. `dev_sprint_service.claim_ready_batch(session_id, lane, k)` + `_create_batch_turn_run` 骨架 + 单测 1-3。
-2. 抽 `code_dev_parallel_turn` 的 prepare / parallel-edit-and-merge 为共享 helper(纯重构,手动版行为不变)。
-3. 批量 verify 尾:逐任务 `apply_verify_outcome` + sibling_ac 回归屏蔽 + 单测 4。
-4. 调度循环 env-gated 分叉(§4)+ 失败/续跑语义 + 单测 5-7。
-5. 计费 `CODE_DEV_TURN * len(batch)` + 退款对齐(§7)。
-6. `pricing` / `.env.example` / 本文档状态更新;跑全量 `uv run pytest -m "not integration"` + ruff。
+1. ✅ `dev_sprint_service.claim_ready_batch(session_id, lane, k)` + `sprint_parallel_enabled` /
+   `sprint_batch_size` + `_create_batch_turn_run`(在 `code_dev_sprint_workflow`)。
+2. ✅ `code_dev_parallel_turn_workflow` 加 task 感知模式(config 带 `tasks` → 每 lane 绑一个任务、
+   per-lane 只喂自身 AC),手动多分片路径行为不变。
+3. ✅ 批量 verify 尾抽成 `dev_sprint_service.apply_batch_verify_outcomes`(逐任务
+   `apply_verify_outcome` + sibling_ac 回归屏蔽),workflow 调用它并逐任务发事件。
+4. ✅ 调度循环 env-gated 分叉(§4)+ 失败(全批 `count_retry=False` 重排)/ 续跑(每任务盖
+   `last_attempt_run_id`,`reconcile_stale_tasks` 兜底)/ 取消语义。
+5. ✅ 计费 `CODE_DEV_TURN × len(batch)` 预扣于批量子 run;退款沿用 runtime 既有语义。
+6. ✅ `pricing` 注释 / `.env.example`(`CODE_DEV_SPRINT_PARALLEL`、`CODE_DEV_SPRINT_BATCH`)/
+   本文档更新;`tests/test_dev_sprint_parallel.py` 11 条 + 全量 pytest + ruff 通过。
+
+**残留(可作 P3.1,均已在正文标注)**:批内 in-turn 定向修复缺席(失败任务绕下一回合);
+共享入口(App/路由/全局 store)强制串行的更严格选批;批量共享评审的计费折扣。
 
 > 生效方式:纯 backend `.py` 改动 → `make redeploy` 即可(无需重建 agent 镜像、无需 sync Mongo);
-> 无 prompt 改动、无 schema 迁移。
+> 无 prompt 改动、无 schema 迁移。默认 `CODE_DEV_SPRINT_PARALLEL=0` → 串行判定逐字不变。

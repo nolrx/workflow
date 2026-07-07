@@ -7,7 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential curl libpq-dev \
+    && apt-get install -y --no-install-recommends build-essential curl git libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Docker CLI (client only — NOT the daemon) for the Docker-out-of-Docker lane.

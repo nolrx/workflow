@@ -73,7 +73,13 @@
       "WebFetch(domain:openai.com)",
       "WebFetch(domain:www.anthropic.com)",
       "Bash(grep -E \"\\\\.\\(md|txt\\)$\")",
-      "Bash(pkill -f harness_ablation)"
+      "Bash(pkill -f harness_ablation)",
+      "Bash(go version *)",
+      "Bash(npm --version)",
+      "Bash(uv --version)",
+      "Bash(docker --version)",
+      "Bash(gh --version)",
+      "Bash(gh auth *)"
     ]
   }
 }

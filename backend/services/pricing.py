@@ -123,9 +123,11 @@ CODE_APP_ITERATION_ANALYSIS = _credits("PRICE_CODE_ITERATION_ANALYSIS", 0)
 # workflows; defaults 0 (free) like the rest of the Code domain — set PRICE_CODE_DEV_TURN
 # to meter. The long-running dev container itself is not separately metered (default 0).
 CODE_DEV_TURN = _credits("PRICE_CODE_DEV_TURN", 0)
-# The sprint ORCHESTRATOR run (the serial scheduling loop over the task board) —
-# each scheduled turn bills itself as a normal code_dev_turn, so this prices only
-# the coordination. Defaults 0 (free) like the rest of the Code domain.
+# The sprint ORCHESTRATOR run (the scheduling loop over the task board) — each
+# scheduled turn bills itself as a normal code_dev_turn, so this prices only the
+# coordination. A P3 PARALLEL round reserves CODE_DEV_TURN × batch-size on its one
+# code_dev_parallel_turn child (each task = one claude lane → same cost as running
+# them serially). Defaults 0 (free) like the rest of the Code domain.
 CODE_DEV_SPRINT = _credits("PRICE_CODE_DEV_SPRINT", 0)
 # Backlog planner (P1): one text-model call that drafts the sprint task list from
 # the project docs (user-confirmed before it touches the board).

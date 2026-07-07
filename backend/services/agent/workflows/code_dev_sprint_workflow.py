@@ -124,6 +124,73 @@ def _done_titles(session_id: str) -> dict:
     }
 
 
+def _create_batch_turn_run(
+    ctx, session_id: str, sprint_id: str, tasks: list[CodeDevTask]
+) -> AgentRun | None:
+    """Create (and charge) ONE ``code_dev_parallel_turn`` run driving a BATCH of
+    claimed tasks — the P3 analogue of ``_create_turn_run``. Reserves
+    ``CODE_DEV_TURN × len(tasks)`` (each task is one claude edit lane → same cost as
+    running them serially). Stamps ``last_attempt_run_id`` on EVERY task so a crash
+    is reconcilable by run id. ``None`` = insufficient credits."""
+    done = _done_titles(session_id)
+    task_briefs = [
+        {
+            "task_id": t.id,
+            "instruction": dev_sprint_service.build_task_brief(t, done),
+            "feature_ids": [t.feature_id] if t.feature_id else [],
+            "ac_ids": sorted(dev_sprint_service.ac_ids_for(t)),
+        }
+        for t in tasks
+    ]
+    cost = pricing.CODE_DEV_TURN * len(tasks)
+    config = {
+        "session_id": session_id,
+        "sprint_id": sprint_id,
+        "tasks": task_briefs,
+        "title": f"[Sprint 并行] {len(tasks)} 个任务",
+    }
+    run = AgentRun(
+        user_id=ctx.user_id,
+        team_id=ctx.team_id,
+        domain="code",
+        workflow="code_dev_parallel_turn",
+        resource_type="code_project",
+        resource_id=ctx.resource_id,
+        title=config["title"],
+        status=AgentRunStatus.QUEUED,
+        credit_reserved=cost,
+    )
+    run.set_config(config)
+    run.set_input_snapshot({
+        "domain": "code", "workflow": "code_dev_parallel_turn",
+        "resource_type": "code_project", "resource_id": ctx.resource_id,
+        "config": {"session_id": session_id, "sprint_id": sprint_id,
+                   "task_ids": [t.id for t in tasks]},
+    })
+    db.session.add(run)
+    db.session.commit()
+    if cost > 0:
+        try:
+            deduct_credits(
+                user_id=ctx.user_id, amount=cost, operation="agent_run",
+                resource_type="agent_run", resource_id=run.id,
+                description=f"Agent run: code_dev_parallel_turn (sprint ×{len(tasks)})",
+                team_id=ctx.team_id,
+            )
+        except InsufficientCreditsError:
+            db.session.delete(run)
+            db.session.commit()
+            return None
+    db.session.query(CodeDevTask).filter(
+        CodeDevTask.id.in_([t.id for t in tasks])
+    ).update(
+        {CodeDevTask.last_attempt_run_id: run.id, CodeDevTask.updated_at: datetime.utcnow()},
+        synchronize_session=False,
+    )
+    db.session.commit()
+    return run
+
+
 def run_code_dev_sprint_workflow(ctx, recorder) -> dict:
     """Entry point for ``code_dev_sprint`` — serial sprint over the task backlog."""
     cfg = ctx.config or {}
@@ -298,8 +365,18 @@ def run_code_dev_sprint_workflow(ctx, recorder) -> dict:
             )
 
         dev_sprint_service.block_dead_dependency_tasks(session_id)
-        task = dev_sprint_service.claim_next_task(session_id, session.lane)
-        if task is None:
+        # P3 (env-gated, default OFF): claim a batch of independent ready tasks and drive
+        # them through one parallel turn. OFF → the single-task serial path below is
+        # byte-for-byte unchanged.
+        parallel = dev_sprint_service.sprint_parallel_enabled()
+        if parallel:
+            batch = dev_sprint_service.claim_ready_batch(
+                session_id, session.lane, dev_sprint_service.sprint_batch_size()
+            )
+        else:
+            _one = dev_sprint_service.claim_next_task(session_id, session.lane)
+            batch = [_one] if _one else []
+        if not batch:
             # Nothing claimable: heal interrupted claims first, then judge the board.
             if dev_sprint_service.reconcile_stale_tasks(session_id):
                 continue
@@ -324,7 +401,122 @@ def run_code_dev_sprint_workflow(ctx, recorder) -> dict:
             return _finish(DevSprintStatus.BLOCKED, "无可调度任务（依赖链等待或全部被阻塞）")
         wait_rounds = 0
 
+        # ==== parallel batch round (P3) — one code_dev_parallel_turn over the batch ===
+        if parallel:
+            batch_ids = [t.id for t in batch]
+            batch_fids = [t.feature_id or t.id[:8] for t in batch]
+            batch_run = _create_batch_turn_run(ctx, session_id, sprint_id, batch)
+            if batch_run is None:
+                for tid in batch_ids:
+                    dev_sprint_service.release_to_pending(
+                        tid, note="积分不足,任务退回队列", count_retry=False)
+                return _finish(DevSprintStatus.BLOCKED, "积分不足,Sprint 已停止", AgentRunStatus.COMPLETED)
+            batch_run_id = batch_run.id
+            sprint.turn_count += 1
+            turn_no = sprint.turn_count
+            sprint.set_current_task_ids(batch_ids)
+            db.session.commit()
+            recorder.emit(
+                AgentEventType.PROGRESS,
+                message=(
+                    f"回合 {turn_no}/{max_turns}（并行 {len(batch)} 任务）："
+                    + "、".join(f"[{f}]" for f in batch_fids[:4])
+                    + ("…" if len(batch_fids) > 4 else "")
+                ),
+                payload={"turn": turn_no, "task_ids": batch_ids,
+                         "turn_run_id": batch_run_id, "parallel": True},
+            )
+            run = db.session.get(AgentRun, ctx.run_id)
+            if run:
+                run.set_progress({
+                    "total_steps": max_turns, "completed_steps": turn_no - 1,
+                    "failed_steps": 0, "current_step": f"并行 {len(batch)} 个任务",
+                })
+                db.session.commit()
+
+            # Drive the batch child ON THIS THREAD with sprint-level cancel forwarding
+            # (in-memory only — the thread stays DB-free while the child owns the session).
+            from backend.services.agent.runtime import agent_runtime
+
+            stop_evt = threading.Event()
+
+            def _forward_cancel_batch(child_id: str = batch_run_id) -> None:
+                while not stop_evt.wait(2.0):
+                    if ctx.is_cancelled():
+                        agent_runtime.request_cancel(child_id)
+                        return
+
+            watcher = threading.Thread(target=_forward_cancel_batch, daemon=True)
+            watcher.start()
+            try:
+                agent_runtime.run_sync(app, batch_run_id)
+            finally:
+                stop_evt.set()
+
+            db.session.expire_all()
+            child = db.session.get(AgentRun, batch_run_id)
+            sprint = _sprint()
+            child_status = child.status if child else AgentRunStatus.FAILED
+
+            if child_status == AgentRunStatus.CANCELLED:
+                return _finalize_cancelled()
+            if child_status == AgentRunStatus.FAILED:
+                consecutive_failures += 1
+                reason = (child.error_message if child else None) or "并行回合运行异常"
+                # Infra-level failure of the whole batch: re-queue every still-ACTIVE task
+                # WITHOUT counting a retry — a systemic outage must not burn the backlog.
+                for tid in batch_ids:
+                    row = db.session.get(CodeDevTask, tid)
+                    if row and row.status in DevTaskStatus.ACTIVE:
+                        dev_sprint_service.release_to_pending(
+                            tid, note=f"并行回合基础设施失败:{reason[:120]}", count_retry=False)
+                recorder.emit(
+                    AgentEventType.WARNING, level=AgentEventLevel.WARNING,
+                    message=f"并行回合失败（{reason[:160]}），{len(batch)} 个任务已退回队列",
+                    payload={"task_ids": batch_ids, "turn_run_id": batch_run_id},
+                )
+                if consecutive_failures >= _MAX_RUN_FAILURES:
+                    sprint.status = DevSprintStatus.FAILED
+                    sprint.finished_at = datetime.utcnow()
+                    snap = dev_sprint_service.progress_snapshot(session_id, sprint.lane)
+                    snap["reason"] = f"连续 {consecutive_failures} 个回合基础设施级失败"
+                    sprint.set_progress_snapshot(snap)
+                    sprint.set_current_task_ids([])
+                    db.session.commit()
+                    raise RuntimeError(f"Sprint 连续 {consecutive_failures} 个回合失败,已终止")
+            else:
+                consecutive_failures = 0
+                # The batch turn advanced each task via apply_verify_outcome; heal any task
+                # left dangling ACTIVE (child crashed between tasks) as an interrupted attempt.
+                for tid in batch_ids:
+                    row = db.session.get(CodeDevTask, tid)
+                    if row and row.status in DevTaskStatus.ACTIVE:
+                        if row.effective_retry_count < dev_sprint_service.max_retries_of(row):
+                            dev_sprint_service.release_to_pending(
+                                tid, note="并行回合未完成验收流转,已重新排队", count_retry=True)
+                        else:
+                            dev_sprint_service.mark_failed(tid, "多次尝试均未完成验收流转")
+
+            db.session.expire_all()
+            sprint = _sprint()
+            newly_done = any(
+                (row := db.session.get(CodeDevTask, tid)) is not None
+                and row.status == DevTaskStatus.DONE
+                for tid in batch_ids
+            )
+            sprint.stall_count = 0 if newly_done else sprint.stall_count + 1
+            snap = dev_sprint_service.progress_snapshot(session_id, sprint.lane)
+            sprint.set_progress_snapshot(snap)
+            sprint.set_current_task_ids([])
+            db.session.commit()
+            _emit_pulse(
+                f"并行回合完成:{len(batch)} 个任务;进度 {snap['done']}/{snap['total']}",
+                extra={"task_ids": batch_ids, "turn_run_id": batch_run_id},
+            )
+            continue
+
         # ---- one scheduling round (plain-string ids across the child run) ----
+        task = batch[0]
         task_id = task.id
         task_fid = task.feature_id or task.id[:8]
         task_title = task.title

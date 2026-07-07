@@ -80,6 +80,20 @@
     "check": "検証結果",
     "conflict": "コンテキストの矛盾を検出"
   },
+  "template": {
+    "selected": "テンプレート選択済み",
+    "fallback": "フォールバック",
+    "unknown": "名称未設定テンプレート",
+    "path": "テンプレート",
+    "files": "{{count}} ファイル",
+    "score": "スコア {{score}}",
+    "lane": {
+      "frontend": "フロントエンド",
+      "backend": "バックエンド",
+      "middleware": "ミドルウェア",
+      "deploy": "デプロイ"
+    }
+  },
   "toast": {
     "started": "Agent 実行を開始しました",
     "startFailed": "開始に失敗しました",

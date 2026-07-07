@@ -46,6 +46,7 @@ from backend.services.agent.workflows import _verify_support
 from backend.services.code import house_rules, scaffold
 from backend.services.code.figma import storage as figma_storage
 from backend.services.code.frontend_project_service import get_frontend_project_service
+from backend.services.code.template_service import get_code_template_service
 from backend.services.credit_service import charge
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,17 @@ def _documents_digest(project: CodeProject) -> str:
         body = (document.content or "")[:_MAX_DOC_CHARS]
         parts.append(f"## {document.title} ({document.document_type})\n{body}")
     return "\n\n".join(parts)[:_MAX_DIGEST_CHARS]
+
+
+def _template_context(project: CodeProject, documents_digest: str, contract_block: str) -> dict:
+    return {
+        "requirement": project.requirement_input or "",
+        "requirements_doc": project.requirements_doc or "",
+        "development_flow": project.development_flow or "",
+        "documents_digest": documents_digest or "",
+        "style_prompt": project.style_prompt or "",
+        "contract_block": contract_block or "",
+    }
 
 
 _CODE_EXTS = (".tsx", ".ts", ".jsx", ".js", ".css", ".html", ".json", ".md")
@@ -331,25 +343,54 @@ def run_code_frontend_project_workflow(ctx, recorder) -> dict:
 
         change = iteration_change(ctx)
         base_files = load_prior_source(project_id, "frontend") if change else {}
+        template_selection = None
+        scaffold_files = {}
+        documents_digest = _documents_digest(project)
         if change and base_files:
             recorder.emit(
                 AgentEventType.PROGRESS, step_id=step.id,
                 message=f"续改模式：基于现有前端工程（{len(base_files)} 个文件）改动",
                 payload={"mode": "iteration", "base_files": len(base_files)},
             )
+        elif not change:
+            template_selection = get_code_template_service().select(
+                lane="frontend",
+                **_template_context(project, documents_digest, contract_block),
+            )
+            if template_selection.selected:
+                scaffold_files = template_selection.files
+                recorder.emit(
+                    AgentEventType.PROGRESS,
+                    step_id=step.id,
+                    message=(
+                        f"已选择前端模板 {template_selection.template_path}，"
+                        f"将先注入脚手架（{len(scaffold_files)} 个文件）再开发功能"
+                    ),
+                    payload=template_selection.event_payload(),
+                )
+            elif template_selection.warning:
+                recorder.emit(
+                    AgentEventType.WARNING,
+                    level=AgentEventLevel.WARNING,
+                    step_id=step.id,
+                    message=f"前端模板不可用，改为空白生成：{template_selection.warning}",
+                    payload=template_selection.event_payload(),
+                )
 
         def _build(**overrides):
             kw = dict(
                 requirement=project.requirement_input,
                 requirements_doc=project.requirements_doc,
                 development_flow=project.development_flow or "",
-                documents_digest=_documents_digest(project),
+                documents_digest=documents_digest,
                 style_prompt=project.style_prompt or "",
                 ui_baseline_prompt=project.ui_baseline_prompt or "",
                 context_ledger=injected,
                 contract_block=contract_block,
                 figma_frames=figma_frames,
                 base_files=base_files or None,
+                scaffold_files=scaffold_files or None,
+                scaffold_hint=template_selection.prompt_hint() if template_selection else "",
                 change_instruction=(change or {}).get("instruction", ""),
                 change_plan=(change or {}).get("plan_text", ""),
                 on_event=on_event,

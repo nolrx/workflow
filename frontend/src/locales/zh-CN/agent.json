@@ -80,6 +80,20 @@
     "check": "校验结果",
     "conflict": "检测到上下文冲突"
   },
+  "template": {
+    "selected": "已选模板",
+    "fallback": "已降级",
+    "unknown": "未命名模板",
+    "path": "模板",
+    "files": "{{count}} 个文件",
+    "score": "匹配分 {{score}}",
+    "lane": {
+      "frontend": "前端",
+      "backend": "后端",
+      "middleware": "中间件",
+      "deploy": "部署"
+    }
+  },
   "toast": {
     "started": "Agent 任务已启动",
     "startFailed": "启动失败",

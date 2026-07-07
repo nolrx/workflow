@@ -495,6 +495,20 @@ class BackendProjectService:
             )
 
     @staticmethod
+    def _scaffold_preamble(scaffold_files: dict, scaffold_hint: str = "") -> str:
+        """Instruction prefix for first-generation runs seeded from a template."""
+        base_list = "\n".join(f"- {p}" for p in sorted(scaffold_files)[:300])
+        hint = (scaffold_hint or "").strip()
+        return (
+            "【模板脚手架已注入】当前目录在你开始前已经预置了从模板仓库选择的后端脚手架。"
+            "请先 Read 现有结构(入口、路由、service、模型、依赖清单、Dockerfile/构建脚本),"
+            "在此基础上实现本项目完整后端功能;不要从空目录重建,不要删除模板已有的通用工程能力。"
+            "可以按共享契约与需求/流程/文档改造模块、数据模型、迁移、服务层和测试,最终必须可构建可部署。\n\n"
+            f"模板选择信息:\n{hint or '(未提供)'}\n\n"
+            f"模板文件清单(已在当前目录):\n{base_list}"
+        )
+
+    @staticmethod
     def _seed_base(base_dir: "Path", files: dict) -> None:
         """Write the existing project source under workdir/_base (binary-safe).
 
@@ -621,6 +635,8 @@ class BackendProjectService:
         middleware_block: str = "",
         context_ledger: str = "",
         base_files: Optional[dict] = None,
+        scaffold_files: Optional[dict] = None,
+        scaffold_hint: str = "",
         change_instruction: str = "",
         change_plan: str = "",
         on_event: Optional[Callable[[dict], None]] = None,
@@ -634,6 +650,11 @@ class BackendProjectService:
         scratch (真实续改). The reinforce pass is skipped in edit mode so it can't
         rewrite the inherited project.
 
+        ``scaffold_files`` (first generation): when provided WITHOUT
+        ``base_files``, the selected template scaffold is seeded before the first
+        generation prompt. This is not edit mode, so the reinforce pass still runs
+        and can complete all FR/NFR/M anchors on top of the scaffold.
+
         Returns ``{success, error, files, stack, dockerfile_source, summary,
         usage, cost_usd, workdir}``. Never raises on agent/model failure (returns
         ``success=False``); raises only on infrastructure errors.
@@ -641,6 +662,7 @@ class BackendProjectService:
         if not self.is_configured():
             return self._empty("ANTHROPIC_API_KEY not configured")
         edit_mode = bool(base_files)
+        seeded_files = base_files or scaffold_files or {}
 
         _cap = 16_000
         # Shared anchor injection for BOTH the first-gen prompt and the reinforce
@@ -657,14 +679,16 @@ class BackendProjectService:
         prompt = self._build_prompt(
             fill_vals, edit_mode, base_files or {}, change_instruction, change_plan
         )
+        if scaffold_files and not base_files:
+            prompt = self._scaffold_preamble(scaffold_files, scaffold_hint) + "\n\n" + prompt
 
         workdir = Path(tempfile.mkdtemp(prefix="be-agent-"))
         os.chmod(workdir, 0o777)
         (workdir / "prompt.txt").write_text(prompt, encoding="utf-8")
-        # Edit mode: seed the existing project source so the container copies it
-        # into the agent workdir (真实续改). Binary-safe; skips pathological files.
-        if base_files:
-            self._seed_base(workdir / "_base", base_files)
+        # Seed either an existing project (edit mode) or a selected template
+        # scaffold (first generation). Binary-safe; skips pathological files.
+        if seeded_files:
+            self._seed_base(workdir / "_base", seeded_files)
         # The generation-time self-heal rung reuses the deploy repair prompt; the
         # container appends the live native build/test logs before re-invoking
         # claude. Written to /out (NOT into the project) so it is never tarred out.

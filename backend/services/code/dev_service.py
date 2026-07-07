@@ -68,6 +68,9 @@ DEV_START_TIMEOUT = int(os.getenv("DEV_MODE_START_TIMEOUT", "120"))
 # Per-turn wall-clock cap for the exec'd claude round (0 = uncapped, bounded only
 # by cooperative cancel / the agent finishing).
 DEV_TURN_TIMEOUT = int(os.getenv("DEV_MODE_TURN_TIMEOUT", "0"))
+# Post-edit runtime browser smoke against the LIVE dev server (P3 parallel gate).
+DEV_SMOKE_TIMEOUT = int(os.getenv("DEV_MODE_SMOKE_TIMEOUT", "90"))
+DEV_SMOKE_MAX_INTERACTIONS = int(os.getenv("DEV_MODE_SMOKE_MAX_INTERACTIONS", "20"))
 # Idle window after which a running dev session is reaped (container removed).
 DEV_IDLE_REAP_SECONDS = int(os.getenv("DEV_MODE_IDLE_REAP_SECONDS", "3600"))
 
@@ -252,6 +255,82 @@ exec $VITE_BIN --config "$ROOT/vite.dev-mode.config.mjs" --host 0.0.0.0 --port "
 )
 
 
+# Node/Playwright harness for the post-edit runtime smoke, run INSIDE the dev
+# container against the LIVE Vite dev server (not a built dist). Loads the app in a
+# headless browser, drives a bounded interactive crawl, and writes a runtime_check
+# JSON whose shape matches `_verify_support.runtime_errors`. Fail-OPEN: no browser
+# module / a bare navigation timeout with NO captured errors → {"ran": false} so it
+# never blocks on infrastructure — it only reports errors the browser actually saw.
+_DEV_SMOKE_SCRIPT = r"""
+import fs from 'node:fs';
+import { createRequire } from 'node:module';
+const RESULT = '/tmp/dev_smoke_result.json';
+const write = (o) => { try { fs.writeFileSync(RESULT, JSON.stringify(o)); } catch {} };
+const URL = process.env.DEV_SMOKE_URL || 'http://127.0.0.1:5173/';
+const requireSmoke = createRequire('/opt/runtime-smoke/');
+let launcher = null;
+try { launcher = (await import('playwright')).chromium; } catch {}
+if (!launcher) { try { launcher = requireSmoke('playwright').chromium; } catch {} }
+if (!launcher) { try { launcher = requireSmoke('playwright-core').chromium; } catch {} }
+if (!launcher) { try { const pp = await import('puppeteer'); launcher = pp.default || pp; } catch {} }
+if (!launcher) { write({ ran: false, reason: 'no headless browser module' }); process.exit(0); }
+const consoleErrors = [], pageErrors = [];
+const timeoutMs = Number(process.env.DEV_SMOKE_TIMEOUT || 60) * 1000;
+const MAXI = Number(process.env.DEV_SMOKE_MAX_INTERACTIONS || 20);
+const uniq = (a) => [...new Set(a)].slice(0, 30);
+let browser = null;
+try {
+  browser = await launcher.launch({ args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
+  const page = await browser.newPage();
+  page.on('console', (m) => { try { if (m.type() === 'error') consoleErrors.push(String(m.text()).slice(0, 300)); } catch {} });
+  page.on('pageerror', (e) => { try { pageErrors.push(String((e && e.message) || e).slice(0, 300)); } catch {} });
+  page.on('dialog', (d) => { try { d.dismiss().catch(() => {}); } catch {} });
+  page.on('popup', (p) => { try { p.close().catch(() => {}); } catch {} });
+  await page.goto(URL, { waitUntil: 'load', timeout: timeoutMs });
+  await new Promise((r) => setTimeout(r, 1500));
+  const HOME = URL.replace(/\/$/, '');
+  const interactions = { total: 0, clicked: 0, filled: 0, dead_controls: [] };
+  const deadline = Date.now() + Math.min(timeoutMs, 60000);
+  try {
+    const fields = await page.$$('input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=checkbox]):not([type=radio]):not([type=file]), textarea');
+    for (const el of fields.slice(0, 12)) {
+      try {
+        const t = (await el.getAttribute('type')) || 'text';
+        const v = t === 'email' ? 'demo@example.com' : t === 'password' ? 'Demo1234!' : t === 'number' ? '1' : t === 'tel' ? '13800000000' : 'test';
+        await el.fill(v, { timeout: 1500 }); interactions.filled++;
+      } catch {}
+    }
+    const controls = await page.$$('button:not([disabled]), [role="button"], a[href]:not([href=""]):not([href="#"]), input[type="submit"], [onclick]');
+    interactions.total = controls.length;
+    for (let i = 0; i < Math.min(controls.length, MAXI); i++) {
+      if (Date.now() > deadline) break;
+      const el = controls[i];
+      let label = ''; try { label = ((await el.innerText().catch(() => '')) || (await el.getAttribute('aria-label').catch(() => '')) || '').replace(/\s+/g, ' ').trim().slice(0, 40); } catch {}
+      let beforeLen = 0; try { beforeLen = await page.evaluate(() => (document.body ? document.body.innerHTML.length : 0)); } catch {}
+      const beforeUrl = page.url(); const errBefore = consoleErrors.length + pageErrors.length;
+      let net = false; const onReq = () => { net = true; }; try { page.on('request', onReq); } catch {}
+      try { await el.click({ timeout: 2000 }); interactions.clicked++; await new Promise((r) => setTimeout(r, 300)); } catch {}
+      try { page.off('request', onReq); } catch {}
+      try { if (!page.url().startsWith(HOME)) { await page.goto(URL, { waitUntil: 'load', timeout: timeoutMs }); await new Promise((r) => setTimeout(r, 250)); continue; } } catch {}
+      let afterLen = beforeLen; try { afterLen = await page.evaluate(() => (document.body ? document.body.innerHTML.length : 0)); } catch {}
+      const errAfter = consoleErrors.length + pageErrors.length;
+      const changed = afterLen !== beforeLen || page.url() !== beforeUrl || net || errAfter !== errBefore;
+      if (!changed && label) interactions.dead_controls.push(label);
+    }
+  } catch (e) { interactions.error = String((e && e.message) || e).slice(0, 200); }
+  interactions.dead_controls = [...new Set(interactions.dead_controls)].slice(0, 20);
+  const ce = uniq(consoleErrors), pe = uniq(pageErrors);
+  write({ ran: true, ok: ce.length === 0 && pe.length === 0, console_errors: ce, page_errors: pe, interactions });
+} catch (e) {
+  // A navigation/harness failure with NO real errors captured is fail-SOFT (ran:false);
+  // genuine JS errors seen before the failure still block.
+  const ce = uniq(consoleErrors), pe = uniq(pageErrors);
+  if (ce.length || pe.length) write({ ran: true, ok: false, console_errors: ce, page_errors: pe });
+  else write({ ran: false, reason: 'smoke harness error: ' + ((e && e.message) || e).slice(0, 160) });
+} finally { try { if (browser) await browser.close(); } catch {} }
+"""
+
+
 class DevTurnResult:
     """Outcome of one exec'd claude turn."""
 
@@ -410,6 +489,40 @@ class DevService:
             return False
         code = (proc.stdout or "").strip()[-3:]
         return code.isdigit() and int(code) < 500 and code != "000"
+
+    def runtime_smoke(self, project_id: str) -> dict:
+        """Post-edit runtime browser smoke against the LIVE dev server (P3 parallel gate).
+
+        Loads the merged app in a headless browser inside the container, drives a bounded
+        interactive crawl, and returns a ``runtime_check`` dict (shape per
+        ``_verify_support.runtime_errors``: ``ran`` / ``ok`` / ``console_errors`` /
+        ``page_errors`` / ``interactions``). This upgrades the batch objective gate from
+        "house rules only" to "the app actually loads and can be driven".
+
+        Fail-OPEN: any inability to run (no browser in the image, container gone, harness
+        error with no captured errors) returns ``{"ran": False}`` so it NEVER blocks on
+        infrastructure — it only gates on a real runtime error the browser observed."""
+        container = _dev_container_name(project_id)
+        url = f"http://127.0.0.1:{DEV_PORT}/"
+        # Heredoc the harness in, run it (its own stdout/err → a log), read the JSON back.
+        full = (
+            "cat > /tmp/dev_smoke.mjs <<'DEVSMOKE_EOF'\n" + _DEV_SMOKE_SCRIPT + "\nDEVSMOKE_EOF\n"
+            f"rm -f /tmp/dev_smoke_result.json; "
+            f"DEV_SMOKE_URL='{url}' DEV_SMOKE_TIMEOUT={DEV_SMOKE_TIMEOUT} "
+            f"DEV_SMOKE_MAX_INTERACTIONS={DEV_SMOKE_MAX_INTERACTIONS} "
+            "node /tmp/dev_smoke.mjs > /tmp/dev_smoke.log 2>&1 || true; "
+            "cat /tmp/dev_smoke_result.json 2>/dev/null || echo '{}'"
+        )
+        try:
+            proc = _docker(["exec", container, "bash", "-lc", full], DEV_SMOKE_TIMEOUT + 45)
+        except Exception:  # noqa: BLE001
+            return {"ran": False}
+        out = (proc.stdout or "").strip()
+        try:
+            data = json.loads(out) if out else {}
+            return data if isinstance(data, dict) else {"ran": False}
+        except (ValueError, TypeError):
+            return {"ran": False}
 
     def container_logs(self, project_id: str, tail: int = 200, timestamps: bool = False) -> str:
         """Merged stdout+stderr of the dev container — ALL log types (npm install,

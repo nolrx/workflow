@@ -80,6 +80,20 @@
     "check": "검증 결과",
     "conflict": "컨텍스트 충돌 감지됨"
   },
+  "template": {
+    "selected": "템플릿 선택됨",
+    "fallback": "대체 경로",
+    "unknown": "이름 없는 템플릿",
+    "path": "템플릿",
+    "files": "파일 {{count}}개",
+    "score": "점수 {{score}}",
+    "lane": {
+      "frontend": "프론트엔드",
+      "backend": "백엔드",
+      "middleware": "미들웨어",
+      "deploy": "배포"
+    }
+  },
   "toast": {
     "started": "Agent 작업을 시작했습니다",
     "startFailed": "시작 실패",

@@ -6,6 +6,7 @@ import { toast } from "sonner"
 import type { AgentArtifact, AgentRunStatus, AgentStepStatus } from "@/api/agent"
 import { agentApi } from "@/api/agent"
 import { ArtifactViewer } from "@/components/agent/ArtifactViewer"
+import { TemplateTraceCard } from "@/components/agent/TemplateTrace"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -263,6 +264,7 @@ export function AgentRunPanel() {
                     {event.message && (
                       <p className="break-words text-sm leading-snug">{event.message}</p>
                     )}
+                    <TemplateTraceCard event={event} compact />
                   </div>
                 </div>
               ))}

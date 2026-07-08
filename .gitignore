@@ -125,5 +125,9 @@ coverage.xml
 # =========================
 # Claude Code 本地技能/配置(非项目共享)
 .claude/skills/
+.claude/agents/
+# 本地笔记和工作流临时目录
+note/
+worksflow-taskflow-eedf5867/
 # Agent Swarm 前端工作流的运行时临时目录(构建日志、退出码、临时工程)
 .fe-agent-work/
